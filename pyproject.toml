@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sqlalchemy-dqlite"
+version = "0.1.0"
+description = "SQLAlchemy 2.0 dialect for dqlite distributed SQLite"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [{ name = "Antoine Leclair", email = "antoineleclair@gmail.com" }]
+keywords = ["dqlite", "sqlite", "distributed", "database", "sqlalchemy", "orm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Database :: Front-Ends",
+    "Typing :: Typed",
+]
+dependencies = ["dqlite-dbapi>=0.1.0", "sqlalchemy>=2.0"]
+
+[project.urls]
+Homepage = "https://github.com/antoineleclair/sqlalchemy-dqlite"
+Repository = "https://github.com/antoineleclair/sqlalchemy-dqlite"
+Issues = "https://github.com/antoineleclair/sqlalchemy-dqlite/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=4.0", "pytest-asyncio>=0.23", "mypy>=1.0", "ruff>=0.4"]
+
+[project.entry-points."sqlalchemy.dialects"]
+dqlite = "sqlalchemydqlite:DqliteDialect"
+"dqlite.aio" = "sqlalchemydqlite.aio:DqliteDialect_aio"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sqlalchemydqlite"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.mypy]
+strict = true
+python_version = "3.13"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sqlalchemydqlite", "dqlitedbapi", "dqliteclient", "dqlitewire"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true

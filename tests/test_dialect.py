@@ -58,6 +58,25 @@ class TestDqliteDialectAio:
         dbapi = DqliteDialect_aio.import_dbapi()
         assert hasattr(dbapi, "aconnect")
 
+    def test_import_dbapi_has_paramstyle(self) -> None:
+        """Async dbapi module must expose paramstyle for SQLAlchemy dialect init."""
+        dbapi = DqliteDialect_aio.import_dbapi()
+        assert dbapi.paramstyle == "qmark"
+
+    def test_import_dbapi_has_module_attributes(self) -> None:
+        """Async dbapi module must expose PEP 249 attributes for SQLAlchemy."""
+        dbapi = DqliteDialect_aio.import_dbapi()
+        assert dbapi.apilevel == "2.0"
+        assert dbapi.threadsafety == 1
+
+    def test_create_async_engine(self) -> None:
+        """create_async_engine must not raise during dialect initialization."""
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        engine = create_async_engine("dqlite+aio://localhost:19001/test")
+        assert engine.dialect.name == "dqlite"
+        assert engine.dialect.driver == "dqlitedbapi_aio"
+
 
 class TestURLParsing:
     def test_parse_basic_url(self) -> None:

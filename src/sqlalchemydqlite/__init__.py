@@ -4,4 +4,4 @@ from sqlalchemydqlite.base import DqliteDialect
 
 __all__ = ["DqliteDialect"]
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"

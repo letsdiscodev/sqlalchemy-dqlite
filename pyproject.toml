@@ -26,9 +26,9 @@ classifiers = [
 dependencies = ["dqlite-dbapi>=0.1.0", "sqlalchemy>=2.0"]
 
 [project.urls]
-Homepage = "https://github.com/antoineleclair/sqlalchemy-dqlite"
-Repository = "https://github.com/antoineleclair/sqlalchemy-dqlite"
-Issues = "https://github.com/antoineleclair/sqlalchemy-dqlite/issues"
+Homepage = "https://github.com/letsdiscodev/sqlalchemy-dqlite"
+Repository = "https://github.com/letsdiscodev/sqlalchemy-dqlite"
+Issues = "https://github.com/letsdiscodev/sqlalchemy-dqlite/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov>=4.0", "pytest-asyncio>=0.23", "mypy>=1.0", "ruff>=0.4"]

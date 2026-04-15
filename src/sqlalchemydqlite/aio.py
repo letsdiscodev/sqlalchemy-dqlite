@@ -39,29 +39,34 @@ class AsyncAdaptedCursor:
 
     def execute(self, operation: str, parameters: Any = None) -> Any:
         cursor = self._connection.cursor()
-        if parameters is not None:
-            await_only(cursor.execute(operation, parameters))
-        else:
-            await_only(cursor.execute(operation))
+        try:
+            if parameters is not None:
+                await_only(cursor.execute(operation, parameters))
+            else:
+                await_only(cursor.execute(operation))
 
-        if cursor.description:
-            self.description = cursor.description
-            self.lastrowid = self.rowcount = -1
-            self._rows = deque(await_only(cursor.fetchall()))
-        else:
-            self.description = None
-            self.lastrowid = cursor.lastrowid
-            self.rowcount = cursor.rowcount
-
-        await_only(cursor.close())
+            if cursor.description:
+                self.description = cursor.description
+                self.lastrowid = self.rowcount = -1
+                self._rows = deque(await_only(cursor.fetchall()))
+            else:
+                self.description = None
+                self.lastrowid = cursor.lastrowid
+                self.rowcount = cursor.rowcount
+                self._rows.clear()
+        finally:
+            await_only(cursor.close())
 
     def executemany(self, operation: str, seq_of_parameters: Any) -> Any:
         cursor = self._connection.cursor()
-        await_only(cursor.executemany(operation, seq_of_parameters))
-        self.description = None
-        self.lastrowid = cursor.lastrowid
-        self.rowcount = cursor.rowcount
-        await_only(cursor.close())
+        try:
+            await_only(cursor.executemany(operation, seq_of_parameters))
+            self.description = None
+            self.lastrowid = cursor.lastrowid
+            self.rowcount = cursor.rowcount
+            self._rows.clear()
+        finally:
+            await_only(cursor.close())
 
     def fetchone(self) -> Any:
         if self._rows:

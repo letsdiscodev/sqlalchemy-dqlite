@@ -107,14 +107,13 @@ class DqliteDialect(SQLiteDialect):
 
         dqlite uses SQLite internally, so we return SQLite version.
         """
-        cursor = connection.connection.dbapi_connection.cursor()
-        cursor.execute("SELECT sqlite_version()")
-        row = cursor.fetchone()
-        cursor.close()
-
-        if row:
-            version_str = row[0]
-            return tuple(int(x) for x in version_str.split("."))
+        try:
+            result = connection.exec_driver_sql("SELECT sqlite_version()")
+            version_str = result.scalar()
+            if version_str:
+                return tuple(int(x) for x in version_str.split("."))
+        except Exception:
+            pass
         return (3, 0, 0)
 
 

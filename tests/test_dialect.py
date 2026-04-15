@@ -93,6 +93,49 @@ class TestDqliteDialectAio:
         assert engine.dialect.driver == "dqlitedbapi_aio"
 
 
+class TestGetServerVersionInfo:
+    def test_does_not_access_dbapi_connection_directly(self) -> None:
+        """_get_server_version_info should use exec_driver_sql, not internal attributes."""
+        import ast
+        import inspect
+        import textwrap
+
+        source = textwrap.dedent(inspect.getsource(DqliteDialect._get_server_version_info))
+        tree = ast.parse(source)
+
+        # Check that it doesn't access .dbapi_connection
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr == "dbapi_connection":
+                raise AssertionError(
+                    "_get_server_version_info accesses .dbapi_connection directly; "
+                    "should use connection.exec_driver_sql() instead"
+                )
+
+    def test_returns_fallback_on_error(self) -> None:
+        """Should return (3, 0, 0) if the query fails."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        mock_conn = MagicMock()
+        mock_conn.exec_driver_sql.side_effect = Exception("connection broken")
+
+        result = dialect._get_server_version_info(mock_conn)
+        assert result == (3, 0, 0)
+
+    def test_parses_version_string(self) -> None:
+        """Should parse a version string like '3.39.4' into a tuple."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        mock_conn = MagicMock()
+        mock_result = MagicMock()
+        mock_result.scalar.return_value = "3.39.4"
+        mock_conn.exec_driver_sql.return_value = mock_result
+
+        result = dialect._get_server_version_info(mock_conn)
+        assert result == (3, 39, 4)
+
+
 class TestURLParsing:
     def test_parse_basic_url(self) -> None:
         url = URL.create("dqlite", host="localhost", port=9001, database="test")

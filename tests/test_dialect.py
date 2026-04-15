@@ -54,6 +54,21 @@ class TestDqliteDialectAio:
         dialect = DqliteDialect_aio()
         assert dialect.is_async is True
 
+    def test_inherits_shared_methods_from_base(self) -> None:
+        """Async dialect should inherit shared methods from base, not duplicate them."""
+        shared_methods = [
+            "create_connect_args",
+            "do_rollback",
+            "do_commit",
+            "_get_server_version_info",
+        ]
+        for method_name in shared_methods:
+            base_method = getattr(DqliteDialect, method_name)
+            aio_method = getattr(DqliteDialect_aio, method_name)
+            assert base_method is aio_method, (
+                f"{method_name} is overridden in DqliteDialect_aio but should be inherited"
+            )
+
     def test_import_dbapi(self) -> None:
         dbapi = DqliteDialect_aio.import_dbapi()
         assert hasattr(dbapi, "aconnect")

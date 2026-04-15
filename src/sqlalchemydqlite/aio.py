@@ -6,7 +6,6 @@ from typing import Any
 
 from sqlalchemy import pool
 from sqlalchemy.engine import URL, AdaptedConnection
-from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
 
@@ -145,50 +144,6 @@ class DqliteDialect_aio(DqliteDialect):  # noqa: N801
         """Create and wrap an async connection."""
         raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
         return AsyncAdaptedConnection(raw_conn)
-
-    def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:
-        """Create connection arguments from URL.
-
-        URL format: dqlite+aio://host:port/database
-        """
-        host = url.host or "localhost"
-        port = url.port or 9001
-        database = url.database or "default"
-
-        address = f"{host}:{port}"
-
-        return [], {
-            "address": address,
-            "database": database,
-        }
-
-    def do_rollback(self, dbapi_connection: DBAPIConnection) -> None:
-        """Rollback the current transaction."""
-        try:
-            dbapi_connection.rollback()
-        except Exception as e:
-            if "no transaction is active" not in str(e):
-                raise
-
-    def do_commit(self, dbapi_connection: DBAPIConnection) -> None:
-        """Commit the current transaction."""
-        try:
-            dbapi_connection.commit()
-        except Exception as e:
-            if "no transaction is active" not in str(e):
-                raise
-
-    def _get_server_version_info(self, connection: Any) -> tuple[int, ...]:
-        """Return the server version as a tuple."""
-        cursor = connection.connection.dbapi_connection.cursor()
-        cursor.execute("SELECT sqlite_version()")
-        row = cursor.fetchone()
-        cursor.close()
-
-        if row:
-            version_str = row[0]
-            return tuple(int(x) for x in version_str.split("."))
-        return (3, 0, 0)
 
     def get_driver_connection(self, connection: Any) -> Any:
         """Return the driver-level connection."""

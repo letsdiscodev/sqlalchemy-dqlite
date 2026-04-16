@@ -136,6 +136,22 @@ class TestGetServerVersionInfo:
         assert result == (3, 39, 4)
 
 
+class TestGetDriverConnection:
+    def test_async_dialect_returns_underlying_connection(self) -> None:
+        """get_driver_connection should return the raw connection, not the adapter."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect_aio()
+        mock_adapted = MagicMock()
+        mock_adapted._connection = MagicMock(name="raw_async_connection")
+
+        result = dialect.get_driver_connection(mock_adapted)
+        assert result is mock_adapted._connection, (
+            "get_driver_connection should unwrap to the underlying connection, "
+            "not return the AsyncAdaptedConnection wrapper"
+        )
+
+
 class TestURLParsing:
     def test_parse_basic_url(self) -> None:
         url = URL.create("dqlite", host="localhost", port=9001, database="test")

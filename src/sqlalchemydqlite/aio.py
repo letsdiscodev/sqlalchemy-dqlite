@@ -151,8 +151,8 @@ class DqliteDialect_aio(DqliteDialect):  # noqa: N801
         return AsyncAdaptedConnection(raw_conn)
 
     def get_driver_connection(self, connection: Any) -> Any:
-        """Return the driver-level connection."""
-        return connection
+        """Return the underlying driver-level connection."""
+        return connection._connection
 
 
 # Register the dialect

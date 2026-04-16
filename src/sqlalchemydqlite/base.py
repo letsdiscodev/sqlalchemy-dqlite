@@ -134,13 +134,14 @@ class DqliteDialect(SQLiteDialect):
 
     def do_ping(self, dbapi_connection: Any) -> bool:
         """Check if the connection is still alive."""
+        cursor = dbapi_connection.cursor()
         try:
-            cursor = dbapi_connection.cursor()
             cursor.execute("SELECT 1")
-            cursor.close()
             return True
         except Exception:
             return False
+        finally:
+            cursor.close()
 
     def _get_server_version_info(self, connection: Any) -> tuple[int, ...]:
         """Return the server version as a tuple.

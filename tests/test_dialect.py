@@ -326,6 +326,58 @@ class TestIsolationLevel:
         assert len(w) == 0
 
 
+class TestDoPing:
+    def test_cursor_closed_in_finally(self) -> None:
+        """do_ping must close cursor in a finally block."""
+        import ast
+        import inspect
+        import textwrap
+
+        source = textwrap.dedent(inspect.getsource(DqliteDialect.do_ping))
+        tree = ast.parse(source)
+
+        has_finally_close = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Try) and node.finalbody:
+                for stmt in ast.walk(node):
+                    if isinstance(stmt, ast.Call):
+                        func_node = stmt.func
+                        if isinstance(func_node, ast.Attribute) and func_node.attr == "close":
+                            has_finally_close = True
+
+        assert has_finally_close, "cursor.close() should be in a finally block in do_ping"
+
+    def test_ping_returns_true_on_success(self) -> None:
+        """do_ping should return True when query succeeds."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        mock_conn = MagicMock()
+        assert dialect.do_ping(mock_conn) is True
+
+    def test_ping_returns_false_on_error(self) -> None:
+        """do_ping should return False when query fails."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.execute.side_effect = RuntimeError("boom")
+        assert dialect.do_ping(mock_conn) is False
+
+    def test_ping_closes_cursor_even_on_error(self) -> None:
+        """do_ping must close cursor even when execute fails."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.execute.side_effect = RuntimeError("boom")
+        mock_conn.cursor.return_value = mock_cursor
+
+        dialect.do_ping(mock_conn)
+        mock_cursor.close.assert_called_once()
+
+
 class TestURLParsing:
     def test_parse_basic_url(self) -> None:
         url = URL.create("dqlite", host="localhost", port=9001, database="test")

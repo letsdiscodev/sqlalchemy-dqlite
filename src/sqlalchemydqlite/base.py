@@ -2,7 +2,6 @@
 
 from typing import Any
 
-from sqlalchemy import pool
 from sqlalchemy.dialects.sqlite.base import SQLiteDialect
 from sqlalchemy.engine import URL
 from sqlalchemy.engine.interfaces import DBAPIConnection, IsolationLevel
@@ -22,11 +21,6 @@ class DqliteDialect(SQLiteDialect):
 
     # Enable SQLAlchemy statement caching
     supports_statement_cache = True
-
-    # Default to NullPool since dqlite handles connection pooling internally
-    @classmethod
-    def get_pool_class(cls, url: URL) -> type[pool.Pool]:
-        return pool.NullPool
 
     @classmethod
     def import_dbapi(cls) -> Any:

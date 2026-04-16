@@ -378,6 +378,20 @@ class TestDoPing:
         mock_cursor.close.assert_called_once()
 
 
+class TestPoolClass:
+    def test_sync_dialect_does_not_use_nullpool(self) -> None:
+        """Sync dialect should not default to NullPool for a network database."""
+        from sqlalchemy import pool
+        from sqlalchemy.engine import URL
+
+        url = URL.create("dqlite", host="localhost", port=9001, database="test")
+        pool_class = DqliteDialect.get_pool_class(url)
+        assert pool_class is not pool.NullPool, (
+            "NullPool creates a new TCP connection per operation; "
+            "a network database should use QueuePool"
+        )
+
+
 class TestURLParsing:
     def test_parse_basic_url(self) -> None:
         url = URL.create("dqlite", host="localhost", port=9001, database="test")

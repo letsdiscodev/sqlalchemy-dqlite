@@ -92,6 +92,29 @@ class DqliteDialect(SQLiteDialect):
             if "no transaction is active" not in str(e):
                 raise
 
+    _dqlite_disconnect_messages = (
+        "Connection closed",
+        "timed out",
+        "Failed to connect",
+        "not connected",
+        "Not connected",
+    )
+
+    def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:
+        """Detect whether an exception indicates a broken connection.
+
+        dqlite is a network database, so we must detect TCP-level and
+        leader-change errors that the inherited pysqlite patterns miss.
+        """
+        import dqlitedbapi.exceptions
+
+        if isinstance(e, dqlitedbapi.exceptions.OperationalError):
+            msg = str(e)
+            for pattern in self._dqlite_disconnect_messages:
+                if pattern in msg:
+                    return True
+        return super().is_disconnect(e, connection, cursor)
+
     def do_ping(self, dbapi_connection: Any) -> bool:
         """Check if the connection is still alive."""
         try:

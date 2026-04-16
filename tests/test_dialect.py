@@ -152,6 +152,54 @@ class TestGetDriverConnection:
         )
 
 
+class TestIsDisconnect:
+    def test_recognizes_connection_closed(self) -> None:
+        """is_disconnect should return True for connection-closed errors."""
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        e = dqlitedbapi.exceptions.OperationalError("Connection closed by server")
+        assert dialect.is_disconnect(e, None, None) is True
+
+    def test_recognizes_failed_to_connect(self) -> None:
+        """is_disconnect should return True for connection-failure errors."""
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        e = dqlitedbapi.exceptions.OperationalError("Failed to connect: refused")
+        assert dialect.is_disconnect(e, None, None) is True
+
+    def test_does_not_flag_normal_errors(self) -> None:
+        """is_disconnect should return False for normal operational errors."""
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        e = dqlitedbapi.exceptions.OperationalError("no such table: users")
+        assert dialect.is_disconnect(e, None, None) is False
+
+    def test_recognizes_not_connected(self) -> None:
+        """is_disconnect should return True for 'not connected' errors."""
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        e = dqlitedbapi.exceptions.OperationalError("Not connected to database")
+        assert dialect.is_disconnect(e, None, None) is True
+
+    def test_recognizes_timed_out(self) -> None:
+        """is_disconnect should return True for timeout errors."""
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        e = dqlitedbapi.exceptions.OperationalError("Connection timed out")
+        assert dialect.is_disconnect(e, None, None) is True
+
+    def test_is_defined_on_dialect(self) -> None:
+        """DqliteDialect must define its own is_disconnect, not just inherit."""
+        assert "is_disconnect" in DqliteDialect.__dict__, (
+            "DqliteDialect must override is_disconnect"
+        )
+
+
 class TestURLParsing:
     def test_parse_basic_url(self) -> None:
         url = URL.create("dqlite", host="localhost", port=9001, database="test")

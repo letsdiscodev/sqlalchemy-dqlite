@@ -146,8 +146,13 @@ class DqliteDialect_aio(DqliteDialect):  # noqa: N801
         return aio
 
     def connect(self, *cargs: Any, **cparams: Any) -> Any:
-        """Create and wrap an async connection."""
+        """Create and wrap an async connection.
+
+        Eagerly establishes the TCP connection so errors surface at
+        connect-time rather than on the first query.
+        """
         raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
+        await_only(raw_conn.connect())
         return AsyncAdaptedConnection(raw_conn)
 
     def get_driver_connection(self, connection: Any) -> Any:

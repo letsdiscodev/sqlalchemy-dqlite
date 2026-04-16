@@ -392,6 +392,36 @@ class TestPoolClass:
         )
 
 
+class TestAsyncConnect:
+    def test_connect_calls_await_only_on_raw_connect(self) -> None:
+        """Async dialect connect() should eagerly establish the TCP connection."""
+        import ast
+        import inspect
+        import textwrap
+
+        from sqlalchemydqlite.aio import DqliteDialect_aio
+
+        source = textwrap.dedent(inspect.getsource(DqliteDialect_aio.connect))
+        tree = ast.parse(source)
+
+        # Look for await_only(raw_conn.connect()) or similar eager connect call
+        has_eager_connect = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == "await_only" and node.args:
+                    arg = node.args[0]
+                    if isinstance(arg, ast.Call):
+                        inner = arg.func
+                        if isinstance(inner, ast.Attribute) and inner.attr == "connect":
+                            has_eager_connect = True
+
+        assert has_eager_connect, (
+            "DqliteDialect_aio.connect() should eagerly establish TCP with "
+            "await_only(raw_conn.connect())"
+        )
+
+
 class TestURLParsing:
     def test_parse_basic_url(self) -> None:
         url = URL.create("dqlite", host="localhost", port=9001, database="test")

@@ -72,11 +72,16 @@ class DqliteDialect(SQLiteDialect):
         dqlite throws an error if we try to rollback when no transaction
         is active, so we catch and ignore that specific error.
         """
+        import dqliteclient.exceptions
+        import dqlitedbapi.exceptions
+
         try:
             dbapi_connection.rollback()
-        except Exception as e:
-            # Ignore "no transaction is active" errors
-            if "no transaction is active" not in str(e):
+        except (
+            dqlitedbapi.exceptions.OperationalError,
+            dqliteclient.exceptions.OperationalError,
+        ) as e:
+            if "no transaction is active" not in str(e).lower():
                 raise
 
     def do_commit(self, dbapi_connection: DBAPIConnection) -> None:
@@ -85,11 +90,16 @@ class DqliteDialect(SQLiteDialect):
         dqlite throws an error if we try to commit when no transaction
         is active, so we catch and ignore that specific error.
         """
+        import dqliteclient.exceptions
+        import dqlitedbapi.exceptions
+
         try:
             dbapi_connection.commit()
-        except Exception as e:
-            # Ignore "no transaction is active" errors
-            if "no transaction is active" not in str(e):
+        except (
+            dqlitedbapi.exceptions.OperationalError,
+            dqliteclient.exceptions.OperationalError,
+        ) as e:
+            if "no transaction is active" not in str(e).lower():
                 raise
 
     _dqlite_disconnect_messages = (

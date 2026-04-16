@@ -61,10 +61,17 @@ class DqliteDialect(SQLiteDialect):
     def set_isolation_level(self, dbapi_connection: DBAPIConnection, level: str | None) -> None:
         """Set isolation level.
 
-        dqlite doesn't support changing isolation levels via PRAGMA,
-        so this is a no-op. dqlite uses SERIALIZABLE isolation by default.
+        dqlite only supports SERIALIZABLE isolation. A warning is emitted
+        if a different level is requested.
         """
-        pass
+        if level is not None and level != "SERIALIZABLE":
+            import warnings
+
+            warnings.warn(
+                f"dqlite only supports SERIALIZABLE isolation. "
+                f"Requested level {level!r} is ignored.",
+                stacklevel=2,
+            )
 
     def do_rollback(self, dbapi_connection: DBAPIConnection) -> None:
         """Rollback the current transaction.

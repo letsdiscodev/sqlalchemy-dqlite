@@ -280,6 +280,52 @@ class TestIsDisconnect:
         )
 
 
+class TestIsolationLevel:
+    def test_set_isolation_level_warns_on_unsupported(self) -> None:
+        """set_isolation_level should warn when a non-SERIALIZABLE level is requested."""
+        import warnings
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        mock_conn = MagicMock()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            dialect.set_isolation_level(mock_conn, "READ UNCOMMITTED")
+
+        assert len(w) == 1
+        assert "SERIALIZABLE" in str(w[0].message)
+        assert "READ UNCOMMITTED" in str(w[0].message)
+
+    def test_set_isolation_level_silent_for_serializable(self) -> None:
+        """set_isolation_level should not warn for SERIALIZABLE."""
+        import warnings
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        mock_conn = MagicMock()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            dialect.set_isolation_level(mock_conn, "SERIALIZABLE")
+
+        assert len(w) == 0
+
+    def test_set_isolation_level_silent_for_none(self) -> None:
+        """set_isolation_level should not warn when level is None."""
+        import warnings
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        mock_conn = MagicMock()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            dialect.set_isolation_level(mock_conn, None)
+
+        assert len(w) == 0
+
+
 class TestURLParsing:
     def test_parse_basic_url(self) -> None:
         url = URL.create("dqlite", host="localhost", port=9001, database="test")

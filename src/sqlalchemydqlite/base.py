@@ -96,6 +96,20 @@ class DqliteDialect(SQLiteDialect):
     # inherited default, pinned here against upstream drift).
     supports_native_decimal = False
 
+    # dqlite runs SQLite >= 3.35, which supports the RETURNING clause on
+    # INSERT / UPDATE / DELETE. Pin locally so upstream changes to
+    # SQLiteDialect's RETURNING detection (e.g. version-gated discovery)
+    # can't silently change dqlite behaviour. All three of SQLAlchemy 2.x's
+    # tripartite RETURNING flags default to True on the parent class today.
+    insert_returning = True
+    update_returning = True
+    delete_returning = True
+
+    # SQLite >= 3.7.11 supports multi-row INSERT VALUES, which SQLAlchemy's
+    # insertmanyvalues optimisation depends on. Pin the flag so bulk-insert
+    # behaviour stays stable against upstream dialect drift.
+    supports_multivalues_insert = True
+
     # Override the SQLite dialect's string-based DATE/DATETIME processors:
     # dqlitedbapi returns datetime objects (PEP 249), not ISO strings.
     colspecs = {

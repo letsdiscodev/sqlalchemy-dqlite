@@ -53,6 +53,23 @@ class TestDqliteDialect:
         # SQLite/dqlite has no native DECIMAL type.
         assert DqliteDialect.supports_native_decimal is False
 
+    def test_returning_flags_pinned_locally(self) -> None:
+        # dqlite runs SQLite >= 3.35, so RETURNING is supported. Pin the
+        # three SQLAlchemy 2.x flags locally so upstream dialect changes
+        # cannot silently alter dqlite behaviour.
+        assert DqliteDialect.insert_returning is True
+        assert DqliteDialect.update_returning is True
+        assert DqliteDialect.delete_returning is True
+        # Locally declared (not just inherited) so the pin is load-bearing.
+        assert "insert_returning" in DqliteDialect.__dict__
+        assert "update_returning" in DqliteDialect.__dict__
+        assert "delete_returning" in DqliteDialect.__dict__
+
+    def test_supports_multivalues_insert_pinned_locally(self) -> None:
+        # SQLite >= 3.7.11 supports multi-row INSERT VALUES; dqlite does too.
+        assert DqliteDialect.supports_multivalues_insert is True
+        assert "supports_multivalues_insert" in DqliteDialect.__dict__
+
     def test_dialect_description(self) -> None:
         # Pin the derived dialect_description so SQLAlchemy upgrades cannot
         # silently change the rendered identity in ORM error messages.

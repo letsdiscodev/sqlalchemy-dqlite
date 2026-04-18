@@ -211,3 +211,22 @@ class TestAioAllExports:
 
         expected = {"AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"}
         assert expected.issubset(set(aio_mod.__all__))
+
+
+class TestAioCursorSetInputSizes:
+    """PEP 249 conformance: setinputsizes takes a single sequence."""
+
+    def test_accepts_single_sequence_argument(self) -> None:
+        from sqlalchemydqlite.aio import AsyncAdaptedCursor
+
+        cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
+        cursor.setinputsizes([10, None, 20])  # no error
+
+    def test_extra_positional_argument_rejected(self) -> None:
+        import pytest
+
+        from sqlalchemydqlite.aio import AsyncAdaptedCursor
+
+        cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
+        with pytest.raises(TypeError):
+            cursor.setinputsizes([10], 20)  # type: ignore[call-arg]

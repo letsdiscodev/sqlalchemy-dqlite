@@ -99,7 +99,11 @@ class AsyncAdaptedCursor:
         self._rows.clear()
         return retval
 
-    def setinputsizes(self, *inputsizes: Any) -> None:
+    def setinputsizes(self, sizes: Sequence[Any]) -> None:
+        # PEP 249: called before execute*() to hint bind-parameter sizes.
+        # dqlite's wire encoder does not use per-parameter sizing hints,
+        # so the implementation is a no-op — but the signature matches
+        # the standard and the sibling cursors in dqlitedbapi.
         pass
 
     def setoutputsize(self, size: int, column: int | None = None) -> None:

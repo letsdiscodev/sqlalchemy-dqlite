@@ -11,6 +11,8 @@ from sqlalchemy.util import await_only
 
 from sqlalchemydqlite.base import DqliteDialect
 
+__all__ = ["DqliteDialect_aio"]
+
 
 class AsyncAdaptedCursor:
     """Adapts an AsyncCursor for SQLAlchemy's greenlet-based async engine.

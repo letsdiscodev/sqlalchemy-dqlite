@@ -104,6 +104,15 @@ class TestDqliteDialect:
         assert getattr(DqliteDialect, flag) is True
         assert flag in DqliteDialect.__dict__
 
+    def test_returns_native_bytes_pinned_locally(self) -> None:
+        """dqlitedbapi returns native Python ``bytes`` for BLOB columns;
+        pin True locally so ``LargeBinary.result_processor`` skips the
+        redundant ``bytes(value)`` wrap on every BLOB cell, and so a
+        future DefaultDialect default flip cannot silently add overhead.
+        """
+        assert DqliteDialect.returns_native_bytes is True
+        assert "returns_native_bytes" in DqliteDialect.__dict__
+
     def test_dialect_description(self) -> None:
         # Pin the derived dialect_description so SQLAlchemy upgrades cannot
         # silently change the rendered identity in ORM error messages.

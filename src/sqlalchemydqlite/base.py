@@ -74,6 +74,13 @@ class DqliteDialect(SQLiteDialect):
     # Enable SQLAlchemy statement caching
     supports_statement_cache = True
 
+    # dqlitedbapi returns native Python ``bytes`` for BLOB columns (the
+    # wire codec emits ``bytes`` for ``ValueType.BLOB``, and the
+    # PEP 249 ``Binary()`` constructor returns ``bytes``). Pin True
+    # locally so ``LargeBinary.result_processor`` can skip the redundant
+    # ``bytes(value)`` wrap on every BLOB cell.
+    returns_native_bytes = True
+
     # dqlite's wire protocol has a first-class BOOLEAN tag
     # (``ValueType.BOOLEAN = 11``); the server returns native Python
     # booleans for columns tagged BOOLEAN and dqlitedbapi passes them

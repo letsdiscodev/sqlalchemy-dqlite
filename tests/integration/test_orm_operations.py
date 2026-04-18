@@ -8,6 +8,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Date,
     DateTime,
     Float,
     Integer,
@@ -61,6 +62,13 @@ class DateTimeTest(Base):  # type: ignore[valid-type,misc]
     id = Column(Integer, primary_key=True)
     created_at = Column(DateTime)
     updated_at = Column(DateTime, nullable=True)
+
+
+class DateOnlyTest(Base):  # type: ignore[valid-type,misc]
+    __tablename__ = "date_only_test"
+
+    id = Column(Integer, primary_key=True)
+    d = Column(Date)
 
 
 @pytest.mark.integration
@@ -192,12 +200,41 @@ class TestORMOperations:
                 result = session.query(DateTimeTest).order_by(DateTimeTest.id.desc()).first()
                 assert result is not None
 
-                assert result.created_at.year == dt.year
-                assert result.created_at.month == dt.month
-                assert result.created_at.day == dt.day
-                assert result.created_at.hour == dt.hour
-                assert result.created_at.minute == dt.minute
-                assert result.created_at.second == dt.second
+                assert isinstance(result.created_at, datetime.datetime)
+                # SQLAlchemy's default DateTime is timezone=False, so naive
+                # input must round-trip as naive (not silently UTC-tagged).
+                assert result.created_at.tzinfo is None
+                assert result.created_at == dt
+
+    def test_datetime_null_roundtrip(self, engine: Engine) -> None:
+        """A NULL DateTime column reads back as None."""
+        with Session(engine) as session:
+            record = DateTimeTest(
+                created_at=datetime.datetime(2024, 1, 1, 0, 0, 0),
+                updated_at=None,
+            )
+            session.add(record)
+            session.commit()
+
+            result = session.query(DateTimeTest).order_by(DateTimeTest.id.desc()).first()
+            assert result is not None
+            assert result.updated_at is None
+
+    def test_date_column_returns_date(self, engine: Engine) -> None:
+        """A Column(Date) returns ``datetime.date``, not ``datetime.datetime``.
+
+        The dqlite DBAPI returns datetime for ISO8601-tagged columns; the
+        dialect's _DqliteDate.result_processor narrows to date on read.
+        """
+        d = datetime.date(2024, 3, 14)
+        with Session(engine) as session:
+            session.add(DateOnlyTest(d=d))
+            session.commit()
+
+            result = session.query(DateOnlyTest).order_by(DateOnlyTest.id.desc()).first()
+            assert result is not None
+            assert type(result.d) is datetime.date
+            assert result.d == d
 
     def test_null_handling(self, engine: Engine) -> None:
         """Test NULL values across different column types."""

@@ -1,10 +1,45 @@
 """Base dqlite dialect for SQLAlchemy."""
 
+import datetime
 from typing import Any
 
+from sqlalchemy import types as sqltypes
 from sqlalchemy.dialects.sqlite.base import SQLiteDialect
 from sqlalchemy.engine import URL
 from sqlalchemy.engine.interfaces import DBAPIConnection, IsolationLevel
+
+
+class _DqliteDateTime(sqltypes.DateTime):
+    """Passthrough DateTime — ``dqlitedbapi`` already returns ``datetime.datetime``
+    for columns declared as DATETIME/TIMESTAMP (matching PEP 249 and the
+    psycopg/mysqlclient convention), so no string parsing is needed.
+    """
+
+    def bind_processor(self, dialect: Any) -> None:
+        return None
+
+    def result_processor(self, dialect: Any, coltype: Any) -> None:
+        return None
+
+
+class _DqliteDate(sqltypes.Date):
+    """Passthrough Date — ``dqlitedbapi`` returns ``datetime.datetime`` for
+    DATE columns (the C server tags all of DATETIME/DATE/TIMESTAMP as
+    ``DQLITE_ISO8601``); narrow to ``datetime.date`` on read.
+    """
+
+    def bind_processor(self, dialect: Any) -> None:
+        return None
+
+    def result_processor(
+        self, dialect: Any, coltype: Any
+    ) -> Any:
+        def process(value: Any) -> Any:
+            if isinstance(value, datetime.datetime):
+                return value.date()
+            return value
+
+        return process
 
 
 class DqliteDialect(SQLiteDialect):
@@ -21,6 +56,14 @@ class DqliteDialect(SQLiteDialect):
 
     # Enable SQLAlchemy statement caching
     supports_statement_cache = True
+
+    # Override the SQLite dialect's string-based DATE/DATETIME processors:
+    # dqlitedbapi returns datetime objects (PEP 249), not ISO strings.
+    colspecs = {
+        **SQLiteDialect.colspecs,
+        sqltypes.DateTime: _DqliteDateTime,
+        sqltypes.Date: _DqliteDate,
+    }
 
     @classmethod
     def import_dbapi(cls) -> Any:

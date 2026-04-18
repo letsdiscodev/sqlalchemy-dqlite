@@ -69,6 +69,15 @@ class DqliteDialect(SQLiteDialect):
     # Enable SQLAlchemy statement caching
     supports_statement_cache = True
 
+    # dqlite's wire protocol has a first-class BOOLEAN tag
+    # (``ValueType.BOOLEAN = 11``); the server returns native Python
+    # booleans for columns tagged BOOLEAN and dqlitedbapi passes them
+    # through unchanged. Unlike the inherited pysqlite dialect
+    # (``supports_native_boolean = False``), we don't need SQLAlchemy
+    # to emit a ``CHECK (col IN (0, 1))`` constraint — the wire
+    # contract enforces the 0/1 invariant.
+    supports_native_boolean = True
+
     # dqlite runs every statement through Raft consensus; there is no
     # exposed way to weaken isolation. Declaring this explicitly lets
     # applications introspect via ``engine.dialect.supported_isolation_levels``.

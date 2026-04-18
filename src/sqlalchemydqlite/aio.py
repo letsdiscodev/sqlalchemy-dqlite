@@ -134,6 +134,17 @@ class AsyncAdaptedConnection(AdaptedConnection):
         await_only(self._connection.rollback())
 
     def close(self) -> None:
+        # Attempt rollback before close so a caller that exits without
+        # committing does not leave a dangling server-side transaction
+        # (ISSUE-91). The underlying async connection's rollback is a
+        # silent no-op when no transaction is active and when the
+        # connection has never been used, so the double-call is safe.
+        # Suppress rollback failures — the close is more important and
+        # happens unconditionally below.
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await_only(self._connection.rollback())
         await_only(self._connection.close())
 
 

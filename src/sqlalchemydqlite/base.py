@@ -19,13 +19,15 @@ class _DqliteDateTime(sqltypes.DateTime):
     """Passthrough DateTime — ``dqlitedbapi`` already returns ``datetime.datetime``
     for columns declared as DATETIME/TIMESTAMP (matching PEP 249 and the
     psycopg/mysqlclient convention), so no string parsing is needed.
+
+    Inheriting from ``sqltypes.DateTime`` (not ``sqlite.DATETIME``) is
+    deliberate: the generic parent's ``literal_processor`` calls
+    ``value.isoformat()`` directly — bypassing pysqlite's
+    iso-string-based bind processor that would double-convert our
+    already-datetime values (ISSUE-114). The parent's default
+    ``bind_processor`` / ``result_processor`` return ``None`` already,
+    so no explicit overrides are needed here.
     """
-
-    def bind_processor(self, dialect: Any) -> None:
-        return None
-
-    def result_processor(self, dialect: Any, coltype: Any) -> None:
-        return None
 
 
 class _DqliteDate(sqltypes.Date):

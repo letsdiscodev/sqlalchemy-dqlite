@@ -101,3 +101,48 @@ class TestAsyncAdaptedCursorCleanup:
         assert _has_finally_with_close(AsyncAdaptedCursor.executemany), (
             "cursor.close() should be in a finally block to prevent leaks on error"
         )
+
+
+class TestAsyncAdaptedConnectionClose:
+    """ISSUE-91: close() attempts rollback before closing.
+
+    SQLAlchemy's async adapter previously closed the connection without
+    a rollback, leaving any open server-side transaction dangling in
+    unpooled / NullPool usage. Verify rollback is called first, and
+    verify rollback failure does not prevent close.
+    """
+
+    def test_close_attempts_rollback_first(self) -> None:
+        mock_conn = MagicMock()
+        calls: list[str] = []
+        mock_conn.rollback.side_effect = lambda: calls.append("rollback") or object()
+        mock_conn.close.side_effect = lambda: calls.append("close") or object()
+
+        adapted = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
+        adapted._connection = mock_conn
+
+        with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
+            adapted.close()
+
+        assert calls == ["rollback", "close"], f"Expected rollback then close, got {calls}"
+
+    def test_close_proceeds_when_rollback_raises(self) -> None:
+        """A failing rollback (e.g. connection already in a bad state)
+        must not block close — resource cleanup is more important."""
+        mock_conn = MagicMock()
+        calls: list[str] = []
+
+        def failing_rollback() -> None:
+            calls.append("rollback-attempt")
+            raise RuntimeError("simulated rollback failure")
+
+        mock_conn.rollback.side_effect = failing_rollback
+        mock_conn.close.side_effect = lambda: calls.append("close") or object()
+
+        adapted = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
+        adapted._connection = mock_conn
+
+        with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
+            adapted.close()  # must not raise
+
+        assert "close" in calls, "close() must run even if rollback raised"

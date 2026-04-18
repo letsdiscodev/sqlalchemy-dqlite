@@ -120,6 +120,17 @@ class DqliteDialect(SQLiteDialect):
     # behaviour stays stable against upstream dialect drift.
     supports_multivalues_insert = True
 
+    # Insert-path flags inherited from SQLiteDialect. SQLAlchemy's
+    # insertmanyvalues codegen, DEFAULT VALUES form, and rowid handling
+    # all key on these. Pin locally for the same "against upstream
+    # drift" reason as the RETURNING trio above — a version-gated
+    # change in a future SQLAlchemy release would silently alter
+    # dqlite's insert behaviour otherwise.
+    use_insertmanyvalues = True
+    supports_default_metavalue = True
+    supports_default_values = True
+    insert_null_pk_still_autoincrements = True
+
     # Override the SQLite dialect's string-based DATE/DATETIME processors:
     # dqlitedbapi returns datetime objects (PEP 249), not ISO strings.
     colspecs = {

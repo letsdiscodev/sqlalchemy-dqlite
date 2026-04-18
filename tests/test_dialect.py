@@ -1,5 +1,6 @@
 """Tests for dqlite dialect."""
 
+import pytest
 from sqlalchemy.engine import URL
 
 from sqlalchemydqlite import DqliteDialect
@@ -84,6 +85,24 @@ class TestDqliteDialect:
         # RETURNING flags above.
         assert DqliteDialect.update_returning_multifrom is True
         assert "update_returning_multifrom" in DqliteDialect.__dict__
+
+    @pytest.mark.parametrize(
+        "flag",
+        [
+            "use_insertmanyvalues",
+            "supports_default_metavalue",
+            "supports_default_values",
+            "insert_null_pk_still_autoincrements",
+        ],
+    )
+    def test_insert_path_flags_pinned_locally(self, flag: str) -> None:
+        """SQLAlchemy's SQLiteDialect sets these four insert-path flags
+        explicitly. The dqlite dialect inherits them silently otherwise.
+        Pin locally so upstream version-gated changes cannot alter
+        insert codegen or rowid behaviour for dqlite.
+        """
+        assert getattr(DqliteDialect, flag) is True
+        assert flag in DqliteDialect.__dict__
 
     def test_dialect_description(self) -> None:
         # Pin the derived dialect_description so SQLAlchemy upgrades cannot

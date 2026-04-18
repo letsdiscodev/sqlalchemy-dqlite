@@ -104,6 +104,17 @@ class TestDqliteDialect:
         assert getattr(DqliteDialect, flag) is True
         assert flag in DqliteDialect.__dict__
 
+    def test_supports_server_side_cursors_pinned_false_on_aio(self) -> None:
+        """dqlite has no server-side cursor notion; pin locally on the
+        async dialect so an upstream AsyncDialect default flip cannot
+        silently route through an SS-cursor code path we do not
+        implement.
+        """
+        from sqlalchemydqlite.aio import DqliteDialect_aio
+
+        assert DqliteDialect_aio.supports_server_side_cursors is False
+        assert "supports_server_side_cursors" in DqliteDialect_aio.__dict__
+
     def test_returns_native_bytes_pinned_locally(self) -> None:
         """dqlitedbapi returns native Python ``bytes`` for BLOB columns;
         pin True locally so ``LargeBinary.result_processor`` skips the

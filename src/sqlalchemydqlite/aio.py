@@ -208,6 +208,14 @@ class DqliteDialect_aio(DqliteDialect):  # noqa: N801
     # warning fires on every engine startup.
     supports_statement_cache = True
 
+    # dqlite has no server-side cursor notion at the wire level — rows
+    # arrive in frames that the client fully consumes before surfacing
+    # them, and the adapter eagerly buffers into a deque. Pin False
+    # locally so a future base-class default flip (e.g. AsyncDialect
+    # defaulting True the way aiosqlite does) cannot silently route
+    # through an SS-cursor code path the adapter does not implement.
+    supports_server_side_cursors = False
+
     @classmethod
     def get_pool_class(cls, url: URL) -> type[pool.Pool]:
         return AsyncAdaptedQueuePool

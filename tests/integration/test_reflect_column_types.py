@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    Time,
     create_engine,
     inspect,
     types,
@@ -48,6 +49,7 @@ class TestReflectColumnTypes:
             Column("ratio", Float),
             Column("created", DateTime),
             Column("birthday", Date),
+            Column("start_time", Time),
             Column("flag", Boolean),
         )
         md.create_all(engine)
@@ -69,6 +71,11 @@ class TestReflectColumnTypes:
         assert isinstance(cols["ratio"]["type"], types.Float | types.Numeric)
         assert isinstance(cols["created"]["type"], types.DateTime)
         assert isinstance(cols["birthday"]["type"], types.Date)
+        # TIME may reflect to Time, String, or DateTime depending on the
+        # pysqlite version's ischema_names — the union accommodates the
+        # documented uncertainty. The no-NullType assertion below still
+        # applies, which is the main contract we care about.
+        assert isinstance(cols["start_time"]["type"], types.Time | types.String | types.DateTime)
         assert isinstance(cols["flag"]["type"], BOOLEAN_LIKE)
 
         # No column landed in NullType.

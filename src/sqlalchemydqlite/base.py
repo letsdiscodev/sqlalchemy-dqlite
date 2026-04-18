@@ -15,6 +15,7 @@ from sqlalchemy.exc import ArgumentError
 
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
+from dqlitewire import LEADER_ERROR_CODES as _LEADER_CHANGE_CODES
 
 
 class _DqliteDateTime(sqltypes.DateTime):
@@ -249,13 +250,6 @@ class DqliteDialect(SQLiteDialect):
         "Not connected",
     )
 
-    # Server-side SQLite error codes that mean the connection is useless
-    # even if the TCP socket is still alive — kept in sync with the
-    # client's _LEADER_ERROR_CODES.
-    #   SQLITE_IOERR_NOT_LEADER       = SQLITE_IOERR | (40 << 8) = 10250
-    #   SQLITE_IOERR_LEADERSHIP_LOST  = SQLITE_IOERR | (41 << 8) = 10506
-    _LEADER_CHANGE_CODES: frozenset[int] = frozenset({10250, 10506})
-
     def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:
         """Detect whether an exception indicates a broken connection.
 
@@ -274,7 +268,7 @@ class DqliteDialect(SQLiteDialect):
         # Leader-change error codes signal that the connection is useless
         # even though it's TCP-alive.
         for err in (_dbapi_exc.OperationalError, _client_exc.OperationalError):
-            if isinstance(e, err) and getattr(e, "code", None) in self._LEADER_CHANGE_CODES:
+            if isinstance(e, err) and getattr(e, "code", None) in _LEADER_CHANGE_CODES:
                 return True
         # Legacy substring fallback — kept so we still catch anything
         # that wasn't modelled as a specific exception type yet.

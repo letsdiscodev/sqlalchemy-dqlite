@@ -14,7 +14,7 @@ from dqliteclient.exceptions import DqliteConnectionError
 from dqlitedbapi.exceptions import InterfaceError, NotSupportedError, OperationalError
 from sqlalchemydqlite.base import DqliteDialect
 
-__all__ = ["DqliteDialect_aio"]
+__all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 
 
 class AsyncAdaptedCursor:

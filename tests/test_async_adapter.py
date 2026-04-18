@@ -201,3 +201,13 @@ class TestAsyncAdaptedConnectionClose:
             pytest.raises(AttributeError),
         ):
             adapted.close()
+
+
+class TestAioAllExports:
+    """Adapter classes are part of the supported public surface."""
+
+    def test_all_includes_adapter_classes(self) -> None:
+        import sqlalchemydqlite.aio as aio_mod
+
+        expected = {"AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"}
+        assert expected.issubset(set(aio_mod.__all__))

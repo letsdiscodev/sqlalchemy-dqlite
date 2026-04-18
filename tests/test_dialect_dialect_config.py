@@ -68,6 +68,26 @@ class TestCreateConnectArgsURLQuery:
         with pytest.raises(ArgumentError, match="float"):
             dialect.create_connect_args(url)
 
+    def test_max_total_rows_forwarded(self) -> None:
+        """ISSUE-95: max_total_rows URL param plumbs through to the DBAPI."""
+        dialect = DqliteDialect()
+        url = make_url("dqlite://host:19001/db?max_total_rows=5000")
+        _, kwargs = dialect.create_connect_args(url)
+        assert kwargs["max_total_rows"] == 5000
+
+    def test_max_total_rows_unparseable_raises(self) -> None:
+        dialect = DqliteDialect()
+        url = make_url("dqlite://host:19001/db?max_total_rows=not-an-int")
+        with pytest.raises(ArgumentError, match="int"):
+            dialect.create_connect_args(url)
+
+    def test_timeout_and_max_total_rows_together(self) -> None:
+        dialect = DqliteDialect()
+        url = make_url("dqlite://host:19001/db?timeout=3.5&max_total_rows=250")
+        _, kwargs = dialect.create_connect_args(url)
+        assert kwargs["timeout"] == 3.5
+        assert kwargs["max_total_rows"] == 250
+
 
 class TestDoPingNarrowExceptions:
     def test_returns_true_on_success(self) -> None:

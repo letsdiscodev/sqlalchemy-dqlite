@@ -157,6 +157,13 @@ class DqliteDialect_aio(DqliteDialect):  # noqa: N801
 
     driver = "dqlitedbapi_aio"
     is_async = True
+    # MUST be redeclared here even though the base class already sets it to
+    # True: SQLAlchemy reads this attribute via
+    # ``self.__class__.__dict__.get("supports_statement_cache")`` (see
+    # engine/default.py::_supports_statement_cache), which is a
+    # single-class lookup, not an MRO lookup. If this line is removed,
+    # statement caching is silently disabled on the async dialect and a
+    # warning fires on every engine startup.
     supports_statement_cache = True
 
     @classmethod

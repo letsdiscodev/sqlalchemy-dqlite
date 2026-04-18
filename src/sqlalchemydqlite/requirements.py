@@ -137,3 +137,21 @@ class Requirements(SuiteRequirements):
     def supports_empty_inserts(self) -> Any:
         """INSERT INTO t DEFAULT VALUES. SQLite supports it; dqlite inherits."""
         return exclusions.open()
+
+    @property
+    def regexp_match(self) -> Any:
+        """The portable ``col.regexp_match(pattern)`` operator compiles
+        to ``col REGEXP ?``, which SQLite dispatches to a user-defined
+        ``regexp`` function. pysqlite registers that function via
+        ``dbapi_connection.create_function`` on every new connection
+        (see ``SQLiteDialect_pysqlite.on_connect``); dqlite is a network
+        DBAPI and has no ``create_function`` hook — registering a
+        server-side function would require persisting into Raft state
+        across all nodes, which is not part of the dqlite protocol.
+
+        Running the compliance suite's ``regexp_match`` cases against
+        dqlite would therefore hit ``OperationalError: no such function:
+        regexp``. Close the requirement so the suite skips those cases
+        instead of failing.
+        """
+        return exclusions.closed()

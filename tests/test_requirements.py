@@ -19,6 +19,7 @@ class TestRequirements:
             "sane_multi_rowcount",
             "emulated_lastrowid",
             "supports_empty_inserts",
+            "regexp_match",
         ]
         for prop_name in properties:
             value = getattr(req, prop_name)
@@ -30,3 +31,11 @@ class TestRequirements:
             assert hasattr(value, "enabled_for_config"), (
                 f"Requirements.{prop_name} return value lacks enabled_for_config method"
             )
+
+    def test_regexp_match_is_closed(self) -> None:
+        """dqlite has no server-side REGEXP function and no
+        ``create_function`` hook on the DBAPI, so the compliance suite
+        must skip ``regexp_match`` cases rather than run them and fail.
+        """
+        req = Requirements()
+        assert req.regexp_match.enabled is False

@@ -111,13 +111,18 @@ class TestGetServerVersionInfo:
                     "should use connection.exec_driver_sql() instead"
                 )
 
-    def test_returns_fallback_on_error(self) -> None:
-        """Should return (3, 0, 0) if the query fails."""
+    def test_returns_fallback_on_operational_error(self) -> None:
+        """Should return (3, 0, 0) if the server query fails with a
+        connection-level error. Unrelated errors (bugs) propagate."""
         from unittest.mock import MagicMock
+
+        import dqlitedbapi.exceptions
 
         dialect = DqliteDialect()
         mock_conn = MagicMock()
-        mock_conn.exec_driver_sql.side_effect = Exception("connection broken")
+        mock_conn.exec_driver_sql.side_effect = dqlitedbapi.exceptions.OperationalError(
+            "connection broken"
+        )
 
         result = dialect._get_server_version_info(mock_conn)
         assert result == (3, 0, 0)
@@ -300,23 +305,30 @@ class TestDoPing:
         mock_conn = MagicMock()
         assert dialect.do_ping(mock_conn) is True
 
-    def test_ping_returns_false_on_error(self) -> None:
-        """do_ping should return False when query fails."""
+    def test_ping_returns_false_on_connection_error(self) -> None:
+        """do_ping returns False on connection-level errors."""
         from unittest.mock import MagicMock
+
+        import dqlitedbapi.exceptions
 
         dialect = DqliteDialect()
         mock_conn = MagicMock()
-        mock_conn.cursor.return_value.execute.side_effect = RuntimeError("boom")
+        mock_conn.cursor.return_value.execute.side_effect = (
+            dqlitedbapi.exceptions.OperationalError("bye")
+        )
         assert dialect.do_ping(mock_conn) is False
 
     def test_ping_closes_cursor_even_on_error(self) -> None:
-        """do_ping must close cursor even when execute fails."""
+        """do_ping must close cursor even when execute fails with a
+        connection-level error."""
         from unittest.mock import MagicMock
+
+        import dqlitedbapi.exceptions
 
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_cursor.execute.side_effect = RuntimeError("boom")
+        mock_cursor.execute.side_effect = dqlitedbapi.exceptions.OperationalError("bye")
         mock_conn.cursor.return_value = mock_cursor
 
         dialect.do_ping(mock_conn)

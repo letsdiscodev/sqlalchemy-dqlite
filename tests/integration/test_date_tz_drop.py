@@ -1,4 +1,4 @@
-"""Lock in _DqliteDate UTC-day semantics for tz-aware inputs (ISSUE-56).
+"""Lock in _DqliteDate UTC-day semantics for tz-aware inputs.
 
 The _DqliteDate result processor narrows datetime→date via ``.date()``.
 If the decoded datetime was timezone-aware, the tzinfo is silently

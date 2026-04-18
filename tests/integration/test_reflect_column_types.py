@@ -1,4 +1,4 @@
-"""Lock in reflected column type-class identity (ISSUE-45).
+"""Lock in reflected column type-class identity.
 
 ischema_names inherited from pysqlite covers the tokens dqlite emits
 at DDL time (INTEGER, TEXT, REAL, BLOB, NUMERIC, DATE, DATETIME, ...).

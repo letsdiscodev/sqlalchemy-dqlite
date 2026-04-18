@@ -25,7 +25,7 @@ class _DqliteDateTime(sqltypes.DateTime):
     deliberate: the generic parent's ``literal_processor`` calls
     ``value.isoformat()`` directly — bypassing pysqlite's
     iso-string-based bind processor that would double-convert our
-    already-datetime values (ISSUE-114). The parent's default
+    already-datetime values. The parent's default
     ``bind_processor`` / ``result_processor`` return ``None`` already,
     so no explicit overrides are needed here.
     """

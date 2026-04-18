@@ -1,12 +1,12 @@
-"""Coverage for Time columns (ISSUE-20) and metadata reflection (ISSUE-22).
+"""Coverage for Time columns and metadata reflection.
 
-- ISSUE-20: ``Column(Time)`` is not overridden in the dialect's
+- ``Column(Time)`` is not overridden in the dialect's
   ``colspecs`` because the C server tags only DATETIME/DATE/TIMESTAMP
   as ``DQLITE_ISO8601``; TIME columns come back as plain TEXT and the
   inherited SQLAlchemy ``Time`` processor parses the string. Verified
   here end-to-end.
 
-- ISSUE-22: the dialect inherits SQLite's reflection methods, which
+- The dialect inherits SQLite's reflection methods, which
   lean on PRAGMA queries. dqlite wraps SQLite but we had zero proof
   that reflection round-trips over the wire. These tests exercise the
   common paths.

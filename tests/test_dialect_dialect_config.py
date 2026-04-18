@@ -1,12 +1,12 @@
 """Dialect configuration tests covering recent hardening.
 
-- ISSUE-16 ``do_ping`` narrowed to connection-level exceptions only.
-- ISSUE-18 ``is_disconnect`` type-dispatches before falling back to
+- ``do_ping`` narrowed to connection-level exceptions only.
+- ``is_disconnect`` type-dispatches before falling back to
   message substring matching.
-- ISSUE-19 ``create_connect_args`` plumbs the ``timeout`` URL query
+- ``create_connect_args`` plumbs the ``timeout`` URL query
   through and rejects typos.
-- ISSUE-21 ``set_isolation_level`` explicitly rejects AUTOCOMMIT.
-- ISSUE-23 ``supported_isolation_levels`` is declared.
+- ``set_isolation_level`` explicitly rejects AUTOCOMMIT.
+- ``supported_isolation_levels`` is declared.
 """
 
 from unittest.mock import MagicMock
@@ -69,7 +69,7 @@ class TestCreateConnectArgsURLQuery:
             dialect.create_connect_args(url)
 
     def test_max_total_rows_forwarded(self) -> None:
-        """ISSUE-95: max_total_rows URL param plumbs through to the DBAPI."""
+        """max_total_rows URL param plumbs through to the DBAPI."""
         dialect = DqliteDialect()
         url = make_url("dqlite://host:19001/db?max_total_rows=5000")
         _, kwargs = dialect.create_connect_args(url)
@@ -89,7 +89,7 @@ class TestCreateConnectArgsURLQuery:
         assert kwargs["max_total_rows"] == 250
 
     def test_max_continuation_frames_forwarded(self) -> None:
-        """ISSUE-98 URL plumbing — post-review follow-up."""
+        """max_continuation_frames URL plumbing — post-review follow-up."""
         dialect = DqliteDialect()
         url = make_url("dqlite://host:19001/db?max_continuation_frames=500")
         _, kwargs = dialect.create_connect_args(url)
@@ -116,7 +116,7 @@ class TestCreateConnectArgsURLQuery:
         ],
     )
     def test_trust_server_heartbeat_parses_boolean(self, raw: str, expected: bool) -> None:
-        """ISSUE-101 URL plumbing — post-review follow-up.
+        """trust_server_heartbeat URL plumbing — post-review follow-up.
 
         URL values arrive as strings; bool("False") would evaluate
         truthy if used directly, so we use a dedicated parser.

@@ -1,4 +1,4 @@
-"""ISSUE-37: AsyncAdaptedCursor must not leak rows from a previous
+"""AsyncAdaptedCursor must not leak rows from a previous
 execute across an exception (including CancelledError)."""
 
 import asyncio

@@ -1,4 +1,4 @@
-"""Integration tests for ISSUE-44: supports_native_boolean = True.
+"""Integration tests for supports_native_boolean = True.
 
 DDL for ``Column(Boolean)`` must not emit ``CHECK (col IN (0, 1))``
 because dqlite's wire protocol enforces the invariant natively.

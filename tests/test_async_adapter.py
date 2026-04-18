@@ -104,7 +104,7 @@ class TestAsyncAdaptedCursorCleanup:
 
 
 class TestAsyncAdaptedConnectionClose:
-    """ISSUE-91: close() attempts rollback before closing.
+    """close() attempts rollback before closing.
 
     SQLAlchemy's async adapter previously closed the connection without
     a rollback, leaving any open server-side transaction dangling in

@@ -46,21 +46,20 @@ class TestDqliteDialect:
 
     def test_supports_sane_isolation_level(self) -> None:
         # dqlite always enforces SERIALIZABLE; the reported level is
-        # trustworthy across transactions (ISSUE-90).
+        # trustworthy across transactions.
         assert DqliteDialect.supports_sane_isolation_level is True
 
     def test_supports_native_decimal_false(self) -> None:
-        # SQLite/dqlite has no native DECIMAL type (ISSUE-94).
+        # SQLite/dqlite has no native DECIMAL type.
         assert DqliteDialect.supports_native_decimal is False
 
     def test_dialect_description(self) -> None:
         # Pin the derived dialect_description so SQLAlchemy upgrades cannot
-        # silently change the rendered identity in ORM error messages
-        # (ISSUE-89).
+        # silently change the rendered identity in ORM error messages.
         assert DqliteDialect().dialect_description == "dqlite+dqlitedbapi"
 
     def test_async_dialect_description(self) -> None:
-        # Mirror ISSUE-89 pin for the async dialect; review agent flagged
+        # Mirror the sync test for the async dialect; review agent flagged
         # that the sync test alone could mask an async-side drift.
         assert DqliteDialect_aio().dialect_description == "dqlite+dqlitedbapi_aio"
 

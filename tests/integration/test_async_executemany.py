@@ -1,4 +1,4 @@
-"""Integration tests for async-dialect executemany (ISSUE-92).
+"""Integration tests for async-dialect executemany.
 
 Pins ``AsyncAdaptedCursor.executemany`` against a real dqlite server:
 

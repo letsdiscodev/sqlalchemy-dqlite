@@ -1,5 +1,6 @@
 """Async dqlite dialect for SQLAlchemy."""
 
+import contextlib
 from collections import deque
 from collections.abc import Sequence
 from typing import Any
@@ -9,6 +10,8 @@ from sqlalchemy.engine import URL, AdaptedConnection
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
 
+from dqliteclient.exceptions import DqliteConnectionError
+from dqlitedbapi.exceptions import InterfaceError, OperationalError
 from sqlalchemydqlite.base import DqliteDialect
 
 __all__ = ["DqliteDialect_aio"]
@@ -136,14 +139,23 @@ class AsyncAdaptedConnection(AdaptedConnection):
     def close(self) -> None:
         # Attempt rollback before close so a caller that exits without
         # committing does not leave a dangling server-side transaction.
-        # The underlying async connection's rollback is a
-        # silent no-op when no transaction is active and when the
-        # connection has never been used, so the double-call is safe.
-        # Suppress rollback failures — the close is more important and
-        # happens unconditionally below.
-        import contextlib
-
-        with contextlib.suppress(Exception):
+        # The underlying async connection's rollback is a silent no-op when
+        # no transaction is active and when the connection has never been
+        # used, so the double-call is safe.
+        #
+        # Narrow the suppression to the categories a best-effort rollback
+        # can legitimately raise — connection-level / transport errors —
+        # so programming bugs (AttributeError, TypeError, bare RuntimeError,
+        # etc.) still propagate. The tuple mirrors the client layer's own
+        # is_disconnect classification in base.py.
+        with contextlib.suppress(
+            OperationalError,
+            InterfaceError,
+            DqliteConnectionError,
+            OSError,
+            TimeoutError,
+            ConnectionError,
+        ):
             await_only(self._connection.rollback())
         await_only(self._connection.close())
 

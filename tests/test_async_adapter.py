@@ -126,15 +126,18 @@ class TestAsyncAdaptedConnectionClose:
 
         assert calls == ["rollback", "close"], f"Expected rollback then close, got {calls}"
 
-    def test_close_proceeds_when_rollback_raises(self) -> None:
-        """A failing rollback (e.g. connection already in a bad state)
+    def test_close_proceeds_when_rollback_raises_connection_error(self) -> None:
+        """A failing rollback caused by a connection-level error (e.g.
+        broken transport, OS-level disconnect, server already closed)
         must not block close — resource cleanup is more important."""
+        from dqlitedbapi.exceptions import OperationalError
+
         mock_conn = MagicMock()
         calls: list[str] = []
 
         def failing_rollback() -> None:
             calls.append("rollback-attempt")
-            raise RuntimeError("simulated rollback failure")
+            raise OperationalError("simulated rollback failure")
 
         mock_conn.rollback.side_effect = failing_rollback
         mock_conn.close.side_effect = lambda: calls.append("close") or object()
@@ -146,3 +149,22 @@ class TestAsyncAdaptedConnectionClose:
             adapted.close()  # must not raise
 
         assert "close" in calls, "close() must run even if rollback raised"
+
+    def test_close_propagates_programming_error_from_rollback(self) -> None:
+        """A failing rollback that looks like a programming bug
+        (AttributeError / TypeError / bare RuntimeError) must propagate
+        so refactor regressions don't get swallowed silently."""
+        import pytest
+
+        mock_conn = MagicMock()
+        mock_conn.rollback.side_effect = AttributeError("refactor bug")
+        mock_conn.close.return_value = object()
+
+        adapted = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
+        adapted._connection = mock_conn
+
+        with (
+            patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync),
+            pytest.raises(AttributeError),
+        ):
+            adapted.close()

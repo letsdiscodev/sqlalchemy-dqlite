@@ -319,6 +319,35 @@ class TestIsDisconnect:
             "DqliteDialect must override is_disconnect"
         )
 
+    def test_recognizes_interface_error_connection_closed(self) -> None:
+        """An InterfaceError raised after the underlying DBAPI connection
+        was closed (e.g. pool invalidate, cluster membership change)
+        must be classified as disconnect so the pool recycles the slot.
+        """
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        e = dqlitedbapi.exceptions.InterfaceError("Connection is closed")
+        assert dialect.is_disconnect(e, None, None) is True
+
+    def test_recognizes_interface_error_cursor_closed(self) -> None:
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        e = dqlitedbapi.exceptions.InterfaceError("Cursor is closed")
+        assert dialect.is_disconnect(e, None, None) is True
+
+    def test_does_not_flag_other_interface_errors(self) -> None:
+        """Narrowly-worded programming-error InterfaceErrors (e.g.
+        `arraysize must be positive`) must NOT route through the
+        disconnect path.
+        """
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        e = dqlitedbapi.exceptions.InterfaceError("arraysize must be positive")
+        assert dialect.is_disconnect(e, None, None) is False
+
 
 class TestIsolationLevel:
     def test_set_isolation_level_warns_on_unsupported(self) -> None:

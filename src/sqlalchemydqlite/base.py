@@ -296,6 +296,16 @@ class DqliteDialect(SQLiteDialect):
         # DNS, connect refused) surface as these stdlib types.
         if isinstance(e, (ConnectionError, BrokenPipeError, TimeoutError, OSError)):
             return True
+        # ``dqlitedbapi.Connection`` / ``Cursor`` raise ``InterfaceError``
+        # when operated on after ``close()``; match the narrow
+        # "closed" substring so programming-error InterfaceErrors (e.g.
+        # setinputsizes on a closed cursor) are NOT classified as
+        # disconnect. The do_ping path already catches InterfaceError
+        # for the same reason.
+        if isinstance(e, _dbapi_exc.InterfaceError):
+            message = str(e).lower()
+            if "connection is closed" in message or "cursor is closed" in message:
+                return True
         # Leader-change error codes signal that the connection is useless
         # even though it's TCP-alive.
         for err in (_dbapi_exc.OperationalError, _client_exc.OperationalError):

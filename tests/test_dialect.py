@@ -153,70 +153,15 @@ class TestGetDriverConnection:
 
 
 class TestDoRollbackCommit:
-    def test_do_rollback_catches_only_operational_error(self) -> None:
-        """do_rollback should only catch OperationalError, not bare Exception."""
-        import ast
-        import inspect
-        import textwrap
+    """The 'no transaction is active' swallow moved down to the DBAPI
+    layer (python-dqlite-dbapi). The dialect now inherits do_commit /
+    do_rollback from the parent and delegates straight to the DBAPI,
+    which handles the no-active-tx case. These tests verify the dialect
+    doesn't wrap the DBAPI's errors when a real problem occurs.
+    """
 
-        source = textwrap.dedent(inspect.getsource(DqliteDialect.do_rollback))
-        tree = ast.parse(source)
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ExceptHandler):
-                assert node.type is not None, "do_rollback uses bare except"
-                if isinstance(node.type, ast.Name):
-                    assert node.type.id != "Exception", (
-                        "do_rollback catches bare Exception; "
-                        "should catch a specific dqlite exception type"
-                    )
-
-    def test_do_commit_catches_only_operational_error(self) -> None:
-        """do_commit should only catch OperationalError, not bare Exception."""
-        import ast
-        import inspect
-        import textwrap
-
-        source = textwrap.dedent(inspect.getsource(DqliteDialect.do_commit))
-        tree = ast.parse(source)
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ExceptHandler):
-                assert node.type is not None, "do_commit uses bare except"
-                if isinstance(node.type, ast.Name):
-                    assert node.type.id != "Exception", (
-                        "do_commit catches bare Exception; "
-                        "should catch a specific dqlite exception type"
-                    )
-
-    def test_do_rollback_suppresses_no_transaction_error(self) -> None:
-        """do_rollback should suppress 'no transaction is active' errors."""
-        from unittest.mock import MagicMock
-
-        import dqlitedbapi.exceptions
-
-        dialect = DqliteDialect()
-        mock_conn = MagicMock()
-        mock_conn.rollback.side_effect = dqlitedbapi.exceptions.OperationalError(
-            "no transaction is active"
-        )
-        dialect.do_rollback(mock_conn)
-
-    def test_do_rollback_suppresses_client_no_transaction_error(self) -> None:
-        """do_rollback should suppress dqliteclient 'no transaction' errors too."""
-        from unittest.mock import MagicMock
-
-        import dqliteclient.exceptions
-
-        dialect = DqliteDialect()
-        mock_conn = MagicMock()
-        mock_conn.rollback.side_effect = dqliteclient.exceptions.OperationalError(
-            1, "cannot rollback - no transaction is active"
-        )
-        dialect.do_rollback(mock_conn)
-
-    def test_do_rollback_raises_other_errors(self) -> None:
-        """do_rollback should re-raise errors other than 'no transaction'."""
+    def test_do_rollback_propagates_real_errors(self) -> None:
+        """Real (not 'no transaction') errors propagate through the dialect."""
         from unittest.mock import MagicMock
 
         import pytest

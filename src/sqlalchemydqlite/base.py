@@ -110,41 +110,11 @@ class DqliteDialect(SQLiteDialect):
                 stacklevel=2,
             )
 
-    def do_rollback(self, dbapi_connection: DBAPIConnection) -> None:
-        """Rollback the current transaction.
-
-        dqlite throws an error if we try to rollback when no transaction
-        is active, so we catch and ignore that specific error.
-        """
-        import dqliteclient.exceptions
-        import dqlitedbapi.exceptions
-
-        try:
-            dbapi_connection.rollback()
-        except (
-            dqlitedbapi.exceptions.OperationalError,
-            dqliteclient.exceptions.OperationalError,
-        ) as e:
-            if "no transaction is active" not in str(e).lower():
-                raise
-
-    def do_commit(self, dbapi_connection: DBAPIConnection) -> None:
-        """Commit the current transaction.
-
-        dqlite throws an error if we try to commit when no transaction
-        is active, so we catch and ignore that specific error.
-        """
-        import dqliteclient.exceptions
-        import dqlitedbapi.exceptions
-
-        try:
-            dbapi_connection.commit()
-        except (
-            dqlitedbapi.exceptions.OperationalError,
-            dqliteclient.exceptions.OperationalError,
-        ) as e:
-            if "no transaction is active" not in str(e).lower():
-                raise
+    # do_rollback / do_commit are intentionally left inherited from the
+    # parent dialect. The "cannot commit/rollback — no transaction is
+    # active" error is swallowed at the DBAPI layer (dqlitedbapi's
+    # Connection.commit / rollback), so the dialect doesn't need its own
+    # workaround. Matches stdlib sqlite3 semantics.
 
     _dqlite_disconnect_messages = (
         "Connection closed",

@@ -224,13 +224,27 @@ class DqliteDialect(SQLiteDialect):
     def _get_server_version_info(self, connection: Any) -> tuple[int, ...]:
         """Return the server version as a tuple.
 
-        dqlite uses SQLite internally, so we return SQLite version.
+        dqlite uses SQLite internally, so we return SQLite version. The
+        parser is defensive: SQLite occasionally ships with suffixes
+        (``3.46.0-alpha``, ``3.46.0rc1``) and a non-numeric part would
+        otherwise raise ``ValueError`` on ``int()`` — we strip any
+        trailing non-digit characters per component so the numeric
+        prefix still parses.
         """
+        import re
+
         try:
             result = connection.exec_driver_sql("SELECT sqlite_version()")
             version_str = result.scalar()
             if version_str:
-                return tuple(int(x) for x in version_str.split("."))
+                parts: list[int] = []
+                for component in version_str.split("."):
+                    m = re.match(r"\d+", component)
+                    if not m:
+                        break
+                    parts.append(int(m.group(0)))
+                if parts:
+                    return tuple(parts)
         except (
             _dbapi_exc.OperationalError,
             _client_exc.DqliteConnectionError,

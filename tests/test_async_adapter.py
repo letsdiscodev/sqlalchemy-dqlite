@@ -301,3 +301,63 @@ class TestAioAdapterCursorFetchMethods:
         cursor = self._cursor_with_rows([(1,), (2,), (3,)])
         assert list(cursor) == [(1,), (2,), (3,)]
         assert len(cursor._rows) == 0  # type: ignore[attr-defined]
+
+
+class TestAioAdapterConnectionDelegations:
+    """AsyncAdaptedConnection.commit / rollback / cursor are thin
+    sync-over-async shims via ``await_only``. A refactor that awaits
+    the wrong attribute would silently skip transaction boundaries or
+    hand back a cursor of the wrong type. Unit tests are cheap.
+    """
+
+    def test_commit_delegates_through_await_only(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from sqlalchemydqlite.aio import AsyncAdaptedConnection
+
+        inner = MagicMock()
+        inner.commit = AsyncMock()
+        adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
+        adapter._connection = inner
+
+        def _run_sync(coro: object) -> object:
+            import asyncio
+
+            return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
+
+        with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
+            adapter.commit()
+
+        inner.commit.assert_awaited_once()
+
+    def test_rollback_delegates_through_await_only(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from sqlalchemydqlite.aio import AsyncAdaptedConnection
+
+        inner = MagicMock()
+        inner.rollback = AsyncMock()
+        adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
+        adapter._connection = inner
+
+        def _run_sync(coro: object) -> object:
+            import asyncio
+
+            return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
+
+        with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
+            adapter.rollback()
+
+        inner.rollback.assert_awaited_once()
+
+    def test_cursor_returns_async_adapted_cursor_wrapping_inner(self) -> None:
+        from unittest.mock import MagicMock
+
+        from sqlalchemydqlite.aio import AsyncAdaptedConnection, AsyncAdaptedCursor
+
+        inner = MagicMock()
+        adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
+        adapter._connection = inner
+
+        cursor = adapter.cursor()
+        assert isinstance(cursor, AsyncAdaptedCursor)

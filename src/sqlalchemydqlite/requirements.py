@@ -114,3 +114,26 @@ class Requirements(SuiteRequirements):
     def table_ddl_if_exists(self) -> Any:
         """CREATE TABLE IF NOT EXISTS / DROP TABLE IF EXISTS."""
         return exclusions.open()
+
+    @property
+    def sane_rowcount(self) -> Any:
+        """UPDATE / DELETE rowcount is truthful. dqlite forwards the server's
+        sqlite3_changes() verbatim via ResultResponse.rows_affected."""
+        return exclusions.open()
+
+    @property
+    def sane_multi_rowcount(self) -> Any:
+        """executemany aggregates each iteration's rowcount, so multi-row
+        UPDATE / DELETE totals match the caller's expectation."""
+        return exclusions.open()
+
+    @property
+    def emulated_lastrowid(self) -> Any:
+        """lastrowid is SQLite's ROWID, forwarded verbatim via
+        ResultResponse.last_insert_id."""
+        return exclusions.open()
+
+    @property
+    def supports_empty_inserts(self) -> Any:
+        """INSERT INTO t DEFAULT VALUES. SQLite supports it; dqlite inherits."""
+        return exclusions.open()

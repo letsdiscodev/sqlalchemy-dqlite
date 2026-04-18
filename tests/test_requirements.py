@@ -15,6 +15,10 @@ class TestRequirements:
             "savepoints",
             "two_phase_transactions",
             "temp_table_reflection",
+            "sane_rowcount",
+            "sane_multi_rowcount",
+            "emulated_lastrowid",
+            "supports_empty_inserts",
         ]
         for prop_name in properties:
             value = getattr(req, prop_name)

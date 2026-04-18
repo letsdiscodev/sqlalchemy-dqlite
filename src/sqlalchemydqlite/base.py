@@ -81,6 +81,13 @@ class DqliteDialect(SQLiteDialect):
     # to emit a ``CHECK (col IN (0, 1))`` constraint — the wire
     # contract enforces the 0/1 invariant.
     supports_native_boolean = True
+    # SQLAlchemy's Boolean type compiler gates
+    # ``non_native_boolean_check_constraint`` behind
+    # ``supports_native_boolean``, so the flag is functionally inert
+    # for us today. Pin False anyway to document intent and to keep
+    # the pin in lockstep with ``supports_native_boolean`` if a future
+    # SQLAlchemy release decouples the two.
+    non_native_boolean_check_constraint = False
 
     # dqlite runs every statement through Raft consensus; there is no
     # exposed way to weaken isolation. Declaring this explicitly lets
@@ -102,9 +109,11 @@ class DqliteDialect(SQLiteDialect):
     # SQLiteDialect's RETURNING detection (e.g. version-gated discovery)
     # can't silently change dqlite behaviour. All three of SQLAlchemy 2.x's
     # tripartite RETURNING flags default to True on the parent class today.
+    # Same reasoning applies to the multi-FROM RETURNING variant.
     insert_returning = True
     update_returning = True
     delete_returning = True
+    update_returning_multifrom = True
 
     # SQLite >= 3.7.11 supports multi-row INSERT VALUES, which SQLAlchemy's
     # insertmanyvalues optimisation depends on. Pin the flag so bulk-insert

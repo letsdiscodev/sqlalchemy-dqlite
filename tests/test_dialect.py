@@ -70,6 +70,21 @@ class TestDqliteDialect:
         assert DqliteDialect.supports_multivalues_insert is True
         assert "supports_multivalues_insert" in DqliteDialect.__dict__
 
+    def test_non_native_boolean_check_constraint_pinned_locally(self) -> None:
+        # dqlite declares supports_native_boolean = True, so the CHECK
+        # constraint is semantically unnecessary. Pin to False so a
+        # future SQLAlchemy release cannot silently flip the inherited
+        # value while native boolean support is already claimed.
+        assert DqliteDialect.non_native_boolean_check_constraint is False
+        assert "non_native_boolean_check_constraint" in DqliteDialect.__dict__
+
+    def test_update_returning_multifrom_pinned_locally(self) -> None:
+        # dqlite's SQLite is >= 3.35, which supports multi-FROM RETURNING.
+        # Pin locally for the same upstream-drift reason as the three
+        # RETURNING flags above.
+        assert DqliteDialect.update_returning_multifrom is True
+        assert "update_returning_multifrom" in DqliteDialect.__dict__
+
     def test_dialect_description(self) -> None:
         # Pin the derived dialect_description so SQLAlchemy upgrades cannot
         # silently change the rendered identity in ORM error messages.

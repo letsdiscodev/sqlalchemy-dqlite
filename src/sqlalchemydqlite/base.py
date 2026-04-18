@@ -345,35 +345,21 @@ class DqliteDialect(SQLiteDialect):
                 cursor.close()  # cursor close shouldn't crash the ping result
 
     def _get_server_version_info(self, connection: Any) -> tuple[int, ...]:
-        """Return the server version as a tuple.
+        """Return the server's SQLite version as a tuple.
 
-        dqlite uses SQLite internally, so we return SQLite version. The
-        parser is defensive: SQLite occasionally ships with suffixes
-        (``3.46.0-alpha``, ``3.46.0rc1``) and a non-numeric part would
-        otherwise raise ``ValueError`` on ``int()`` — we strip any
-        trailing non-digit characters per component so the numeric
-        prefix still parses.
+        Forwards ``dqlitedbapi.sqlite_version_info`` (a module-level
+        constant pinning the minimum supported SQLite version). The
+        previous implementation ran a live ``SELECT sqlite_version()``
+        on every fresh engine connection and fell back to ``(3, 0, 0)``
+        on any transient error — which silently disabled RETURNING /
+        multi-values / all 3.35+ features on the affected engine. The
+        DBAPI constant is authoritative and matches how pysqlite
+        implements the same override.
         """
-        import re
-
-        try:
-            result = connection.exec_driver_sql("SELECT sqlite_version()")
-            version_str = result.scalar()
-            if version_str:
-                parts: list[int] = []
-                for component in version_str.split("."):
-                    m = re.match(r"\d+", component)
-                    if not m:
-                        break
-                    parts.append(int(m.group(0)))
-                if parts:
-                    return tuple(parts)
-        except (
-            _dbapi_exc.OperationalError,
-            _client_exc.DqliteConnectionError,
-        ):
-            pass
-        return (3, 0, 0)
+        info = getattr(self.dbapi, "sqlite_version_info", None)
+        if info is not None:
+            return tuple(info)
+        return (3, 35, 0)
 
 
 # Register the dialect

@@ -184,51 +184,65 @@ class TestDqliteDialectAio:
 
 
 class TestGetServerVersionInfo:
-    def test_does_not_access_dbapi_connection_directly(self) -> None:
-        """_get_server_version_info should use exec_driver_sql, not internal attributes."""
-        import ast
-        import inspect
-        import textwrap
-
-        source = textwrap.dedent(inspect.getsource(DqliteDialect._get_server_version_info))
-        tree = ast.parse(source)
-
-        # Check that it doesn't access .dbapi_connection
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr == "dbapi_connection":
-                raise AssertionError(
-                    "_get_server_version_info accesses .dbapi_connection directly; "
-                    "should use connection.exec_driver_sql() instead"
-                )
-
-    def test_returns_fallback_on_operational_error(self) -> None:
-        """Should return (3, 0, 0) if the server query fails with a
-        connection-level error. Unrelated errors (bugs) propagate."""
+    def test_reads_dbapi_module_constant(self) -> None:
+        """Forwards dqlitedbapi.sqlite_version_info — no live query."""
         from unittest.mock import MagicMock
 
-        import dqlitedbapi.exceptions
+        import dqlitedbapi
 
         dialect = DqliteDialect()
+        dialect.dbapi = dqlitedbapi  # type: ignore[assignment]
         mock_conn = MagicMock()
-        mock_conn.exec_driver_sql.side_effect = dqlitedbapi.exceptions.OperationalError(
-            "connection broken"
-        )
 
         result = dialect._get_server_version_info(mock_conn)
-        assert result == (3, 0, 0)
+        assert result == tuple(dqlitedbapi.sqlite_version_info)
+        # Critically, no wire round-trip.
+        mock_conn.exec_driver_sql.assert_not_called()
 
-    def test_parses_version_string(self) -> None:
-        """Should parse a version string like '3.39.4' into a tuple."""
+    def test_does_not_downgrade_on_transient_error(self) -> None:
+        """The previous fallback to (3, 0, 0) silently disabled 3.35+
+        features on any transient error. The new implementation uses
+        the DBAPI module constant directly, so there is no error path
+        that could produce a stale tuple.
+        """
+        from unittest.mock import MagicMock
+
+        import dqlitedbapi
+
+        dialect = DqliteDialect()
+        dialect.dbapi = dqlitedbapi  # type: ignore[assignment]
+        mock_conn = MagicMock()
+        mock_conn.exec_driver_sql.side_effect = RuntimeError("should not be called")
+
+        result = dialect._get_server_version_info(mock_conn)
+        assert result == tuple(dqlitedbapi.sqlite_version_info)
+
+    def test_respects_dbapi_version_attribute(self) -> None:
+        """A hypothetical bump in the DBAPI's pinned SQLite version
+        should flow through to the dialect without further wiring.
+        """
+        from types import SimpleNamespace
         from unittest.mock import MagicMock
 
         dialect = DqliteDialect()
-        mock_conn = MagicMock()
-        mock_result = MagicMock()
-        mock_result.scalar.return_value = "3.39.4"
-        mock_conn.exec_driver_sql.return_value = mock_result
+        dialect.dbapi = SimpleNamespace(sqlite_version_info=(3, 46, 0))  # type: ignore[assignment]
 
-        result = dialect._get_server_version_info(mock_conn)
-        assert result == (3, 39, 4)
+        result = dialect._get_server_version_info(MagicMock())
+        assert result == (3, 46, 0)
+
+    def test_falls_back_to_floor_when_dbapi_lacks_attribute(self) -> None:
+        """Defensive floor: returned only when the bound DBAPI module
+        lacks ``sqlite_version_info`` entirely. Unreachable under the
+        real dqlitedbapi module but documents intent.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        dialect.dbapi = SimpleNamespace()  # type: ignore[assignment]
+
+        result = dialect._get_server_version_info(MagicMock())
+        assert result == (3, 35, 0)
 
 
 class TestGetDriverConnection:

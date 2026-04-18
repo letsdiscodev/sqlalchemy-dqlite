@@ -6,7 +6,7 @@
 - ``create_connect_args`` plumbs the ``timeout`` URL query
   through and rejects typos.
 - ``set_isolation_level`` explicitly rejects AUTOCOMMIT.
-- ``supported_isolation_levels`` is declared.
+- ``get_isolation_level_values`` advertises only SERIALIZABLE.
 """
 
 from unittest.mock import MagicMock
@@ -20,9 +20,26 @@ import dqlitedbapi.exceptions
 from sqlalchemydqlite.base import DqliteDialect
 
 
-class TestSupportedIsolationLevels:
-    def test_declared(self) -> None:
-        assert DqliteDialect.supported_isolation_levels == ("SERIALIZABLE",)
+class TestGetIsolationLevelValues:
+    def test_only_serializable(self) -> None:
+        """dqlite accepts SERIALIZABLE only; inheriting SQLiteDialect's
+        ``["READ UNCOMMITTED", "SERIALIZABLE"]`` would let callers set a
+        level we cannot honour (PRAGMA read_uncommitted has no effect
+        server-side).
+        """
+        dialect = DqliteDialect()
+        assert dialect.get_isolation_level_values(MagicMock()) == ["SERIALIZABLE"]
+
+    def test_read_uncommitted_not_advertised(self) -> None:
+        dialect = DqliteDialect()
+        assert "READ UNCOMMITTED" not in dialect.get_isolation_level_values(MagicMock())
+
+    def test_defined_locally(self) -> None:
+        """Must be overridden on DqliteDialect itself; inheriting
+        SQLiteDialect's version would silently re-introduce
+        READ UNCOMMITTED.
+        """
+        assert "get_isolation_level_values" in DqliteDialect.__dict__
 
 
 class TestSetIsolationLevel:

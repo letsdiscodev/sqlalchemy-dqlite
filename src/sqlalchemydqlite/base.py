@@ -5,7 +5,7 @@ import datetime
 import math
 import types
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from sqlalchemy import types as sqltypes
@@ -119,11 +119,6 @@ class DqliteDialect(SQLiteDialect):
     # SQLAlchemy release decouples the two.
     non_native_boolean_check_constraint = False
 
-    # dqlite runs every statement through Raft consensus; there is no
-    # exposed way to weaken isolation. Declaring this explicitly lets
-    # applications introspect via ``engine.dialect.supported_isolation_levels``.
-    supported_isolation_levels: tuple[str, ...] = ("SERIALIZABLE",)
-
     # Since isolation is always SERIALIZABLE and cannot be weakened, the
     # reported isolation level is trustworthy across transactions. SQLAlchemy
     # skips defensive isolation-level resets when this is True.
@@ -236,6 +231,21 @@ class DqliteDialect(SQLiteDialect):
             kwargs[key] = value
 
         return [], kwargs
+
+    def get_isolation_level_values(
+        self, dbapi_connection: DBAPIConnection
+    ) -> Sequence[IsolationLevel]:
+        """Return the isolation levels dqlite accepts.
+
+        The parent ``SQLiteDialect`` advertises ``["READ UNCOMMITTED",
+        "SERIALIZABLE"]`` because stdlib sqlite3 implements
+        ``READ UNCOMMITTED`` via ``PRAGMA read_uncommitted`` in
+        shared-cache mode. dqlite runs every statement through Raft
+        consensus and has no mechanism to weaken isolation, so advertise
+        only what we can honour — ``set_isolation_level`` below rejects
+        anything else explicitly.
+        """
+        return ["SERIALIZABLE"]
 
     def get_isolation_level(self, dbapi_connection: DBAPIConnection) -> IsolationLevel:
         """Return the isolation level.

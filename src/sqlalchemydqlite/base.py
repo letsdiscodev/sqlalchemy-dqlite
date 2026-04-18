@@ -83,6 +83,16 @@ class DqliteDialect(SQLiteDialect):
     # applications introspect via ``engine.dialect.supported_isolation_levels``.
     supported_isolation_levels: tuple[str, ...] = ("SERIALIZABLE",)
 
+    # Since isolation is always SERIALIZABLE and cannot be weakened, the
+    # reported isolation level is trustworthy across transactions. SQLAlchemy
+    # skips defensive isolation-level resets when this is True.
+    supports_sane_isolation_level = True
+
+    # dqlite/SQLite have no native DECIMAL type — values are stored as TEXT
+    # or REAL. Declare explicitly to document the contract (matches pysqlite
+    # inherited default, pinned here against upstream drift).
+    supports_native_decimal = False
+
     # Override the SQLite dialect's string-based DATE/DATETIME processors:
     # dqlitedbapi returns datetime objects (PEP 249), not ISO strings.
     colspecs = {

@@ -44,6 +44,21 @@ class TestDqliteDialect:
         assert kwargs["address"] == "node1:9002"
         assert kwargs["database"] == "mydb"
 
+    def test_supports_sane_isolation_level(self) -> None:
+        # dqlite always enforces SERIALIZABLE; the reported level is
+        # trustworthy across transactions (ISSUE-90).
+        assert DqliteDialect.supports_sane_isolation_level is True
+
+    def test_supports_native_decimal_false(self) -> None:
+        # SQLite/dqlite has no native DECIMAL type (ISSUE-94).
+        assert DqliteDialect.supports_native_decimal is False
+
+    def test_dialect_description(self) -> None:
+        # Pin the derived dialect_description so SQLAlchemy upgrades cannot
+        # silently change the rendered identity in ORM error messages
+        # (ISSUE-89).
+        assert DqliteDialect().dialect_description == "dqlite+dqlitedbapi"
+
 
 class TestDqliteDialectAio:
     def test_dialect_name(self) -> None:

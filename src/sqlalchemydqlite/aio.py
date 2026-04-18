@@ -1,9 +1,10 @@
 """Async dqlite dialect for SQLAlchemy."""
 
 import contextlib
+import types
 from collections import deque
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Iterator, Sequence
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import pool
 from sqlalchemy.engine import URL, AdaptedConnection
@@ -13,6 +14,9 @@ from sqlalchemy.util import await_only
 from dqliteclient.exceptions import DqliteConnectionError
 from dqlitedbapi.exceptions import InterfaceError, NotSupportedError, OperationalError
 from sqlalchemydqlite.base import DqliteDialect
+
+if TYPE_CHECKING:
+    from dqlitedbapi.aio import AsyncConnection
 
 __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 
@@ -42,7 +46,7 @@ class AsyncAdaptedCursor:
     def close(self) -> None:
         self._rows.clear()
 
-    def execute(self, operation: str, parameters: Any = None) -> Any:
+    def execute(self, operation: str, parameters: Any = None) -> None:
         # Clear buffered state FIRST so a CancelledError (or any other
         # exception) during execute/fetchall leaves the adapter in a
         # "no active result" state rather than carrying stale rows
@@ -68,7 +72,7 @@ class AsyncAdaptedCursor:
         finally:
             await_only(cursor.close())
 
-    def executemany(self, operation: str, seq_of_parameters: Any) -> Any:
+    def executemany(self, operation: str, seq_of_parameters: Any) -> None:
         # Clear state up-front so cancellation mid-call doesn't leak
         # a previous execution's buffered rows.
         self.description = None
@@ -139,7 +143,7 @@ class AsyncAdaptedCursor:
     def scroll(self, value: int, mode: str = "relative") -> None:
         raise NotSupportedError("dqlite cursors are not scrollable")
 
-    def __iter__(self) -> Any:
+    def __iter__(self) -> Iterator[Any]:
         while self._rows:
             yield self._rows.popleft()
 
@@ -158,8 +162,13 @@ class AsyncAdaptedConnection(AdaptedConnection):
     greenlet context.
     """
 
-    def __init__(self, connection: Any) -> None:
-        self._connection = connection
+    def __init__(self, connection: "AsyncConnection") -> None:
+        # ``_connection`` is the concrete ``dqlitedbapi.aio.AsyncConnection``
+        # this adapter wraps; SQLAlchemy's parent ``AdaptedConnection``
+        # declares the attribute with a wider Protocol type, so we keep
+        # the store on ``Any`` and rely on the annotation here to document
+        # the intended input shape.
+        self._connection: Any = connection
 
     def cursor(self) -> AsyncAdaptedCursor:
         return AsyncAdaptedCursor(self)
@@ -225,7 +234,7 @@ class DqliteDialect_aio(DqliteDialect):  # noqa: N801
         return AsyncAdaptedQueuePool
 
     @classmethod
-    def import_dbapi(cls) -> Any:
+    def import_dbapi(cls) -> types.ModuleType:
         from dqlitedbapi import aio
 
         return aio

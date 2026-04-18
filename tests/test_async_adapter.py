@@ -230,3 +230,27 @@ class TestAioCursorSetInputSizes:
         cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
         with pytest.raises(TypeError):
             cursor.setinputsizes([10], 20)  # type: ignore[call-arg]
+
+
+class TestAioAdapterReturnAnnotations:
+    """Lock in the narrower return annotations on the async adapter surface."""
+
+    def test_execute_and_executemany_return_none(self) -> None:
+        import inspect
+
+        from sqlalchemydqlite.aio import AsyncAdaptedCursor
+
+        sig = inspect.signature(AsyncAdaptedCursor.execute)
+        assert sig.return_annotation is None or sig.return_annotation == "None"
+
+        sig = inspect.signature(AsyncAdaptedCursor.executemany)
+        assert sig.return_annotation is None or sig.return_annotation == "None"
+
+    def test_iter_returns_iterator(self) -> None:
+        import inspect
+
+        from sqlalchemydqlite.aio import AsyncAdaptedCursor
+
+        sig = inspect.signature(AsyncAdaptedCursor.__iter__)
+        # Accept either the Iterator annotation object or the stringified form.
+        assert "Iterator" in str(sig.return_annotation)

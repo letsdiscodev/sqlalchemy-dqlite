@@ -3,6 +3,7 @@
 import contextlib
 import datetime
 import math
+import types
 import warnings
 from collections.abc import Callable
 from typing import Any
@@ -49,7 +50,7 @@ class _DqliteDate(sqltypes.Date):
     def bind_processor(self, dialect: Any) -> None:
         return None
 
-    def result_processor(self, dialect: Any, coltype: Any) -> Any:
+    def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         def process(value: Any) -> Any:
             if isinstance(value, datetime.datetime):
                 # Deliberate: tzinfo is dropped. See class docstring.
@@ -148,7 +149,7 @@ class DqliteDialect(SQLiteDialect):
     }
 
     @classmethod
-    def import_dbapi(cls) -> Any:
+    def import_dbapi(cls) -> types.ModuleType:
         import dqlitedbapi
 
         return dqlitedbapi

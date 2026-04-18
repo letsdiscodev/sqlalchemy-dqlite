@@ -127,6 +127,43 @@ class TestCreateConnectArgsURLQuery:
         assert kwargs["trust_server_heartbeat"] is expected
 
 
+class TestURLQueryRangeValidation:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "dqlite://host:19001/db?max_total_rows=0",
+            "dqlite://host:19001/db?max_total_rows=-1",
+            "dqlite://host:19001/db?max_continuation_frames=0",
+            "dqlite://host:19001/db?max_continuation_frames=-5",
+            "dqlite://host:19001/db?timeout=0",
+            "dqlite://host:19001/db?timeout=-1.5",
+            "dqlite://host:19001/db?timeout=nan",
+            "dqlite://host:19001/db?timeout=inf",
+            "dqlite://host:19001/db?timeout=-inf",
+        ],
+    )
+    def test_invalid_range_rejected_at_parse_time(self, url: str) -> None:
+        dialect = DqliteDialect()
+        with pytest.raises(ArgumentError, match="out of range"):
+            dialect.create_connect_args(make_url(url))
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "dqlite://host:19001/db?max_total_rows=1",
+            "dqlite://host:19001/db?max_total_rows=10000000",
+            "dqlite://host:19001/db?max_continuation_frames=1",
+            "dqlite://host:19001/db?timeout=0.001",
+            "dqlite://host:19001/db?timeout=3600",
+        ],
+    )
+    def test_valid_range_accepted(self, url: str) -> None:
+        dialect = DqliteDialect()
+        _, kwargs = dialect.create_connect_args(make_url(url))
+        # Just smoke-test that parsing completed without error.
+        assert kwargs
+
+
 class TestURLGovernorsReachAioDbapi:
     """End-to-end test: every URL governor knob must be accepted by the
     async DBAPI's connect(). The unit-level create_connect_args tests only

@@ -2,6 +2,7 @@
 
 import contextlib
 import datetime
+import math
 import warnings
 from collections.abc import Callable
 from typing import Any
@@ -126,13 +127,20 @@ class DqliteDialect(SQLiteDialect):
 
     # Whitelist of URL query parameters we forward to the DBAPI connect
     # call. Unknown keys raise ``ArgumentError`` so typos surface.
+    # Each entry pairs a string-to-value converter with an optional
+    # predicate that runs after coercion to catch semantic out-of-range
+    # values (zero, negative, NaN, inf). The predicate may be ``None`` for
+    # bool knobs that don't admit a range check.
     # ``trust_server_heartbeat`` uses a URL-friendly bool parser because
     # bool("False") evaluates truthy (non-empty string).
-    _URL_QUERY_ALLOWED: dict[str, Callable[[str], Any]] = {
-        "timeout": float,
-        "max_total_rows": int,
-        "max_continuation_frames": int,
-        "trust_server_heartbeat": lambda s: s.strip().lower() in ("1", "true", "yes", "on"),
+    _URL_QUERY_ALLOWED: dict[str, tuple[Callable[[str], Any], Callable[[Any], bool] | None]] = {
+        "timeout": (float, lambda v: math.isfinite(v) and v > 0),
+        "max_total_rows": (int, lambda v: v > 0),
+        "max_continuation_frames": (int, lambda v: v > 0),
+        "trust_server_heartbeat": (
+            lambda s: s.strip().lower() in ("1", "true", "yes", "on"),
+            None,
+        ),
     }
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:
@@ -140,9 +148,11 @@ class DqliteDialect(SQLiteDialect):
 
         URL format: ``dqlite://host:port/database?timeout=...``
 
-        Known query parameters are typed and passed through to the
-        DBAPI. Unknown ones raise :class:`ArgumentError` so typos like
-        ``?timeoutt=5`` don't silently disappear.
+        Known query parameters are typed and range-validated at URL-parse
+        time so typos (``?timeoutt=5``), unparseable types
+        (``?timeout=abc``), and out-of-range values
+        (``?max_total_rows=-1``) all raise :class:`ArgumentError` before
+        any pool is built.
         """
         host = url.host or "localhost"
         port = url.port or 9001
@@ -158,17 +168,20 @@ class DqliteDialect(SQLiteDialect):
                     f"Unknown dqlite URL query parameter {key!r}. "
                     f"Allowed: {sorted(self._URL_QUERY_ALLOWED)}"
                 )
-            converter = self._URL_QUERY_ALLOWED[key]
+            converter, validator = self._URL_QUERY_ALLOWED[key]
             # URL query values can be str or tuple[str, ...] (when a key
             # appears multiple times). Take the last occurrence.
             raw_str = raw[-1] if isinstance(raw, tuple) else raw
             try:
-                kwargs[key] = converter(raw_str)
+                value = converter(raw_str)
             except (TypeError, ValueError) as e:
                 raise ArgumentError(
                     f"Cannot convert URL query {key}={raw!r} to "
                     f"{getattr(converter, '__name__', 'expected type')}: {e}"
                 ) from e
+            if validator is not None and not validator(value):
+                raise ArgumentError(f"URL query {key}={raw_str!r} is out of range")
+            kwargs[key] = value
 
         return [], kwargs
 

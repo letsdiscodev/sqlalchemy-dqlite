@@ -11,12 +11,12 @@
 
 from unittest.mock import MagicMock
 
-import dqliteclient.exceptions
-import dqlitedbapi.exceptions
 import pytest
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
+import dqliteclient.exceptions
+import dqlitedbapi.exceptions
 from sqlalchemydqlite.base import DqliteDialect
 
 

@@ -116,8 +116,7 @@ class TestReflection:
 
                 fks = insp.get_foreign_keys("books")
                 assert any(
-                    fk["referred_table"] == "authors"
-                    and fk["constrained_columns"] == ["author_id"]
+                    fk["referred_table"] == "authors" and fk["constrained_columns"] == ["author_id"]
                     for fk in fks
                 )
             finally:

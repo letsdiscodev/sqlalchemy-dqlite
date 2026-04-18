@@ -313,8 +313,8 @@ class TestDoPing:
 
         dialect = DqliteDialect()
         mock_conn = MagicMock()
-        mock_conn.cursor.return_value.execute.side_effect = (
-            dqlitedbapi.exceptions.OperationalError("bye")
+        mock_conn.cursor.return_value.execute.side_effect = dqlitedbapi.exceptions.OperationalError(
+            "bye"
         )
         assert dialect.do_ping(mock_conn) is False
 

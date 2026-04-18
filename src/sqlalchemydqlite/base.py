@@ -1,16 +1,18 @@
 """Base dqlite dialect for SQLAlchemy."""
 
+import contextlib
 import datetime
 import warnings
 from typing import Any
 
-import dqliteclient.exceptions as _client_exc
-import dqlitedbapi.exceptions as _dbapi_exc
 from sqlalchemy import types as sqltypes
 from sqlalchemy.dialects.sqlite.base import SQLiteDialect
 from sqlalchemy.engine import URL
 from sqlalchemy.engine.interfaces import DBAPIConnection, IsolationLevel
 from sqlalchemy.exc import ArgumentError
+
+import dqliteclient.exceptions as _client_exc
+import dqlitedbapi.exceptions as _dbapi_exc
 
 
 class _DqliteDateTime(sqltypes.DateTime):
@@ -35,9 +37,7 @@ class _DqliteDate(sqltypes.Date):
     def bind_processor(self, dialect: Any) -> None:
         return None
 
-    def result_processor(
-        self, dialect: Any, coltype: Any
-    ) -> Any:
+    def result_processor(self, dialect: Any, coltype: Any) -> Any:
         def process(value: Any) -> Any:
             if isinstance(value, datetime.datetime):
                 return value.date()
@@ -143,8 +143,7 @@ class DqliteDialect(SQLiteDialect):
                 "Use explicit commit() / rollback() on the connection."
             )
         warnings.warn(
-            f"dqlite only supports SERIALIZABLE isolation. "
-            f"Requested level {level!r} is ignored.",
+            f"dqlite only supports SERIALIZABLE isolation. Requested level {level!r} is ignored.",
             stacklevel=2,
         )
 
@@ -219,10 +218,8 @@ class DqliteDialect(SQLiteDialect):
             ):
                 return False
         finally:
-            try:
-                cursor.close()
-            except Exception:
-                pass  # cursor close shouldn't crash the ping result
+            with contextlib.suppress(Exception):
+                cursor.close()  # cursor close shouldn't crash the ping result
 
     def _get_server_version_info(self, connection: Any) -> tuple[int, ...]:
         """Return the server version as a tuple.

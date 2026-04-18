@@ -127,6 +127,33 @@ class TestCreateConnectArgsURLQuery:
         assert kwargs["trust_server_heartbeat"] is expected
 
 
+class TestURLGovernorsReachAioDbapi:
+    """End-to-end test: every URL governor knob must be accepted by the
+    async DBAPI's connect(). The unit-level create_connect_args tests only
+    prove the dialect builds the right kwargs dict — they don't catch the
+    regression where aio.connect() silently drops kwargs and raises
+    TypeError when invoked by DqliteDialect_aio.connect().
+    """
+
+    def test_all_governors_forwarded_end_to_end(self) -> None:
+        from sqlalchemydqlite.aio import DqliteDialect_aio
+
+        dialect = DqliteDialect_aio()
+        url = make_url(
+            "dqlite+aio://host:19001/db"
+            "?timeout=5&max_total_rows=500"
+            "&max_continuation_frames=7&trust_server_heartbeat=true"
+        )
+        _, kwargs = dialect.create_connect_args(url)
+        aio_module = DqliteDialect_aio.import_dbapi()
+        # Must not raise TypeError: unexpected keyword argument.
+        conn = aio_module.connect(**kwargs)
+        assert conn._max_total_rows == 500
+        assert conn._max_continuation_frames == 7
+        assert conn._trust_server_heartbeat is True
+        assert conn._timeout == 5
+
+
 class TestDoPingNarrowExceptions:
     def test_returns_true_on_success(self) -> None:
         dialect = DqliteDialect()

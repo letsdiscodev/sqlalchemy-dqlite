@@ -11,7 +11,7 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
 
 from dqliteclient.exceptions import DqliteConnectionError
-from dqlitedbapi.exceptions import InterfaceError, OperationalError
+from dqlitedbapi.exceptions import InterfaceError, NotSupportedError, OperationalError
 from sqlalchemydqlite.base import DqliteDialect
 
 __all__ = ["DqliteDialect_aio"]
@@ -104,6 +104,36 @@ class AsyncAdaptedCursor:
 
     def setoutputsize(self, size: int, column: int | None = None) -> None:
         pass
+
+    @property
+    def connection(self) -> "AsyncAdaptedConnection":
+        """The AsyncAdaptedConnection this cursor was created from.
+
+        PEP 249 optional extension mirroring Cursor.connection /
+        AsyncCursor.connection. Read-only.
+        """
+        return self._adapt_connection
+
+    # PEP 249 optional extensions. The non-adapter cursors raise
+    # NotSupportedError for these same calls; do the same here so a
+    # consumer catching NotSupportedError behaves consistently whether it
+    # is handed an AsyncCursor or a greenlet-wrapped AsyncAdaptedCursor.
+    #
+    # `rownumber` is deliberately NOT implemented: the adapter buffers
+    # rows into a deque that is popped left on consumption, so a truthful
+    # counter would need parallel state increments in fetchone /
+    # fetchmany / fetchall / __next__. Consumers who need rownumber
+    # should use AsyncCursor directly.
+    def callproc(
+        self, procname: str, parameters: Sequence[Any] | None = None
+    ) -> Sequence[Any] | None:
+        raise NotSupportedError("dqlite does not support stored procedures")
+
+    def nextset(self) -> bool | None:
+        raise NotSupportedError("dqlite does not support multiple result sets")
+
+    def scroll(self, value: int, mode: str = "relative") -> None:
+        raise NotSupportedError("dqlite cursors are not scrollable")
 
     def __iter__(self) -> Any:
         while self._rows:

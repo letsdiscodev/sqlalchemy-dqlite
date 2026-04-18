@@ -89,6 +89,39 @@ def _has_finally_with_close(func: object) -> bool:
     return False
 
 
+class TestAsyncAdaptedCursorOptionalMethods:
+    def test_connection_property_returns_adapter(self) -> None:
+        cursor = _make_cursor()
+        assert cursor.connection is cursor._adapt_connection
+
+    def test_callproc_raises_not_supported(self) -> None:
+        import pytest
+
+        from dqlitedbapi.exceptions import NotSupportedError
+
+        cursor = _make_cursor()
+        with pytest.raises(NotSupportedError):
+            cursor.callproc("sp_foo")
+
+    def test_nextset_raises_not_supported(self) -> None:
+        import pytest
+
+        from dqlitedbapi.exceptions import NotSupportedError
+
+        cursor = _make_cursor()
+        with pytest.raises(NotSupportedError):
+            cursor.nextset()
+
+    def test_scroll_raises_not_supported(self) -> None:
+        import pytest
+
+        from dqlitedbapi.exceptions import NotSupportedError
+
+        cursor = _make_cursor()
+        with pytest.raises(NotSupportedError):
+            cursor.scroll(5)
+
+
 class TestAsyncAdaptedCursorCleanup:
     def test_cursor_closed_on_execute_error(self) -> None:
         """Underlying cursor must be closed even if execute() raises."""

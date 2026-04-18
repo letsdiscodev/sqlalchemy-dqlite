@@ -82,7 +82,7 @@ class DqliteDialect(SQLiteDialect):
 
     # Whitelist of URL query parameters we forward to the DBAPI connect
     # call. Unknown keys raise ``ArgumentError`` so typos surface.
-    _URL_QUERY_ALLOWED: dict[str, type] = {"timeout": float}
+    _URL_QUERY_ALLOWED: dict[str, type] = {"timeout": float, "max_total_rows": int}
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:
         """Create connection arguments from URL.

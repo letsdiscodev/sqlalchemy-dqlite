@@ -32,6 +32,13 @@ class _DqliteDate(sqltypes.Date):
     """Passthrough Date — ``dqlitedbapi`` returns ``datetime.datetime`` for
     DATE columns (the C server tags all of DATETIME/DATE/TIMESTAMP as
     ``DQLITE_ISO8601``); narrow to ``datetime.date`` on read.
+
+    A tz-aware input datetime has its tzinfo silently dropped by
+    ``.date()`` (``datetime.date`` has no tz support). The returned
+    date is the UTC-day portion when the dbapi decoded an ISO8601
+    value — not the viewer's local day. Applications that care about
+    local-day semantics should store DATETIME instead and do the
+    narrowing themselves.
     """
 
     def bind_processor(self, dialect: Any) -> None:
@@ -40,6 +47,7 @@ class _DqliteDate(sqltypes.Date):
     def result_processor(self, dialect: Any, coltype: Any) -> Any:
         def process(value: Any) -> Any:
             if isinstance(value, datetime.datetime):
+                # Deliberate: tzinfo is dropped. See class docstring.
                 return value.date()
             return value
 

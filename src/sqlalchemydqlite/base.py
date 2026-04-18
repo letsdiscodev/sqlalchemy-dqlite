@@ -3,6 +3,7 @@
 import contextlib
 import datetime
 import warnings
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import types as sqltypes
@@ -111,7 +112,14 @@ class DqliteDialect(SQLiteDialect):
 
     # Whitelist of URL query parameters we forward to the DBAPI connect
     # call. Unknown keys raise ``ArgumentError`` so typos surface.
-    _URL_QUERY_ALLOWED: dict[str, type] = {"timeout": float, "max_total_rows": int}
+    # ``trust_server_heartbeat`` uses a URL-friendly bool parser because
+    # bool("False") evaluates truthy (non-empty string).
+    _URL_QUERY_ALLOWED: dict[str, Callable[[str], Any]] = {
+        "timeout": float,
+        "max_total_rows": int,
+        "max_continuation_frames": int,
+        "trust_server_heartbeat": lambda s: s.strip().lower() in ("1", "true", "yes", "on"),
+    }
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:
         """Create connection arguments from URL.
@@ -137,11 +145,15 @@ class DqliteDialect(SQLiteDialect):
                     f"Allowed: {sorted(self._URL_QUERY_ALLOWED)}"
                 )
             converter = self._URL_QUERY_ALLOWED[key]
+            # URL query values can be str or tuple[str, ...] (when a key
+            # appears multiple times). Take the last occurrence.
+            raw_str = raw[-1] if isinstance(raw, tuple) else raw
             try:
-                kwargs[key] = converter(raw)
+                kwargs[key] = converter(raw_str)
             except (TypeError, ValueError) as e:
                 raise ArgumentError(
-                    f"Cannot convert URL query {key}={raw!r} to {converter.__name__}: {e}"
+                    f"Cannot convert URL query {key}={raw!r} to "
+                    f"{getattr(converter, '__name__', 'expected type')}: {e}"
                 ) from e
 
         return [], kwargs

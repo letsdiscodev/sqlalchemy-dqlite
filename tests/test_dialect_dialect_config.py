@@ -88,6 +88,44 @@ class TestCreateConnectArgsURLQuery:
         assert kwargs["timeout"] == 3.5
         assert kwargs["max_total_rows"] == 250
 
+    def test_max_continuation_frames_forwarded(self) -> None:
+        """ISSUE-98 URL plumbing — post-review follow-up."""
+        dialect = DqliteDialect()
+        url = make_url("dqlite://host:19001/db?max_continuation_frames=500")
+        _, kwargs = dialect.create_connect_args(url)
+        assert kwargs["max_continuation_frames"] == 500
+
+    def test_max_continuation_frames_rejects_non_int(self) -> None:
+        dialect = DqliteDialect()
+        url = make_url("dqlite://host:19001/db?max_continuation_frames=nope")
+        with pytest.raises(ArgumentError, match="int"):
+            dialect.create_connect_args(url)
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("1", True),
+            ("true", True),
+            ("True", True),
+            ("YES", True),
+            ("on", True),
+            ("0", False),
+            ("false", False),
+            ("no", False),
+            ("off", False),
+        ],
+    )
+    def test_trust_server_heartbeat_parses_boolean(self, raw: str, expected: bool) -> None:
+        """ISSUE-101 URL plumbing — post-review follow-up.
+
+        URL values arrive as strings; bool("False") would evaluate
+        truthy if used directly, so we use a dedicated parser.
+        """
+        dialect = DqliteDialect()
+        url = make_url(f"dqlite://host:19001/db?trust_server_heartbeat={raw}")
+        _, kwargs = dialect.create_connect_args(url)
+        assert kwargs["trust_server_heartbeat"] is expected
+
 
 class TestDoPingNarrowExceptions:
     def test_returns_true_on_success(self) -> None:

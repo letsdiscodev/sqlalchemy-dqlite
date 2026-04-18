@@ -59,6 +59,11 @@ class TestDqliteDialect:
         # (ISSUE-89).
         assert DqliteDialect().dialect_description == "dqlite+dqlitedbapi"
 
+    def test_async_dialect_description(self) -> None:
+        # Mirror ISSUE-89 pin for the async dialect; review agent flagged
+        # that the sync test alone could mask an async-side drift.
+        assert DqliteDialect_aio().dialect_description == "dqlite+dqlitedbapi_aio"
+
 
 class TestDqliteDialectAio:
     def test_dialect_name(self) -> None:

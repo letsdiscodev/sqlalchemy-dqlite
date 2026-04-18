@@ -40,6 +40,15 @@ class AsyncAdaptedCursor:
         self._rows.clear()
 
     def execute(self, operation: str, parameters: Any = None) -> Any:
+        # Clear buffered state FIRST so a CancelledError (or any other
+        # exception) during execute/fetchall leaves the adapter in a
+        # "no active result" state rather than carrying stale rows
+        # from a previous execution.
+        self.description = None
+        self.rowcount = -1
+        self.lastrowid = None
+        self._rows.clear()
+
         cursor = self._connection.cursor()
         try:
             if parameters is not None:
@@ -49,24 +58,26 @@ class AsyncAdaptedCursor:
 
             if cursor.description:
                 self.description = cursor.description
-                self.lastrowid = self.rowcount = -1
                 self._rows = deque(await_only(cursor.fetchall()))
             else:
-                self.description = None
                 self.lastrowid = cursor.lastrowid
                 self.rowcount = cursor.rowcount
-                self._rows.clear()
         finally:
             await_only(cursor.close())
 
     def executemany(self, operation: str, seq_of_parameters: Any) -> Any:
+        # Clear state up-front so cancellation mid-call doesn't leak
+        # a previous execution's buffered rows.
+        self.description = None
+        self.rowcount = -1
+        self.lastrowid = None
+        self._rows.clear()
+
         cursor = self._connection.cursor()
         try:
             await_only(cursor.executemany(operation, seq_of_parameters))
-            self.description = None
             self.lastrowid = cursor.lastrowid
             self.rowcount = cursor.rowcount
-            self._rows.clear()
         finally:
             await_only(cursor.close())
 

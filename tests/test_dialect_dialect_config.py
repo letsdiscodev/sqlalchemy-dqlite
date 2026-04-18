@@ -126,6 +126,22 @@ class TestCreateConnectArgsURLQuery:
         _, kwargs = dialect.create_connect_args(url)
         assert kwargs["trust_server_heartbeat"] is expected
 
+    @pytest.mark.parametrize(
+        "raw",
+        ["enabled", "flase", "yse", "2", "maybe"],
+    )
+    def test_trust_server_heartbeat_rejects_unknown_tokens(self, raw: str) -> None:
+        """Unknown tokens must raise rather than silently coerce to False.
+
+        A typo in the URL would previously mean the operator thinks they
+        opted into the flag but actually got the default — a surprising
+        and hard-to-diagnose misconfiguration.
+        """
+        dialect = DqliteDialect()
+        url = make_url(f"dqlite://host:19001/db?trust_server_heartbeat={raw}")
+        with pytest.raises(ArgumentError, match="Invalid bool value"):
+            dialect.create_connect_args(url)
+
 
 class TestURLQueryRangeValidation:
     @pytest.mark.parametrize(

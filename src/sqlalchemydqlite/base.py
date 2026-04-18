@@ -18,6 +18,27 @@ import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqlitewire import LEADER_ERROR_CODES as _LEADER_CHANGE_CODES
 
+_TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
+_FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
+
+
+def _parse_url_bool(key: str, raw: str) -> bool:
+    """Strict bool parser for URL query parameters.
+
+    Accepts the conventional truthy/falsy token sets and raises
+    ``ArgumentError`` on anything else so a typo like ``?flag=flase``
+    surfaces instead of silently coercing to False.
+    """
+    token = raw.strip().lower()
+    if token in _TRUE_TOKENS:
+        return True
+    if token in _FALSE_TOKENS:
+        return False
+    raise ArgumentError(
+        f"Invalid bool value for URL parameter {key!r}: {raw!r} "
+        f"(accepted: 1/0, true/false, yes/no, on/off)"
+    )
+
 
 class _DqliteDateTime(sqltypes.DateTime):
     """Passthrough DateTime — ``dqlitedbapi`` already returns ``datetime.datetime``
@@ -161,13 +182,15 @@ class DqliteDialect(SQLiteDialect):
     # values (zero, negative, NaN, inf). The predicate may be ``None`` for
     # bool knobs that don't admit a range check.
     # ``trust_server_heartbeat`` uses a URL-friendly bool parser because
-    # bool("False") evaluates truthy (non-empty string).
+    # bool("False") evaluates truthy (non-empty string). Unknown tokens
+    # raise ``ArgumentError`` to prevent a typo from silently disabling
+    # the opt-in.
     _URL_QUERY_ALLOWED: dict[str, tuple[Callable[[str], Any], Callable[[Any], bool] | None]] = {
         "timeout": (float, lambda v: math.isfinite(v) and v > 0),
         "max_total_rows": (int, lambda v: v > 0),
         "max_continuation_frames": (int, lambda v: v > 0),
         "trust_server_heartbeat": (
-            lambda s: s.strip().lower() in ("1", "true", "yes", "on"),
+            lambda s: _parse_url_bool("trust_server_heartbeat", s),
             None,
         ),
     }

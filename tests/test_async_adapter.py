@@ -254,3 +254,50 @@ class TestAioAdapterReturnAnnotations:
         sig = inspect.signature(AsyncAdaptedCursor.__iter__)
         # Accept either the Iterator annotation object or the stringified form.
         assert "Iterator" in str(sig.return_annotation)
+
+
+class TestAioAdapterCursorFetchMethods:
+    """The adapter's fetch* methods buffer rows into a deque populated
+    by ``execute``. The integration tests exercise them via SQLAlchemy
+    Result, which bypasses these entry points entirely — so direct
+    unit tests pin the semantics for non-SQLAlchemy consumers.
+    """
+
+    def _cursor_with_rows(self, rows: list[tuple[object, ...]]) -> object:
+        from collections import deque
+
+        from sqlalchemydqlite.aio import AsyncAdaptedCursor
+
+        cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
+        cursor._rows = deque(rows)
+        cursor.arraysize = 1
+        return cursor
+
+    def test_fetchone_pops_left(self) -> None:
+        cursor = self._cursor_with_rows([(1,), (2,), (3,)])
+        assert cursor.fetchone() == (1,)  # type: ignore[attr-defined]
+        assert cursor.fetchone() == (2,)  # type: ignore[attr-defined]
+        assert cursor.fetchone() == (3,)  # type: ignore[attr-defined]
+        assert cursor.fetchone() is None  # type: ignore[attr-defined]
+
+    def test_fetchmany_default_uses_arraysize(self) -> None:
+        cursor = self._cursor_with_rows([(1,), (2,), (3,), (4,)])
+        cursor.arraysize = 2  # type: ignore[attr-defined]
+        assert list(cursor.fetchmany()) == [(1,), (2,)]  # type: ignore[attr-defined]
+        # Remaining rows are still available.
+        assert list(cursor.fetchmany()) == [(3,), (4,)]  # type: ignore[attr-defined]
+
+    def test_fetchmany_explicit_size(self) -> None:
+        cursor = self._cursor_with_rows([(1,), (2,), (3,)])
+        assert list(cursor.fetchmany(2)) == [(1,), (2,)]  # type: ignore[attr-defined]
+        assert list(cursor.fetchmany(10)) == [(3,)]  # type: ignore[attr-defined]
+
+    def test_fetchall_drains_deque(self) -> None:
+        cursor = self._cursor_with_rows([(1,), (2,), (3,)])
+        assert cursor.fetchall() == [(1,), (2,), (3,)]  # type: ignore[attr-defined]
+        assert len(cursor._rows) == 0  # type: ignore[attr-defined]
+
+    def test_iter_drains_deque(self) -> None:
+        cursor = self._cursor_with_rows([(1,), (2,), (3,)])
+        assert list(cursor) == [(1,), (2,), (3,)]
+        assert len(cursor._rows) == 0  # type: ignore[attr-defined]

@@ -82,7 +82,7 @@ wheels = [
 
 [[package]]
 name = "dqlite-client"
-version = "0.1.0"
+version = "0.1.3"
 source = { editable = "../python-dqlite-client" }
 dependencies = [
     { name = "dqlite-wire" },
@@ -120,7 +120,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "dqlite-wire"
-version = "0.1.0"
+version = "0.1.3"
 source = { editable = "../python-dqlite-wire" }
 
 [package.metadata]

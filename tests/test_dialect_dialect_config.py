@@ -325,3 +325,26 @@ class TestIsDisconnectTypeDispatch:
         dialect = DqliteDialect()
         e = dqliteclient.exceptions.OperationalError(code, "application error")
         assert dialect.is_disconnect(e, None, None) is False
+
+
+class TestSupportsSaneRowcountFlags:
+    """Pin the ``supports_sane_rowcount`` quartet on the dialect class
+    itself (not merely inherited from ``SQLiteDialect``) so an upstream
+    change to the parent default cannot silently alter dqlite
+    behaviour. The values mirror the current SQLiteDialect defaults.
+    """
+
+    @pytest.mark.parametrize(
+        ("attr", "expected"),
+        [
+            ("supports_sane_rowcount", True),
+            ("supports_sane_multi_rowcount", True),
+            ("supports_sane_rowcount_returning", False),
+            ("supports_sane_multi_rowcount_returning", False),
+        ],
+    )
+    def test_flag_is_defined_on_dialect_class(self, attr: str, expected: bool) -> None:
+        assert attr in vars(DqliteDialect), (
+            f"{attr!r} must be defined on DqliteDialect, not merely inherited"
+        )
+        assert getattr(DqliteDialect, attr) is expected

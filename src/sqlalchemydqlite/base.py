@@ -147,6 +147,18 @@ class DqliteDialect(SQLiteDialect):
     # behaviour stays stable against upstream dialect drift.
     supports_multivalues_insert = True
 
+    # Rowcount truthfulness flags. SQLite (and therefore dqlite) reports
+    # accurate UPDATE / DELETE rowcounts and accurate aggregated
+    # executemany rowcounts. The two ``*_returning`` flags are False
+    # because SQLAlchemy's insertmanyvalues-with-RETURNING path relies
+    # on separate accounting; pinning False matches the inherited
+    # SQLiteDialect behaviour but, like the other pins above, guards
+    # against silent upstream drift.
+    supports_sane_rowcount = True
+    supports_sane_multi_rowcount = True
+    supports_sane_rowcount_returning = False
+    supports_sane_multi_rowcount_returning = False
+
     # Insert-path flags inherited from SQLiteDialect. SQLAlchemy's
     # insertmanyvalues codegen, DEFAULT VALUES form, and rowid handling
     # all key on these. Pin locally for the same "against upstream

@@ -98,6 +98,28 @@ class TestCreateConnectArgsURLQuery:
         with pytest.raises(ArgumentError, match="int"):
             dialect.create_connect_args(url)
 
+    @pytest.mark.parametrize("bad_port", [0, -1, 65536, 70000])
+    def test_invalid_port_raises(self, bad_port: int) -> None:
+        """A ``URL.create(port=…)`` call that smuggles an out-of-range
+        port past SQLAlchemy's own parser must still fail at
+        ``create_connect_args`` time, matching the policy used for URL
+        query parameters."""
+        from sqlalchemy.engine import URL
+
+        dialect = DqliteDialect()
+        url = URL.create("dqlite", host="host", port=bad_port, database="db")
+        with pytest.raises(ArgumentError, match="out of the valid"):
+            dialect.create_connect_args(url)
+
+    @pytest.mark.parametrize("good_port", [1, 9001, 65535])
+    def test_valid_port_accepted(self, good_port: int) -> None:
+        from sqlalchemy.engine import URL
+
+        dialect = DqliteDialect()
+        url = URL.create("dqlite", host="host", port=good_port, database="db")
+        _, kwargs = dialect.create_connect_args(url)
+        assert kwargs["address"] == f"host:{good_port}"
+
     def test_timeout_and_max_total_rows_together(self) -> None:
         dialect = DqliteDialect()
         url = make_url("dqlite://host:19001/db?timeout=3.5&max_total_rows=250")

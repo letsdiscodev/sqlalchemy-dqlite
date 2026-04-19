@@ -216,6 +216,13 @@ class DqliteDialect(SQLiteDialect):
         any pool is built.
         """
         host = url.host or "localhost"
+        if url.port is not None and not (1 <= url.port <= 65535):
+            # SQLAlchemy's URL parser normally rejects non-integer ports
+            # but will happily carry an integer outside the legal TCP
+            # range if the URL was constructed via ``URL.create(port=…)``.
+            # Catch here so typos fail at URL-parse time, matching the
+            # validation style used for known query parameters.
+            raise ArgumentError(f"dqlite URL port {url.port!r} is out of the valid 1..65535 range")
         port = url.port or 9001
         database = url.database or "default"
 

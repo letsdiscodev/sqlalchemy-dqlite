@@ -253,10 +253,25 @@ class DqliteDialect_aio(DqliteDialect):  # noqa: N801
         """Create and wrap an async connection.
 
         Eagerly establishes the TCP connection so errors surface at
-        connect-time rather than on the first query.
+        connect-time rather than on the first query. If that eager
+        connect raises, the ``raw_conn`` object is already constructed
+        and holds references to loop locks / partially-initialised
+        state — without explicit cleanup it leaks until GC and can
+        linger on the event loop it was bound to. Call ``close()`` on
+        ``BaseException`` so cancellation (e.g. a parent
+        ``asyncio.timeout()`` firing during connect) also cleans up,
+        then re-raise unchanged. ``close()`` is documented as
+        idempotent and safe to call even when no TCP connection
+        landed, so the suppression around it is narrow
+        (``Exception`` only; cancellation signals still propagate).
         """
         raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
-        await_only(raw_conn.connect())
+        try:
+            await_only(raw_conn.connect())
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await_only(raw_conn.close())
+            raise
         return AsyncAdaptedConnection(raw_conn)
 
     def get_driver_connection(self, connection: Any) -> Any:

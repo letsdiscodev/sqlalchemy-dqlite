@@ -242,6 +242,67 @@ class TestAsyncAdaptedConnectionClose:
             adapted.close()
 
 
+class TestAioDialectConnectCleanup:
+    """DqliteDialect_aio.connect() eagerly establishes the TCP
+    connection. If that raises, raw_conn (already constructed) must
+    be closed — otherwise the partial connection leaks. Cleanup must
+    also fire on cancellation so a parent asyncio.timeout() firing
+    mid-connect doesn't leave the raw_conn dangling.
+    """
+
+    def test_close_is_called_when_eager_connect_fails(self) -> None:
+        import pytest
+
+        from dqliteclient.exceptions import DqliteConnectionError
+        from sqlalchemydqlite.aio import DqliteDialect_aio
+
+        dialect = DqliteDialect_aio()
+
+        raw_conn = MagicMock()
+        raw_conn.connect = MagicMock(side_effect=DqliteConnectionError("probe failed"))
+        raw_conn.close = MagicMock()
+
+        dbapi = MagicMock()
+        dbapi.connect = MagicMock(return_value=raw_conn)
+        dialect.loaded_dbapi = dbapi
+
+        with (
+            patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync),
+            pytest.raises(DqliteConnectionError, match="probe failed"),
+        ):
+            dialect.connect()
+
+        raw_conn.close.assert_called_once()
+
+    def test_close_is_called_on_cancellation(self) -> None:
+        """CancelledError during eager connect must trigger cleanup
+        AND still propagate — callers rely on structured-concurrency
+        signal fidelity."""
+        import asyncio
+
+        import pytest
+
+        from sqlalchemydqlite.aio import DqliteDialect_aio
+
+        dialect = DqliteDialect_aio()
+
+        raw_conn = MagicMock()
+        raw_conn.connect = MagicMock(side_effect=asyncio.CancelledError())
+        raw_conn.close = MagicMock()
+
+        dbapi = MagicMock()
+        dbapi.connect = MagicMock(return_value=raw_conn)
+        dialect.loaded_dbapi = dbapi
+
+        with (
+            patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            dialect.connect()
+
+        raw_conn.close.assert_called_once()
+
+
 class TestAioAllExports:
     """Adapter classes are part of the supported public surface."""
 

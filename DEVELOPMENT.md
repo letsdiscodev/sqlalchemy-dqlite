@@ -8,17 +8,14 @@
 
 ## Setup
 
-Start by also cloning [dqlite-wire](https://github.com/letsdiscodev/python-dqlite-wire),
-[dqlite-client](https://github.com/letsdiscodev/python-dqlite-client)
-and [dqlite-dbapi](https://github.com/letsdiscodev/python-dqlite-dbapi).
+Clone [dqlite-wire](https://github.com/letsdiscodev/python-dqlite-wire), [dqlite-client](https://github.com/letsdiscodev/python-dqlite-client), and [dqlite-dbapi](https://github.com/letsdiscodev/python-dqlite-dbapi) alongside this checkout; `[tool.uv.sources]` in `pyproject.toml` points the sibling packages at their `../python-dqlite-*` directories, so `uv sync` picks up in-tree changes automatically.
 
 ```bash
 # Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Create virtual environment and install dependencies
-uv venv --python 3.13
-uv pip install -e "../python-dqlite-wire" -e "../python-dqlite-client" -e "../python-dqlite-dbapi" -e ".[dev]"
+uv sync --extra dev
 ```
 
 ## Development Tools

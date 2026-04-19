@@ -54,13 +54,17 @@ class TestAsyncAdaptedCursorRowsCleared:
         assert result is None, f"Expected None after non-query execute, got {result}"
 
     def test_rows_cleared_after_executemany(self) -> None:
-        """After executemany(), fetchone() must return None."""
+        """After a DML executemany(), fetchone() must return None and the
+        adapter must reflect the underlying cursor's rowcount / lastrowid.
+        """
         cursor = _make_cursor()
 
         # Simulate that a previous SELECT populated _rows
         cursor._rows = deque([(1, "alice"), (2, "bob")])
 
         mock_inner = MagicMock()
+        # DML: underlying cursor reports no description.
+        mock_inner.description = None
         mock_inner.lastrowid = 3
         mock_inner.rowcount = 2
         mock_inner.executemany.return_value = None
@@ -70,8 +74,43 @@ class TestAsyncAdaptedCursorRowsCleared:
         with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
             cursor.executemany("INSERT INTO t VALUES (?)", [(1,), (2,)])
 
-        result = cursor.fetchone()
-        assert result is None, f"Expected None after executemany, got {result}"
+        assert cursor.fetchone() is None
+        assert cursor.lastrowid == 3
+        assert cursor.rowcount == 2
+        assert cursor.description is None
+
+    def test_executemany_returning_captures_rows_and_description(self) -> None:
+        """When executemany is run with a RETURNING clause, the underlying
+        cursor accumulates rows across parameter sets. The adapter must
+        mirror execute()'s pattern: read description and drain fetchall
+        into self._rows so downstream SQLAlchemy result handling sees the
+        rows. Before the fix the adapter silently dropped them.
+        """
+        cursor = _make_cursor()
+
+        mock_inner = MagicMock()
+        returned_rows = [(1, "a"), (2, "b"), (3, "c")]
+        description = [
+            ("id", 1, None, None, None, None, None),
+            ("x", 3, None, None, None, None, None),
+        ]
+        mock_inner.description = description
+        mock_inner.executemany.return_value = None
+        mock_inner.fetchall.return_value = returned_rows
+        mock_inner.close.return_value = None
+        cursor._connection.cursor.return_value = mock_inner
+
+        with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
+            cursor.executemany(
+                "INSERT INTO t (x) VALUES (?) RETURNING id, x",
+                [("a",), ("b",), ("c",)],
+            )
+
+        assert cursor.description == description
+        assert cursor.fetchone() == (1, "a")
+        assert cursor.fetchone() == (2, "b")
+        assert cursor.fetchone() == (3, "c")
+        assert cursor.fetchone() is None
 
 
 def _has_finally_with_close(func: object) -> bool:

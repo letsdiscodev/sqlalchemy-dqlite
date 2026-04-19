@@ -83,8 +83,18 @@ class AsyncAdaptedCursor:
         cursor = self._connection.cursor()
         try:
             await_only(cursor.executemany(operation, seq_of_parameters))
-            self.lastrowid = cursor.lastrowid
-            self.rowcount = cursor.rowcount
+            # Mirror execute()'s post-call pattern: if the statement had
+            # a RETURNING clause, the underlying cursor accumulates rows
+            # across parameter sets and sets a description. Skipping the
+            # description/rows capture silently loses every returned row
+            # when SQLAlchemy's insertmanyvalues + RETURNING path is
+            # driven through the async engine.
+            if cursor.description:
+                self.description = cursor.description
+                self._rows = deque(await_only(cursor.fetchall()))
+            else:
+                self.lastrowid = cursor.lastrowid
+                self.rowcount = cursor.rowcount
         finally:
             await_only(cursor.close())
 

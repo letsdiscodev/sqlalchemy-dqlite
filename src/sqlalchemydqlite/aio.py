@@ -3,7 +3,7 @@
 import contextlib
 import types
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import pool
@@ -20,6 +20,15 @@ if TYPE_CHECKING:
 
 __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 
+# Description tuple shape per PEP 249 (name, type_code, display_size,
+# internal_size, precision, scale, null_ok). dqlite populates only
+# ``name`` and ``type_code`` — the other five are always ``None``.
+# Re-declared here (not imported) to keep the sqlalchemy-dqlite
+# runtime contract explicit to type-checkers even if the dbapi layer
+# later exposes a named alias.
+_DescriptionTuple = tuple[str, int | None, None, None, None, None, None]
+_Description = list[_DescriptionTuple] | None
+
 
 class AsyncAdaptedCursor:
     """Adapts an AsyncCursor for SQLAlchemy's greenlet-based async engine.
@@ -34,7 +43,7 @@ class AsyncAdaptedCursor:
     def __init__(self, adapt_connection: "AsyncAdaptedConnection") -> None:
         self._adapt_connection = adapt_connection
         self._connection = adapt_connection._connection
-        self.description: Any = None
+        self.description: _Description = None
         self.rowcount: int = -1
         self.lastrowid: int | None = None
         self.arraysize: int = 1
@@ -72,7 +81,7 @@ class AsyncAdaptedCursor:
         finally:
             await_only(cursor.close())
 
-    def executemany(self, operation: str, seq_of_parameters: Any) -> None:
+    def executemany(self, operation: str, seq_of_parameters: Iterable[Sequence[Any]]) -> None:
         # Clear state up-front so cancellation mid-call doesn't leak
         # a previous execution's buffered rows.
         self.description = None

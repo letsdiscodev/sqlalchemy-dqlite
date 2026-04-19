@@ -79,8 +79,16 @@ class AsyncAdaptedCursor:
                 await_only(cursor.execute(operation))
 
             if cursor.description:
+                # Fetch first, assign atomically. If ``fetchall`` raises
+                # (CancelledError from an outer timeout, server fault
+                # mid-stream, etc.), ``self.description`` must not be left
+                # set while ``self._rows`` is still empty — SQLAlchemy's
+                # Result layer treats (description, empty rows) as an
+                # empty result set, indistinguishable from "execute
+                # succeeded but fetched no rows".
+                fetched = deque(await_only(cursor.fetchall()))
                 self.description = cursor.description
-                self._rows = deque(await_only(cursor.fetchall()))
+                self._rows = fetched
             else:
                 self.lastrowid = cursor.lastrowid
                 self.rowcount = cursor.rowcount
@@ -105,8 +113,12 @@ class AsyncAdaptedCursor:
             # when SQLAlchemy's insertmanyvalues + RETURNING path is
             # driven through the async engine.
             if cursor.description:
+                # Same fetch-first-then-assign pattern as ``execute``:
+                # a raise from ``fetchall`` must not leave description
+                # populated with empty rows.
+                fetched = deque(await_only(cursor.fetchall()))
                 self.description = cursor.description
-                self._rows = deque(await_only(cursor.fetchall()))
+                self._rows = fetched
             else:
                 self.lastrowid = cursor.lastrowid
                 self.rowcount = cursor.rowcount

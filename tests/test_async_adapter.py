@@ -463,6 +463,41 @@ class TestAioAdapterConnectionDelegations:
         assert isinstance(cursor, AsyncAdaptedCursor)
 
 
+class TestAsyncAdaptedCursorDescriptionConsistency:
+    """If ``fetchall`` raises mid-call, ``description`` must not be
+    left set with an empty ``_rows`` buffer — SQLAlchemy's Result
+    layer treats that pair as an empty result set, indistinguishable
+    from "execute succeeded but fetched no rows"."""
+
+    def test_fetchall_raise_leaves_description_none(self) -> None:
+        import pytest
+
+        cursor = _make_cursor()
+
+        mock_inner = MagicMock()
+        mock_inner.description = (("id", 1, None, None, None, None, None),)
+        mock_inner.execute.return_value = None
+        mock_inner.close.return_value = None
+        # ``fetchall`` raises before returning — the adapter must not
+        # commit ``description`` nor leave ``_rows`` in a half-assigned
+        # state.
+        mock_inner.fetchall.side_effect = RuntimeError("synthetic fetchall failure")
+        cursor._connection.cursor.return_value = mock_inner
+
+        with (
+            patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync),
+            pytest.raises(RuntimeError, match="synthetic fetchall failure"),
+        ):
+            cursor.execute("SELECT id FROM t")
+
+        assert cursor.description is None, (
+            "description must roll back to None when fetchall raises, "
+            "so SQLAlchemy's Result layer cannot misread the cursor as "
+            "holding an empty result set"
+        )
+        assert len(cursor._rows) == 0
+
+
 class TestAsyncAdaptedCursorDescriptionType:
     """``cursor.description`` is a PEP 249 sequence of sequences. The
     adapter must accept (and pass through) any sequence the underlying

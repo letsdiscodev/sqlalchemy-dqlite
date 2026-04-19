@@ -250,6 +250,28 @@ class TestDoPingNarrowExceptions:
         with pytest.raises(RuntimeError, match="bug"):
             dialect.do_ping(conn)
 
+    @pytest.mark.parametrize(
+        "exc_cls,msg",
+        [
+            (AttributeError, "stale attribute"),
+            (TypeError, "bad signature"),
+            (AssertionError, "invariant violated"),
+        ],
+    )
+    def test_propagates_programming_errors(self, exc_cls: type[Exception], msg: str) -> None:
+        """A broadened except in do_ping would swallow refactor bugs
+        (AttributeError from a renamed attribute, TypeError from a
+        stale signature, AssertionError from a violated invariant) and
+        silently return False — pool health checks would pass while
+        the real fault rotted. Pin propagation for each category."""
+        dialect = DqliteDialect()
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        cursor.execute.side_effect = exc_cls(msg)
+        with pytest.raises(exc_cls, match=msg):
+            dialect.do_ping(conn)
+
 
 class TestIsDisconnectTypeDispatch:
     def test_dqlite_connection_error_is_disconnect(self) -> None:
@@ -274,4 +296,32 @@ class TestIsDisconnectTypeDispatch:
     def test_unrelated_operational_error_is_not_disconnect(self) -> None:
         dialect = DqliteDialect()
         e = dqlitedbapi.exceptions.OperationalError("no such table")
+        assert dialect.is_disconnect(e, None, None) is False
+
+    def test_is_disconnect_true_for_every_leader_error_code(self) -> None:
+        """Pin the full LEADER_ERROR_CODES tuple — if a future refactor
+        drops SQLITE_IOERR_LEADERSHIP_LOST from the constant, a real
+        leadership transfer stops triggering the reconnect path and the
+        only signal is application latency, not a test failure."""
+        from dqlitewire import LEADER_ERROR_CODES
+
+        dialect = DqliteDialect()
+        for code in LEADER_ERROR_CODES:
+            e = dqliteclient.exceptions.OperationalError(code, "leader gone")
+            assert dialect.is_disconnect(e, None, None) is True, (
+                f"LEADER_ERROR_CODES member {code} must be classified "
+                f"as a disconnect — is_disconnect returned False."
+            )
+
+    @pytest.mark.parametrize("code", [1, 5, 19, 14])
+    def test_is_disconnect_false_for_non_leader_codes(self, code: int) -> None:
+        """Defensive fence against future reclassification drift: a stray
+        OperationalError carrying a common SQLite code (generic error,
+        SQLITE_BUSY, SQLITE_CONSTRAINT, SQLITE_CANTOPEN) must not be
+        misread as a disconnect. Constraint codes in particular now
+        surface as IntegrityError after ISSUE-209, but this test pins
+        the fallback behaviour for any stray OperationalError that
+        slips through."""
+        dialect = DqliteDialect()
+        e = dqliteclient.exceptions.OperationalError(code, "application error")
         assert dialect.is_disconnect(e, None, None) is False

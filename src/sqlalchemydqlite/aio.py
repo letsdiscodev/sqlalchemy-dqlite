@@ -26,8 +26,14 @@ __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 # Re-declared here (not imported) to keep the sqlalchemy-dqlite
 # runtime contract explicit to type-checkers even if the dbapi layer
 # later exposes a named alias.
+# PEP 249 specifies ``cursor.description`` as a sequence of sequences —
+# a ``list[tuple]`` is the canonical shape but a strict type alias of
+# ``list`` would reject a dbapi cursor that returns a tuple-of-tuples
+# (which sqlalchemy's own aiosqlite adapter accepts). Keep the alias
+# permissive so the adapter passes through whatever the underlying
+# cursor returns without copying.
 _DescriptionTuple = tuple[str, int | None, None, None, None, None, None]
-_Description = list[_DescriptionTuple] | None
+_Description = Sequence[_DescriptionTuple] | None
 
 
 class AsyncAdaptedCursor:

@@ -461,3 +461,32 @@ class TestAioAdapterConnectionDelegations:
 
         cursor = adapter.cursor()
         assert isinstance(cursor, AsyncAdaptedCursor)
+
+
+class TestAsyncAdaptedCursorDescriptionType:
+    """``cursor.description`` is a PEP 249 sequence of sequences. The
+    adapter must accept (and pass through) any sequence the underlying
+    dbapi cursor returns — list, tuple, or other — without
+    converting."""
+
+    def test_description_passes_through_tuple_of_tuples(self) -> None:
+        cursor = _make_cursor()
+
+        mock_inner = MagicMock()
+        # Underlying cursor returns a tuple-of-tuples description.
+        mock_inner.description = (
+            ("id", 1, None, None, None, None, None),
+            ("name", 3, None, None, None, None, None),
+        )
+        mock_inner.lastrowid = None
+        mock_inner.rowcount = 0
+        mock_inner.execute.return_value = None
+        mock_inner.fetchall.return_value = []
+        mock_inner.close.return_value = None
+        cursor._connection.cursor.return_value = mock_inner
+
+        with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
+            cursor.execute("SELECT id, name FROM t")
+
+        # Adapter must preserve the description untouched.
+        assert cursor.description == mock_inner.description

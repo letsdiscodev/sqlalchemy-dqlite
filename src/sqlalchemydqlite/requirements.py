@@ -7,6 +7,8 @@ from typing import Any
 from sqlalchemy.testing import exclusions
 from sqlalchemy.testing.requirements import SuiteRequirements
 
+__all__ = ["Requirements"]
+
 
 class Requirements(SuiteRequirements):
     """Test suite requirements for dqlite dialect.

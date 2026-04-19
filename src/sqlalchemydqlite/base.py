@@ -18,6 +18,8 @@ import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqlitewire import LEADER_ERROR_CODES as _LEADER_CHANGE_CODES
 
+__all__ = ["DqliteDialect"]
+
 _TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
 _FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
 

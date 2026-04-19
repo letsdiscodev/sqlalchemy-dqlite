@@ -124,14 +124,13 @@ version = "0.1.0"
 source = { editable = "../python-dqlite-wire" }
 
 [package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.0" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-cov", specifier = ">=4.0" },
-    { name = "ruff", specifier = ">=0.4" },
+requires-dist = [
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "greenlet"

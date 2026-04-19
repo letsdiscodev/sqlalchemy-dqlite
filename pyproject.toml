@@ -45,6 +45,12 @@ dqlite = "sqlalchemydqlite:DqliteDialect"
 [tool.hatch.build.targets.wheel]
 packages = ["src/sqlalchemydqlite"]
 
+# Hatchling's default file-selection would already ship ``py.typed`` via
+# ``packages``, but declaring it explicitly is the documented PEP 561
+# pattern and makes the intent obvious to anyone auditing the wheel.
+[tool.hatch.build.targets.wheel.force-include]
+"src/sqlalchemydqlite/py.typed" = "sqlalchemydqlite/py.typed"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

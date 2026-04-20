@@ -67,6 +67,11 @@ def test_close_logs_rollback_failure(caplog: pytest.LogCaptureFixture) -> None:
     assert matching[0].exc_info is not None
     assert isinstance(matching[0].exc_info[1], OperationalError)
     assert fake.close_calls == 1  # close still ran
+    # Correlation fields: id=<num> and peer=<addr-or-None> so operators
+    # can attribute the log record to a specific adapter instance / node.
+    msg = matching[0].getMessage()
+    assert f"id={id(adapter)}" in msg, msg
+    assert "peer=" in msg, msg
 
 
 def test_close_propagates_programming_bug() -> None:

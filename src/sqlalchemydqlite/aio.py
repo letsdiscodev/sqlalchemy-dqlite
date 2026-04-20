@@ -243,9 +243,15 @@ class AsyncAdaptedConnection(AdaptedConnection):
         ) as exc:
             # Silent suppression used to hide e.g. "leader flip
             # mid-rollback" from operators — a DEBUG line preserves the
-            # diagnostic without masking or propagating.
+            # diagnostic without masking or propagating. Include both
+            # id(self) and the peer address so a noisy pool can be
+            # correlated to specific adapter instances and nodes.
+            peer = getattr(self._connection, "address", None)
             logger.debug(
-                "AsyncAdaptedConnection.close: rollback failed (%s); proceeding to close",
+                "AsyncAdaptedConnection.close (id=%s, peer=%s): "
+                "rollback failed (%s); proceeding to close",
+                id(self),
+                peer,
                 type(exc).__name__,
                 exc_info=True,
             )

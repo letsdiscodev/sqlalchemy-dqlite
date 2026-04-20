@@ -1,7 +1,7 @@
 """Base dqlite dialect for SQLAlchemy."""
 
-import contextlib
 import datetime
+import logging
 import math
 import types
 import warnings
@@ -17,6 +17,8 @@ from sqlalchemy.exc import ArgumentError
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqlitewire import LEADER_ERROR_CODES as _LEADER_CHANGE_CODES
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["DqliteDialect"]
 
@@ -372,8 +374,27 @@ class DqliteDialect(SQLiteDialect):
             ):
                 return False
         finally:
-            with contextlib.suppress(Exception):
-                cursor.close()  # cursor close shouldn't crash the ping result
+            # Narrow the suppression to the same set as the outer
+            # except: connection-level errors are expected on a dead
+            # socket and must not crash the ping; programming bugs
+            # (TypeError, AttributeError, ValueError, …) must still
+            # propagate so refactors can't silently break the probe.
+            # DEBUG-log the suppressed cause so operators can tell
+            # close-swallow from close-success in logs.
+            try:
+                cursor.close()
+            except (
+                _dbapi_exc.OperationalError,
+                _dbapi_exc.InterfaceError,
+                _client_exc.DqliteConnectionError,
+                OSError,
+                TimeoutError,
+            ) as exc:
+                logger.debug(
+                    "do_ping: cursor.close failed (%s); proceeding",
+                    type(exc).__name__,
+                    exc_info=True,
+                )
 
     def _get_server_version_info(self, connection: Any) -> tuple[int, ...]:
         """Return the server's SQLite version as a tuple.

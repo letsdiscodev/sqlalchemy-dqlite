@@ -1,6 +1,7 @@
 """Async dqlite dialect for SQLAlchemy."""
 
 import contextlib
+import logging
 import types
 from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
@@ -14,6 +15,8 @@ from sqlalchemy.util import await_only
 from dqliteclient.exceptions import DqliteConnectionError
 from dqlitedbapi.exceptions import InterfaceError, NotSupportedError, OperationalError
 from sqlalchemydqlite.base import DqliteDialect
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from dqlitedbapi.aio import AsyncConnection
@@ -228,15 +231,24 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # so programming bugs (AttributeError, TypeError, bare RuntimeError,
         # etc.) still propagate. The tuple mirrors the client layer's own
         # is_disconnect classification in base.py.
-        with contextlib.suppress(
+        try:
+            await_only(self._connection.rollback())
+        except (
             OperationalError,
             InterfaceError,
             DqliteConnectionError,
             OSError,
             TimeoutError,
             ConnectionError,
-        ):
-            await_only(self._connection.rollback())
+        ) as exc:
+            # Silent suppression used to hide e.g. "leader flip
+            # mid-rollback" from operators — a DEBUG line preserves the
+            # diagnostic without masking or propagating.
+            logger.debug(
+                "AsyncAdaptedConnection.close: rollback failed (%s); proceeding to close",
+                type(exc).__name__,
+                exc_info=True,
+            )
         await_only(self._connection.close())
 
 

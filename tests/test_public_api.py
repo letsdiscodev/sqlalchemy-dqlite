@@ -13,7 +13,9 @@ import sqlalchemydqlite.requirements
 
 
 def test_package_all_is_minimal() -> None:
-    assert set(sqlalchemydqlite.__all__) == {"DqliteDialect"}
+    # ``__version__`` is a PEP 396 public attribute, re-exported via
+    # ``__all__`` for parity with the other dqlite packages.
+    assert set(sqlalchemydqlite.__all__) == {"DqliteDialect", "__version__"}
 
 
 def test_base_all_is_minimal() -> None:

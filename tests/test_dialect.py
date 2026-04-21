@@ -381,6 +381,39 @@ class TestIsDisconnect:
         e = dqlitedbapi.exceptions.InterfaceError("arraysize must be positive")
         assert dialect.is_disconnect(e, None, None) is False
 
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            OSError(32, "broken pipe"),
+            BrokenPipeError(32, "broken pipe"),
+            ConnectionError("peer went away"),
+            ConnectionResetError(104, "connection reset by peer"),
+            TimeoutError("read timed out"),
+        ],
+    )
+    def test_recognizes_os_level_disconnect_branches(self, exc: BaseException) -> None:
+        """The ``is_disconnect`` tuple includes OSError, ConnectionError,
+        BrokenPipeError, and TimeoutError. ``ConnectionError`` and
+        ``TimeoutError`` are semantically distinct from OSError on
+        Python 3.11+ — pin each branch so a refactor narrowing the
+        tuple (e.g. dropping ConnectionError because "OSError covers
+        it on Linux") would fail loudly and not silently break
+        pool invalidation on transport failures.
+        """
+        dialect = DqliteDialect()
+        assert dialect.is_disconnect(exc, None, None) is True
+
+    def test_does_not_flag_programming_error(self) -> None:
+        """Inverse pin: ProgrammingError is not a transport failure
+        and must not route through the disconnect path — otherwise SA
+        would invalidate a healthy connection on e.g. a syntax error.
+        """
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        e = dqlitedbapi.exceptions.ProgrammingError("no such function: foo")
+        assert dialect.is_disconnect(e, None, None) is False
+
     def test_recognizes_wrapped_dqlite_connection_error_via_cause(self) -> None:
         """The dbapi ``_call_client`` handler wraps a client-level
         ``DqliteConnectionError`` into a bare ``OperationalError`` (no

@@ -51,3 +51,35 @@ class TestRequirements:
         """
         req = Requirements()
         assert req.regexp_match.enabled is False
+
+
+class TestRequirementsReturnAnnotations:
+    """Static pin: every property on the Requirements class advertises
+    its actual return type as ``compound``. If a future maintainer adds
+    a property returning ``Any`` (or a helper that yields a bare bool),
+    this test catches it before the return-type drift makes it into a
+    release."""
+
+    def test_every_property_annotates_compound_return(self) -> None:
+        import typing
+
+        from sqlalchemy.testing.exclusions import compound
+
+        from sqlalchemydqlite.requirements import Requirements
+
+        skipped = {"_sa_instance_state"}
+        missing: list[str] = []
+        for name in vars(Requirements):
+            if name.startswith("_") or name in skipped:
+                continue
+            attr = vars(Requirements)[name]
+            if not isinstance(attr, property):
+                continue
+            fget = attr.fget
+            assert fget is not None
+            hints = typing.get_type_hints(fget)
+            if hints.get("return") is not compound:
+                missing.append(name)
+        assert not missing, (
+            f"Requirements properties must annotate ``-> compound``; missing on: {sorted(missing)}"
+        )

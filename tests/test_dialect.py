@@ -381,6 +381,24 @@ class TestIsDisconnect:
         e = dqlitedbapi.exceptions.InterfaceError("arraysize must be positive")
         assert dialect.is_disconnect(e, None, None) is False
 
+    def test_recognizes_wrapped_dqlite_connection_error_via_cause(self) -> None:
+        """The dbapi ``_call_client`` handler wraps a client-level
+        ``DqliteConnectionError`` into a bare ``OperationalError`` (no
+        code). Without walking ``__cause__`` the direct
+        isinstance branch would miss the wrapped form entirely. Pin
+        the chain inspection so the dead-code isinstance branch above
+        remains load-bearing for chained errors too.
+        """
+        import dqliteclient.exceptions as _client_exc
+        import dqlitedbapi.exceptions
+
+        dialect = DqliteDialect()
+        original = _client_exc.DqliteConnectionError("peer RST")
+        try:
+            raise dqlitedbapi.exceptions.OperationalError("wrapped") from original
+        except dqlitedbapi.exceptions.OperationalError as wrapped:
+            assert dialect.is_disconnect(wrapped, None, None) is True
+
 
 class TestIsolationLevel:
     def test_set_isolation_level_warns_on_unsupported(self) -> None:

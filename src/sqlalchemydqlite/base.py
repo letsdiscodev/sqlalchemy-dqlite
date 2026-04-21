@@ -350,6 +350,15 @@ class DqliteDialect(SQLiteDialect):
         # Explicit connection-level error types from the client layer.
         if isinstance(e, _client_exc.DqliteConnectionError):
             return True
+        # The dbapi ``_call_client`` handler wraps
+        # ``_client_exc.DqliteConnectionError`` into a bare
+        # ``dbapi.OperationalError`` (no code). The wrapped class is
+        # unreachable by the direct isinstance above, but Python sets
+        # ``__cause__`` from ``raise ... from e``, so walking the chain
+        # keeps the disconnect classification working without inventing
+        # a new attribute.
+        if isinstance(getattr(e, "__cause__", None), _client_exc.DqliteConnectionError):
+            return True
         # Underlying OS-level transport failures (socket RST, broken pipe,
         # DNS, connect refused) surface as these stdlib types.
         if isinstance(e, (ConnectionError, BrokenPipeError, TimeoutError, OSError)):

@@ -209,6 +209,14 @@ class AsyncAdaptedConnection(AdaptedConnection):
     greenlet context.
     """
 
+    # Parent ``sqlalchemy.engine.interfaces.AdaptedConnection`` declares
+    # ``__slots__ = ("_connection",)``; without our own slots declaration
+    # each instance gets a ``__dict__`` and defeats the parent's memory
+    # optimization (SA's own ``AsyncAdapt_aiosqlite_connection`` follows
+    # the same pattern). We add no new instance attributes, so an empty
+    # slots tuple is correct.
+    __slots__ = ()
+
     def __init__(self, connection: "AsyncConnection") -> None:
         # ``_connection`` is the concrete ``dqlitedbapi.aio.AsyncConnection``
         # this adapter wraps; SQLAlchemy's parent ``AdaptedConnection``

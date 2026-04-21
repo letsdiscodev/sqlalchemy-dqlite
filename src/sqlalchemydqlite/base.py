@@ -286,6 +286,17 @@ class DqliteDialect(SQLiteDialect):
         to lose transactionality without knowing it. Other unsupported
         levels emit a warning (future-proof for isolation levels dqlite
         may grow to support).
+
+        Note on reachability: SA's engine flow
+        (``engine/default.py::_assert_and_set_isolation_level``) calls
+        ``get_isolation_level_values()`` first and rejects unknown
+        values with ``ArgumentError`` before reaching this method, so
+        the AUTOCOMMIT and warning branches are effectively dead for
+        engine-driven callers. They are kept as belt-and-suspenders
+        for third-party callers (test harnesses, custom engine
+        implementations) that bypass SA's upstream validation, and to
+        provide an explicit error message if the guarantees above
+        ever change.
         """
         if level is None or level == "SERIALIZABLE":
             return

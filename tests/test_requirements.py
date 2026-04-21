@@ -20,6 +20,18 @@ class TestRequirements:
             "emulated_lastrowid",
             "supports_empty_inserts",
             "regexp_match",
+            "cte",
+            "window_functions",
+            "returning",
+            "insert_from_select",
+            "on_update_or_delete_cascades",
+            "self_referential_foreign_keys",
+            "unique_constraint_reflection",
+            "primary_key_constraint_reflection",
+            "foreign_key_constraint_reflection",
+            "index_reflection",
+            "temporary_tables",
+            "table_ddl_if_exists",
         ]
         for prop_name in properties:
             value = getattr(req, prop_name)

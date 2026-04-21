@@ -13,6 +13,7 @@ authors = [{ name = "Antoine Leclair", email = "antoineleclair@gmail.com" }]
 keywords = ["dqlite", "sqlite", "distributed", "database", "sqlalchemy", "orm"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",

@@ -124,3 +124,79 @@ def test_close_with_also_failing_transport_errors(caplog: pytest.LogCaptureFixtu
     ]
     assert matching
     assert fake.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OSError(32, "broken pipe"),
+        BrokenPipeError(32, "broken pipe"),
+        ConnectionError("peer went away"),
+        ConnectionResetError(104, "connection reset by peer"),
+        TimeoutError("read timed out"),
+    ],
+)
+def test_close_suppresses_os_level_rollback_errors(
+    caplog: pytest.LogCaptureFixture, exc: BaseException
+) -> None:
+    """The narrow suppression tuple on ``close()`` includes OSError,
+    TimeoutError, and ConnectionError alongside the dbapi-level
+    types. Pin each OS-level branch so a refactor dropping any one
+    of them would fail this test rather than silently re-raising
+    the exception and leaking the underlying AsyncConnection.
+    """
+    fake = _FakeAsyncConn(exc)
+    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+
+    from sqlalchemydqlite import aio as aio_module
+
+    def _fake_await_only(coro: object) -> object:
+        import asyncio
+
+        return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
+
+    orig = aio_module.await_only
+    aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+    try:
+        with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.aio"):
+            adapter.close()
+    finally:
+        aio_module.await_only = orig  # type: ignore[assignment]
+
+    matching = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.DEBUG and "rollback failed" in r.getMessage()
+    ]
+    assert matching, f"no DEBUG log captured for {type(exc).__name__}: {caplog.records!r}"
+    # Log line carries the exception type (so operators triaging a
+    # noisy pool can correlate the cause without enabling exc_info
+    # rendering). ``%s`` with ``type(exc).__name__`` in the format.
+    assert type(exc).__name__ in matching[0].getMessage()
+    # close() ran regardless of which transport error fired the
+    # suppression branch.
+    assert fake.close_calls == 1
+
+
+def test_close_propagates_value_error_out_of_tuple() -> None:
+    """Inverse pin: a ``ValueError`` from rollback is not in the
+    narrow tuple and must propagate. Guards against a refactor
+    widening the suppression back to ``except Exception``.
+    """
+    fake = _FakeAsyncConn(ValueError("parameter out of range"))
+    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+
+    from sqlalchemydqlite import aio as aio_module
+
+    def _fake_await_only(coro: object) -> object:
+        import asyncio
+
+        return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
+
+    orig = aio_module.await_only
+    aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+    try:
+        with pytest.raises(ValueError, match="parameter out of range"):
+            adapter.close()
+    finally:
+        aio_module.await_only = orig  # type: ignore[assignment]

@@ -285,6 +285,18 @@ class AsyncAdaptedConnection(AdaptedConnection):
         finally:
             await_only(self._connection.close())
 
+    def terminate(self) -> None:
+        """Force-close the underlying connection without rollback.
+
+        SQLAlchemy's async pool calls ``dialect.do_terminate(dbapi_conn)``
+        (which defers to this method) when ``has_terminate = True`` and
+        a connection must be forcibly reclaimed — typically during
+        ``engine.dispose()`` under failure, or when a stuck rollback
+        would otherwise block shutdown. Unlike ``close()`` we do NOT
+        attempt rollback first: that's the whole point of terminate.
+        """
+        await_only(self._connection.close())
+
 
 class DqliteDialect_aio(DqliteDialect):  # noqa: N801
     """Async SQLAlchemy dialect for dqlite.
@@ -312,9 +324,27 @@ class DqliteDialect_aio(DqliteDialect):  # noqa: N801
     # through an SS-cursor code path the adapter does not implement.
     supports_server_side_cursors = False
 
+    # SQLAlchemy's async pool gates its forced-disposal path on
+    # ``has_terminate`` (see ``pool/base.py`` docs for
+    # ``_ConnectionRecord.invalidate``). The reference aiosqlite
+    # dialect sets this True; our ``AsyncAdaptedConnection`` now
+    # provides a ``terminate()`` that skips rollback and closes
+    # directly, so pin True locally to defend against an MRO flip
+    # from the DefaultDialect default (``False``).
+    has_terminate = True
+
     @classmethod
     def get_pool_class(cls, url: URL) -> type[pool.Pool]:
         return AsyncAdaptedQueuePool
+
+    def do_terminate(self, dbapi_connection: Any) -> None:
+        """Integration point SQLAlchemy's async pool calls for forced
+        disposal. Defers to ``AsyncAdaptedConnection.terminate()``,
+        which closes without the usual pre-close rollback so a stuck
+        rollback on a half-dead connection cannot block
+        ``engine.dispose()``.
+        """
+        dbapi_connection.terminate()
 
     @classmethod
     def import_dbapi(cls) -> types.ModuleType:

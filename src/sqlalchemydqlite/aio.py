@@ -13,7 +13,12 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
 
 from dqliteclient.exceptions import DqliteConnectionError
-from dqlitedbapi.exceptions import InterfaceError, NotSupportedError, OperationalError
+from dqlitedbapi.exceptions import (
+    InterfaceError,
+    NotSupportedError,
+    OperationalError,
+    ProgrammingError,
+)
 from sqlalchemydqlite.base import DqliteDialect
 
 logger = logging.getLogger(__name__)
@@ -136,6 +141,8 @@ class AsyncAdaptedCursor:
     def fetchmany(self, size: int | None = None) -> Sequence[Any]:
         if size is None:
             size = self.arraysize
+        if size < 0:
+            raise ProgrammingError(f"fetchmany size must be non-negative, got {size}")
         return [self._rows.popleft() for _ in range(min(size, len(self._rows)))]
 
     def fetchall(self) -> Sequence[Any]:

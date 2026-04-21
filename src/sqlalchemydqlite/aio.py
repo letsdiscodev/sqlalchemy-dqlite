@@ -19,6 +19,7 @@ from dqlitedbapi.exceptions import (
     OperationalError,
     ProgrammingError,
 )
+from dqlitedbapi.types import _DescriptionTuple
 from sqlalchemydqlite.base import DqliteDialect
 
 logger = logging.getLogger(__name__)
@@ -28,19 +29,14 @@ if TYPE_CHECKING:
 
 __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 
-# Description tuple shape per PEP 249 (name, type_code, display_size,
-# internal_size, precision, scale, null_ok). dqlite populates only
-# ``name`` and ``type_code`` — the other five are always ``None``.
-# Re-declared here (not imported) to keep the sqlalchemy-dqlite
-# runtime contract explicit to type-checkers even if the dbapi layer
-# later exposes a named alias.
 # PEP 249 specifies ``cursor.description`` as a sequence of sequences —
 # a ``list[tuple]`` is the canonical shape but a strict type alias of
 # ``list`` would reject a dbapi cursor that returns a tuple-of-tuples
-# (which sqlalchemy's own aiosqlite adapter accepts). Keep the alias
-# permissive so the adapter passes through whatever the underlying
-# cursor returns without copying.
-_DescriptionTuple = tuple[str, int | None, None, None, None, None, None]
+# (which sqlalchemy's own aiosqlite adapter accepts). Widen the outer
+# alias to ``Sequence`` so the adapter passes through whatever the
+# underlying cursor returns without copying. The inner 7-tuple shape is
+# imported from the dbapi layer (single source of truth) so a future
+# column (real display_size, etc.) propagates here automatically.
 _Description = Sequence[_DescriptionTuple] | None
 
 

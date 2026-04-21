@@ -231,31 +231,40 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # so programming bugs (AttributeError, TypeError, bare RuntimeError,
         # etc.) still propagate. The tuple mirrors the client layer's own
         # is_disconnect classification in base.py.
+        #
+        # Wrap in ``try/finally`` so close() runs regardless of how
+        # rollback() exits — narrow-caught, programming bug, or
+        # ``BaseException`` like ``CancelledError`` during pool dispose.
+        # SA's pool does not re-call close() on failure, so skipping
+        # close would leak the underlying AsyncConnection. Mirror of the
+        # inverse leak fixed in DqliteDialect_aio.connect().
         try:
-            await_only(self._connection.rollback())
-        except (
-            OperationalError,
-            InterfaceError,
-            DqliteConnectionError,
-            OSError,
-            TimeoutError,
-            ConnectionError,
-        ) as exc:
-            # Silent suppression used to hide e.g. "leader flip
-            # mid-rollback" from operators — a DEBUG line preserves the
-            # diagnostic without masking or propagating. Include both
-            # id(self) and the peer address so a noisy pool can be
-            # correlated to specific adapter instances and nodes.
-            peer = getattr(self._connection, "address", None)
-            logger.debug(
-                "AsyncAdaptedConnection.close (id=%s, peer=%s): "
-                "rollback failed (%s); proceeding to close",
-                id(self),
-                peer,
-                type(exc).__name__,
-                exc_info=True,
-            )
-        await_only(self._connection.close())
+            try:
+                await_only(self._connection.rollback())
+            except (
+                OperationalError,
+                InterfaceError,
+                DqliteConnectionError,
+                OSError,
+                TimeoutError,
+                ConnectionError,
+            ) as exc:
+                # Silent suppression used to hide e.g. "leader flip
+                # mid-rollback" from operators — a DEBUG line preserves
+                # the diagnostic without masking or propagating. Include
+                # both id(self) and the peer address so a noisy pool can
+                # be correlated to specific adapter instances and nodes.
+                peer = getattr(self._connection, "address", None)
+                logger.debug(
+                    "AsyncAdaptedConnection.close (id=%s, peer=%s): "
+                    "rollback failed (%s); proceeding to close",
+                    id(self),
+                    peer,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+        finally:
+            await_only(self._connection.close())
 
 
 class DqliteDialect_aio(DqliteDialect):  # noqa: N801

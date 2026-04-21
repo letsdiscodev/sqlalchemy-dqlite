@@ -144,6 +144,20 @@ class DqliteDialect(SQLiteDialect):
     delete_returning = True
     update_returning_multifrom = True
 
+    # Executemany-RETURNING flags. dqlitedbapi's executemany accumulates
+    # per-parameter-set RETURNING rows via its _ExecuteManyAccumulator
+    # so all three DML kinds can deliver the full row set in a single
+    # call. The INSERT flag is a memoized property on DefaultDialect
+    # (derived from ``insert_returning and use_insertmanyvalues``) — pin
+    # explicitly so upstream drift can't silently flip it. UPDATE /
+    # DELETE flags default to False on DefaultDialect, which blocks
+    # SQLAlchemy from issuing executemany RETURNING even though the
+    # wire path supports it; pin True to surface the capability.
+    # Integration-verified in tests/integration/test_bulk_dml_returning.py.
+    insert_executemany_returning = True
+    update_executemany_returning = True
+    delete_executemany_returning = True
+
     # SQLite >= 3.7.11 supports multi-row INSERT VALUES, which SQLAlchemy's
     # insertmanyvalues optimisation depends on. Pin the flag so bulk-insert
     # behaviour stays stable against upstream dialect drift.

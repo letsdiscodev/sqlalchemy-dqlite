@@ -86,6 +86,25 @@ class TestDqliteDialect:
         assert DqliteDialect.update_returning_multifrom is True
         assert "update_returning_multifrom" in DqliteDialect.__dict__
 
+    def test_executemany_returning_flags_pinned_locally(self) -> None:
+        # dqlitedbapi's executemany accumulates per-parameter-set
+        # RETURNING rows via _ExecuteManyAccumulator. All three DML kinds
+        # deliver the full row set in one call. Integration-verified in
+        # tests/integration/test_bulk_dml_returning.py.
+        #
+        # INSERT: DefaultDialect exposes this as a memoized property
+        # (derived from ``insert_returning and use_insertmanyvalues``) —
+        # pinning locally ensures upstream drift can't silently flip it.
+        # UPDATE / DELETE: DefaultDialect defaults False, which blocks
+        # SQLAlchemy from issuing executemany RETURNING; pin True to
+        # surface the capability.
+        assert DqliteDialect.insert_executemany_returning is True
+        assert DqliteDialect.update_executemany_returning is True
+        assert DqliteDialect.delete_executemany_returning is True
+        assert "insert_executemany_returning" in DqliteDialect.__dict__
+        assert "update_executemany_returning" in DqliteDialect.__dict__
+        assert "delete_executemany_returning" in DqliteDialect.__dict__
+
     @pytest.mark.parametrize(
         "flag",
         [

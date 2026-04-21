@@ -380,6 +380,18 @@ class TestAioAdapterCursorFetchMethods:
         assert cursor.fetchone() == (3,)  # type: ignore[attr-defined]
         assert cursor.fetchone() is None  # type: ignore[attr-defined]
 
+    def test_fetchone_return_annotation_admits_none(self) -> None:
+        """Pin ``fetchone -> Any | None`` so a silent widening to
+        ``Any`` (which hides the None-on-exhaustion case from callers)
+        is caught here rather than at a downstream type-check site.
+        """
+        import typing
+
+        hints = typing.get_type_hints(AsyncAdaptedCursor.fetchone)
+        # typing.get_type_hints resolves ``Any | None`` to the runtime
+        # union; compare as a set so ordering is ignored.
+        assert set(typing.get_args(hints["return"])) == {typing.Any, type(None)}
+
     def test_fetchmany_default_uses_arraysize(self) -> None:
         cursor = self._cursor_with_rows([(1,), (2,), (3,), (4,)])
         cursor.arraysize = 2  # type: ignore[attr-defined]

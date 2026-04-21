@@ -133,7 +133,11 @@ class AsyncAdaptedCursor:
         finally:
             await_only(cursor.close())
 
-    def fetchone(self) -> Any:
+    def fetchone(self) -> Any | None:
+        # Narrow from ``Any`` so callers understand None is a legitimate
+        # return on exhaustion (PEP 249 contract, mirroring the
+        # dqlitedbapi sync / async cursors that already type this as
+        # ``tuple[Any, ...] | None``). Runtime behaviour unchanged.
         if self._rows:
             return self._rows.popleft()
         return None

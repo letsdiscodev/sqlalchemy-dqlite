@@ -104,3 +104,34 @@ def test_do_ping_happy_path_is_silent(caplog: pytest.LogCaptureFixture) -> None:
     assert dialect.do_ping(conn) is True
     messages = [r.getMessage() for r in caplog.records if r.name == "sqlalchemydqlite.base"]
     assert not messages, f"happy path must not emit DEBUG logs; got {messages!r}"
+
+
+@pytest.mark.parametrize(
+    "close_exc",
+    [
+        _dbapi_exc.OperationalError("dead"),
+        _dbapi_exc.InterfaceError("cursor is closed"),
+        _client_exc.DqliteConnectionError("peer gone"),
+        OSError(104, "connection reset"),
+        BrokenPipeError(32, "broken pipe"),
+        TimeoutError("read timed out"),
+    ],
+)
+def test_do_ping_suppresses_close_path_transport_errors(
+    caplog: pytest.LogCaptureFixture, close_exc: BaseException
+) -> None:
+    """After ``execute`` succeeded, ``cursor.close`` failing on a
+    transport error is recoverable — ping returns True and the
+    failure is DEBUG-logged. Pin every type in the narrow
+    suppression tuple so a future narrowing (e.g. "OSError covers
+    it, drop TimeoutError") would fail the test.
+    """
+    caplog.set_level(logging.DEBUG, logger="sqlalchemydqlite.base")
+    cursor = _CursorExecuteOK(on_close=close_exc)  # type: ignore[arg-type]
+    conn = _FakeConnection(cursor)
+    dialect = DqliteDialect()
+    assert dialect.do_ping(conn) is True
+    messages = [r.getMessage() for r in caplog.records if r.name == "sqlalchemydqlite.base"]
+    assert any("cursor.close failed" in m for m in messages), messages
+    # Log line carries the exception type for triage.
+    assert any(type(close_exc).__name__ in m for m in messages), messages

@@ -97,6 +97,14 @@ class AsyncAdaptedCursor:
                 fetched = deque(await_only(cursor.fetchall()))
                 self.description = cursor.description
                 self._rows = fetched
+                # Mirror the DML branch: rowcount / lastrowid are set by
+                # the underlying cursor on the RETURNING path too
+                # (rowcount = len(rows); lastrowid from the last
+                # INSERT). SQLAlchemy's Result layer reads both through
+                # the adapter, so leaving rowcount at -1 would silently
+                # collapse "N rows returned" into "not determinable".
+                self.rowcount = cursor.rowcount
+                self.lastrowid = cursor.lastrowid
             else:
                 self.lastrowid = cursor.lastrowid
                 self.rowcount = cursor.rowcount
@@ -127,6 +135,12 @@ class AsyncAdaptedCursor:
                 fetched = deque(await_only(cursor.fetchall()))
                 self.description = cursor.description
                 self._rows = fetched
+                # Mirror execute()'s RETURNING path: rowcount /
+                # lastrowid are accumulated by the underlying cursor
+                # across parameter sets and must flow through the
+                # adapter so SQLAlchemy's Result layer sees them.
+                self.rowcount = cursor.rowcount
+                self.lastrowid = cursor.lastrowid
             else:
                 self.lastrowid = cursor.lastrowid
                 self.rowcount = cursor.rowcount

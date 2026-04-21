@@ -98,6 +98,11 @@ class TestAsyncAdaptedCursorRowsCleared:
         mock_inner.executemany.return_value = None
         mock_inner.fetchall.return_value = returned_rows
         mock_inner.close.return_value = None
+        # Underlying AsyncCursor sets rowcount = len(rows) for the
+        # RETURNING path; the adapter must mirror it so
+        # result.rowcount in SQLAlchemy is not stuck at -1.
+        mock_inner.rowcount = len(returned_rows)
+        mock_inner.lastrowid = 3
         cursor._connection.cursor.return_value = mock_inner
 
         with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
@@ -107,9 +112,42 @@ class TestAsyncAdaptedCursorRowsCleared:
             )
 
         assert cursor.description == description
+        assert cursor.rowcount == len(returned_rows)
+        assert cursor.lastrowid == 3
         assert cursor.fetchone() == (1, "a")
         assert cursor.fetchone() == (2, "b")
         assert cursor.fetchone() == (3, "c")
+        assert cursor.fetchone() is None
+
+    def test_execute_returning_captures_rows_rowcount_and_lastrowid(self) -> None:
+        """Single-execute RETURNING: the adapter must copy rowcount
+        and lastrowid from the underlying cursor alongside description
+        and rows, so SQLAlchemy's Result layer sees the affected-row
+        count for INSERT ... RETURNING.
+        """
+        cursor = _make_cursor()
+
+        mock_inner = MagicMock()
+        returned_rows = [(7, "alice")]
+        description = [
+            ("id", 1, None, None, None, None, None),
+            ("name", 3, None, None, None, None, None),
+        ]
+        mock_inner.description = description
+        mock_inner.execute.return_value = None
+        mock_inner.fetchall.return_value = returned_rows
+        mock_inner.close.return_value = None
+        mock_inner.rowcount = 1
+        mock_inner.lastrowid = 7
+        cursor._connection.cursor.return_value = mock_inner
+
+        with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
+            cursor.execute("INSERT INTO t (name) VALUES (?) RETURNING id, name", ("alice",))
+
+        assert cursor.description == description
+        assert cursor.rowcount == 1
+        assert cursor.lastrowid == 7
+        assert cursor.fetchone() == (7, "alice")
         assert cursor.fetchone() is None
 
 

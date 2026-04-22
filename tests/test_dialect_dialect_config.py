@@ -181,6 +181,28 @@ class TestCreateConnectArgsURLQuery:
         with pytest.raises(ArgumentError, match="Invalid bool value"):
             dialect.create_connect_args(url)
 
+    def test_close_timeout_forwarded(self) -> None:
+        """close_timeout URL plumbing so operators can tune the drain
+        budget at ``engine.dispose()`` time without reaching into
+        private attributes on the dbapi Connection."""
+        dialect = DqliteDialect()
+        url = make_url("dqlite://host:19001/db?close_timeout=2.5")
+        _, kwargs = dialect.create_connect_args(url)
+        assert kwargs["close_timeout"] == 2.5
+
+    def test_close_timeout_rejects_non_float(self) -> None:
+        dialect = DqliteDialect()
+        url = make_url("dqlite://host:19001/db?close_timeout=nope")
+        with pytest.raises(ArgumentError, match="float"):
+            dialect.create_connect_args(url)
+
+    @pytest.mark.parametrize("raw", ["0", "-1", "nan", "inf", "-inf"])
+    def test_close_timeout_rejects_out_of_range(self, raw: str) -> None:
+        dialect = DqliteDialect()
+        url = make_url(f"dqlite://host:19001/db?close_timeout={raw}")
+        with pytest.raises(ArgumentError, match="close_timeout"):
+            dialect.create_connect_args(url)
+
 
 class TestURLQueryRangeValidation:
     @pytest.mark.parametrize(

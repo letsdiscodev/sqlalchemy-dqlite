@@ -217,6 +217,7 @@ class DqliteDialect(SQLiteDialect):
             lambda s: _parse_url_bool("trust_server_heartbeat", s),
             None,
         ),
+        "close_timeout": (float, lambda v: math.isfinite(v) and v > 0),
     }
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:

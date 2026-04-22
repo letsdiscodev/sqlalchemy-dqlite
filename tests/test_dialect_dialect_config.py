@@ -348,6 +348,42 @@ class TestIsDisconnectTypeDispatch:
         e = dqliteclient.exceptions.OperationalError(code, "application error")
         assert dialect.is_disconnect(e, None, None) is False
 
+    @pytest.mark.parametrize(
+        "exc_cls",
+        [
+            OSError,
+            ConnectionError,
+            BrokenPipeError,
+            TimeoutError,
+            ConnectionResetError,
+            ConnectionAbortedError,
+            ConnectionRefusedError,
+            InterruptedError,
+        ],
+    )
+    def test_every_oserror_subclass_is_disconnect(self, exc_cls: type[BaseException]) -> None:
+        """Every stdlib OSError subclass classifies as a disconnect.
+
+        Guards against a future regression that replaces the single
+        ``isinstance(e, OSError)`` check with an explicit subclass
+        enumeration — which would silently miss ``ConnectionResetError``
+        / ``ConnectionAbortedError`` / ``ConnectionRefusedError`` /
+        ``InterruptedError`` and the ``socket.gaierror`` /
+        ``socket.herror`` DNS-failure shapes.
+        """
+        dialect = DqliteDialect()
+        assert dialect.is_disconnect(exc_cls("x"), None, None) is True
+
+    def test_socket_gaierror_is_disconnect(self) -> None:
+        """``socket.gaierror`` is an OSError subclass used for DNS
+        resolution failures — exactly the "DNS" case the branch
+        comment promises to cover.
+        """
+        import socket
+
+        dialect = DqliteDialect()
+        assert dialect.is_disconnect(socket.gaierror("name or service"), None, None) is True
+
 
 class TestSupportsSaneRowcountFlags:
     """Pin the ``supports_sane_rowcount`` quartet on the dialect class

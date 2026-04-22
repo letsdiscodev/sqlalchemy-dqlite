@@ -360,8 +360,13 @@ class DqliteDialect(SQLiteDialect):
         if isinstance(getattr(e, "__cause__", None), _client_exc.DqliteConnectionError):
             return True
         # Underlying OS-level transport failures (socket RST, broken pipe,
-        # DNS, connect refused) surface as these stdlib types.
-        if isinstance(e, (ConnectionError, BrokenPipeError, TimeoutError, OSError)):
+        # DNS, connect refused, connection timeout). ``ConnectionError``,
+        # ``BrokenPipeError``, and ``TimeoutError`` are all ``OSError``
+        # subclasses, so a single ``OSError`` check covers every stdlib
+        # transport-error shape (including ``ConnectionResetError`` /
+        # ``ConnectionAbortedError`` / ``ConnectionRefusedError`` /
+        # ``socket.gaierror`` that a narrower enumeration would miss).
+        if isinstance(e, OSError):
             return True
         # ``dqlitedbapi.Connection`` / ``Cursor`` raise ``InterfaceError``
         # when operated on after ``close()``; match the narrow
@@ -404,7 +409,6 @@ class DqliteDialect(SQLiteDialect):
                 _dbapi_exc.InterfaceError,
                 _client_exc.DqliteConnectionError,
                 OSError,
-                TimeoutError,
             ):
                 return False
         finally:
@@ -422,7 +426,6 @@ class DqliteDialect(SQLiteDialect):
                 _dbapi_exc.InterfaceError,
                 _client_exc.DqliteConnectionError,
                 OSError,
-                TimeoutError,
             ) as exc:
                 logger.debug(
                     "do_ping: cursor.close failed (%s); proceeding",

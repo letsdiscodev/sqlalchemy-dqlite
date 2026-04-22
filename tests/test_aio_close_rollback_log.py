@@ -133,17 +133,24 @@ def test_close_with_also_failing_transport_errors(caplog: pytest.LogCaptureFixtu
         BrokenPipeError(32, "broken pipe"),
         ConnectionError("peer went away"),
         ConnectionResetError(104, "connection reset by peer"),
+        ConnectionAbortedError(103, "software caused connection abort"),
+        ConnectionRefusedError(111, "connection refused"),
         TimeoutError("read timed out"),
     ],
 )
 def test_close_suppresses_os_level_rollback_errors(
     caplog: pytest.LogCaptureFixture, exc: BaseException
 ) -> None:
-    """The narrow suppression tuple on ``close()`` includes OSError,
-    TimeoutError, and ConnectionError alongside the dbapi-level
-    types. Pin each OS-level branch so a refactor dropping any one
-    of them would fail this test rather than silently re-raising
-    the exception and leaking the underlying AsyncConnection.
+    """The narrow suppression tuple on ``close()`` catches every
+    stdlib transport-error shape via the single ``OSError`` entry.
+    ``ConnectionError``, ``BrokenPipeError``, ``ConnectionResetError``,
+    ``ConnectionAbortedError``, ``ConnectionRefusedError``, and
+    ``TimeoutError`` are all ``OSError`` subclasses since Python
+    3.3/3.10, so enumerating them separately would be redundant —
+    parametrize the full family so a refactor that narrows the
+    ``OSError`` clause (e.g. back to a subset like ``BrokenPipeError``)
+    is caught by at least one of these branches rather than silently
+    re-raising and leaking the underlying AsyncConnection.
     """
     fake = _FakeAsyncConn(exc)
     adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]

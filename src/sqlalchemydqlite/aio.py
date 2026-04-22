@@ -258,8 +258,12 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # Narrow the suppression to the categories a best-effort rollback
         # can legitimately raise — connection-level / transport errors —
         # so programming bugs (AttributeError, TypeError, bare RuntimeError,
-        # etc.) still propagate. The tuple mirrors the client layer's own
-        # is_disconnect classification in base.py.
+        # etc.) still propagate. ``ConnectionError``, ``BrokenPipeError``,
+        # and ``TimeoutError`` are all ``OSError`` subclasses (since
+        # Python 3.3+/3.10+ respectively), so a single ``OSError`` check
+        # covers every stdlib transport-error shape — matching the
+        # source-of-truth classification in ``base.py``'s
+        # ``is_disconnect``.
         #
         # Wrap in ``try/finally`` so close() runs regardless of how
         # rollback() exits — narrow-caught, programming bug, or
@@ -275,8 +279,6 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 InterfaceError,
                 DqliteConnectionError,
                 OSError,
-                TimeoutError,
-                ConnectionError,
             ) as exc:
                 # Silent suppression used to hide e.g. "leader flip
                 # mid-rollback" from operators — a DEBUG line preserves

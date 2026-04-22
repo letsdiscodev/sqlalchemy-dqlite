@@ -48,6 +48,20 @@ class AsyncAdaptedCursor:
     the pattern used by SQLAlchemy's aiosqlite dialect.
     """
 
+    # Declare instance layout — matches the slot discipline SA's own
+    # ``AsyncAdapt_aiosqlite_cursor`` uses. Each execute() constructs
+    # a fresh adapter cursor, so the per-instance ``__dict__`` overhead
+    # is load-bearing under a busy engine.
+    __slots__ = (
+        "_adapt_connection",
+        "_connection",
+        "_rows",
+        "arraysize",
+        "description",
+        "lastrowid",
+        "rowcount",
+    )
+
     server_side = False
 
     def __init__(self, adapt_connection: "AsyncAdaptedConnection") -> None:

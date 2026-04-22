@@ -193,6 +193,30 @@ class DqliteDialect(SQLiteDialect):
         sqltypes.Date: _DqliteDate,
     }
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # ``SQLiteDialect.__init__`` writes *instance* attributes based
+        # on ``self.dbapi.sqlite_version_info`` and ``util.pypy``:
+        #
+        #   if self.dbapi.sqlite_version_info < (3, 35) or util.pypy:
+        #       self.insert_returning = ... = False
+        #
+        # Instance attrs shadow the class-level pins above. On CPython
+        # with dqlitedbapi's pinned sqlite_version_info the overrides
+        # happen to match our pins, but on PyPy the ``or util.pypy``
+        # branch unconditionally zeroes RETURNING — silently breaking
+        # every RETURNING-based code path on PyPy. Re-apply the pins
+        # at the instance level after the parent's ``__init__`` runs.
+        #
+        # ``supports_default_values`` and ``supports_multivalues_insert``
+        # are also written by the parent from version checks; re-pin
+        # them here for the same reason.
+        self.insert_returning = True
+        self.update_returning = True
+        self.delete_returning = True
+        self.supports_default_values = True
+        self.supports_multivalues_insert = True
+
     @classmethod
     def import_dbapi(cls) -> types.ModuleType:
         import dqlitedbapi

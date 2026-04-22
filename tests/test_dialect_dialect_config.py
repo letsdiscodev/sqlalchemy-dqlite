@@ -12,7 +12,7 @@
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
 import dqliteclient.exceptions
@@ -239,6 +239,71 @@ class TestURLQueryRangeValidation:
         _, kwargs = dialect.create_connect_args(make_url(url))
         # Just smoke-test that parsing completed without error.
         assert kwargs
+
+
+class TestURLMultiValueQueryParameter:
+    """Pin the ``last-wins`` resolution rule for repeated URL query keys.
+
+    ``URL.create(query={"k": ("a", "b")})`` — and any code path that
+    calls ``URL.update_query_*`` more than once — produces a tuple-valued
+    query entry. The dialect's ``create_connect_args`` handles that with
+    ``raw[-1] if isinstance(raw, tuple) else raw`` (``base.py:256-258``),
+    taking the last occurrence. No unit test pinned the behaviour, so a
+    silent refactor to ``raw[0]`` (first-wins) or to dropping the
+    ``isinstance(raw, tuple)`` branch entirely would pass the rest of
+    the suite.
+
+    ``last-wins`` matches Flask's ``request.args.get`` and Django's
+    ``QueryDict.__getitem__`` — it is a project convention that
+    aligns with common framework behaviour, not an RFC 3986 mandate.
+    (``urllib.parse.parse_qs`` preserves *all* values rather than
+    picking one; the dialect cannot forward multiple values to the
+    DBAPI.)
+    """
+
+    def test_repeated_timeout_takes_last_value(self) -> None:
+        dialect = DqliteDialect()
+        url = URL.create(
+            drivername="dqlite",
+            host="localhost",
+            port=9001,
+            database="t",
+            query={"timeout": ("5", "10")},
+        )
+        _, kwargs = dialect.create_connect_args(url)
+        assert kwargs["timeout"] == 10.0
+
+    def test_repeated_key_validator_runs_on_last_value(self) -> None:
+        # Strongest form of the pin: the validator must run on the LAST
+        # value, not the first. If ``raw[0]`` were used instead, the
+        # ``"1"`` would pass validation and this test would fail to
+        # raise. The ``"0"`` at the tail is out of range (validator
+        # requires ``v > 0`` for timeout), so last-wins must raise.
+        dialect = DqliteDialect()
+        url = URL.create(
+            drivername="dqlite",
+            host="localhost",
+            port=9001,
+            database="t",
+            query={"timeout": ("1", "0")},
+        )
+        with pytest.raises(ArgumentError, match="out of range"):
+            dialect.create_connect_args(url)
+
+    def test_repeated_bool_key_takes_last_value(self) -> None:
+        # ``trust_server_heartbeat`` is in ``_URL_QUERY_ALLOWED`` and
+        # uses a URL-friendly bool parser, so the last-wins rule must
+        # hold for bool knobs too.
+        dialect = DqliteDialect()
+        url = URL.create(
+            drivername="dqlite",
+            host="localhost",
+            port=9001,
+            database="t",
+            query={"trust_server_heartbeat": ("false", "true")},
+        )
+        _, kwargs = dialect.create_connect_args(url)
+        assert kwargs["trust_server_heartbeat"] is True
 
 
 class TestURLGovernorsReachAioDbapi:

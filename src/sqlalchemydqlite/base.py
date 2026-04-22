@@ -369,6 +369,14 @@ class DqliteDialect(SQLiteDialect):
         "Failed to connect",
         "not connected",
         "Not connected",
+        # Wire-layer desync: ProtocolError / DecodeError / StreamError
+        # in dqlitewire surface here. Paired with the client wrap at
+        # ``dqliteclient/protocol.py`` which emits these prefixes, and
+        # the dbapi wrap at ``cursor._call_client`` that now routes
+        # ``client.ProtocolError`` to ``OperationalError`` (not
+        # ``InterfaceError``) so the substring branch can see it.
+        "Wire decode failed",
+        "Wire stream error",
     )
 
     def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:

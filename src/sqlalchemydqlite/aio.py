@@ -119,7 +119,14 @@ class AsyncAdaptedCursor:
                 self.lastrowid = cursor.lastrowid
                 self.rowcount = cursor.rowcount
         finally:
-            await_only(cursor.close())
+            # ``cursor.close`` is in-memory state-clearing only; a
+            # failure here has no external effect. Suppressing it keeps
+            # any primary exception (execute / fetchall raise) the
+            # active one rather than being replaced by a secondary
+            # close-time error. BaseException because a cancel can
+            # re-arm mid-greenlet and we must preserve the original.
+            with contextlib.suppress(BaseException):
+                await_only(cursor.close())
 
     def executemany(self, operation: str, seq_of_parameters: Iterable[Sequence[Any]]) -> None:
         # Clear state up-front so cancellation mid-call doesn't leak
@@ -155,7 +162,8 @@ class AsyncAdaptedCursor:
                 self.lastrowid = cursor.lastrowid
                 self.rowcount = cursor.rowcount
         finally:
-            await_only(cursor.close())
+            with contextlib.suppress(BaseException):
+                await_only(cursor.close())
 
     def fetchone(self) -> Any | None:
         # Narrow from ``Any`` so callers understand None is a legitimate
@@ -309,7 +317,29 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     exc_info=True,
                 )
         finally:
-            await_only(self._connection.close())
+            # Narrow the close-time exception set to transport-class
+            # failures. A transient OSError / DqliteConnectionError
+            # mid-close must not escape do_close and abort
+            # engine.dispose(). Matches the rollback branch's
+            # classification. Programmer bugs (AttributeError /
+            # TypeError) still propagate.
+            try:
+                await_only(self._connection.close())
+            except (
+                OperationalError,
+                InterfaceError,
+                DqliteConnectionError,
+                OSError,
+            ) as exc:
+                peer = getattr(self._connection, "address", None)
+                logger.debug(
+                    "AsyncAdaptedConnection.close (id=%s, peer=%s): "
+                    "close failed (%s); proceeding with teardown",
+                    id(self),
+                    peer,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
 
     def terminate(self) -> None:
         """Force-close the underlying connection without rollback.
@@ -321,7 +351,26 @@ class AsyncAdaptedConnection(AdaptedConnection):
         would otherwise block shutdown. Unlike ``close()`` we do NOT
         attempt rollback first: that's the whole point of terminate.
         """
-        await_only(self._connection.close())
+        # ``has_terminate = True`` promises SA that this path never
+        # blocks dispose; suppress transport-class failures so a flaky
+        # close cannot abort forced reclaim.
+        try:
+            await_only(self._connection.close())
+        except (
+            OperationalError,
+            InterfaceError,
+            DqliteConnectionError,
+            OSError,
+        ) as exc:
+            peer = getattr(self._connection, "address", None)
+            logger.debug(
+                "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "
+                "close failed (%s); teardown complete",
+                id(self),
+                peer,
+                type(exc).__name__,
+                exc_info=True,
+            )
 
 
 class DqliteDialect_aio(DqliteDialect):

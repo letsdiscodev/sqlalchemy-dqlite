@@ -255,6 +255,14 @@ class DqliteDialect(SQLiteDialect):
         (``?max_total_rows=-1``) all raise :class:`ArgumentError` before
         any pool is built.
         """
+        if url.username or url.password:
+            # dqlite has no built-in authentication; credentials
+            # embedded in the URL would be silently dropped. Reject
+            # at parse time with a clear message — matches pysqlite's
+            # create_connect_args policy.
+            raise ArgumentError(
+                "Invalid URL: dqlite does not accept username or password in the URL"
+            )
         host = url.host or "localhost"
         if url.port is not None and not (1 <= url.port <= 65535):
             # SQLAlchemy's URL parser normally rejects non-integer ports

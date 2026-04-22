@@ -66,7 +66,7 @@ class Requirements(SuiteRequirements):
     # suite has a single source of truth to adjust.
 
     @property
-    def cte(self) -> compound:
+    def ctes(self) -> compound:
         """Common Table Expressions (WITH)."""
         return exclusions.open()
 
@@ -76,8 +76,18 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
-    def returning(self) -> compound:
-        """RETURNING clause on DML."""
+    def insert_returning(self) -> compound:
+        """RETURNING clause on INSERT."""
+        return exclusions.open()
+
+    @property
+    def update_returning(self) -> compound:
+        """RETURNING clause on UPDATE."""
+        return exclusions.open()
+
+    @property
+    def delete_returning(self) -> compound:
+        """RETURNING clause on DELETE."""
         return exclusions.open()
 
     @property
@@ -86,8 +96,8 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
-    def on_update_or_delete_cascades(self) -> compound:
-        """ON UPDATE/DELETE CASCADE foreign-key actions."""
+    def on_update_cascade(self) -> compound:
+        """ON UPDATE CASCADE foreign-key action."""
         return exclusions.open()
 
     @property
@@ -144,7 +154,7 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
-    def supports_empty_inserts(self) -> compound:
+    def empty_inserts(self) -> compound:
         """INSERT INTO t DEFAULT VALUES. SQLite supports it; dqlite inherits."""
         return exclusions.open()
 

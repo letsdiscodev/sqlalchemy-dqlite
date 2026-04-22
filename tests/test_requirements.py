@@ -18,13 +18,15 @@ class TestRequirements:
             "sane_rowcount",
             "sane_multi_rowcount",
             "emulated_lastrowid",
-            "supports_empty_inserts",
+            "empty_inserts",
             "regexp_match",
-            "cte",
+            "ctes",
             "window_functions",
-            "returning",
+            "insert_returning",
+            "update_returning",
+            "delete_returning",
             "insert_from_select",
-            "on_update_or_delete_cascades",
+            "on_update_cascade",
             "self_referential_foreign_keys",
             "unique_constraint_reflection",
             "primary_key_constraint_reflection",
@@ -42,6 +44,29 @@ class TestRequirements:
             # Should have the enabled_for_config method used by the test runner
             assert hasattr(value, "enabled_for_config"), (
                 f"Requirements.{prop_name} return value lacks enabled_for_config method"
+            )
+
+    def test_override_names_exist_on_sa_base(self) -> None:
+        """Every override must name a real attribute on SA's
+        ``SuiteRequirements``; otherwise the suite's decorators never
+        consult it and the dqlite contract silently falls through to
+        the SA default.
+        """
+        from sqlalchemy.testing.requirements import SuiteRequirements
+
+        override_names = [
+            "ctes",
+            "insert_returning",
+            "update_returning",
+            "delete_returning",
+            "on_update_cascade",
+            "empty_inserts",
+        ]
+        for name in override_names:
+            assert hasattr(SuiteRequirements, name), (
+                f"Requirements.{name} overrides a name not present on "
+                f"sqlalchemy.testing.requirements.SuiteRequirements — the "
+                f"override is dead code"
             )
 
     def test_regexp_match_is_closed(self) -> None:

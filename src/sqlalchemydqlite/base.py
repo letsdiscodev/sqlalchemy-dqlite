@@ -45,24 +45,60 @@ def _parse_url_bool(key: str, raw: str) -> bool:
 
 
 class _DqliteDateTime(sqltypes.DateTime):
-    """Passthrough DateTime — ``dqlitedbapi`` already returns ``datetime.datetime``
-    for columns declared as DATETIME/TIMESTAMP (matching PEP 249 and the
-    psycopg/mysqlclient convention), so no string parsing is needed.
+    """DateTime processor honouring the ``timezone`` declaration.
 
-    Inheriting from ``sqltypes.DateTime`` (not ``sqlite.DATETIME``) is
-    deliberate: the generic parent's ``literal_processor`` calls
-    ``value.isoformat()`` directly — bypassing pysqlite's
-    iso-string-based bind processor that would double-convert our
-    already-datetime values. The parent's default
-    ``bind_processor`` / ``result_processor`` return ``None`` already,
-    so no explicit overrides are needed here.
+    ``dqlitedbapi`` decodes ISO8601-tagged cells as ``datetime.datetime``
+    (tz matching the wire value), and UNIXTIME-tagged cells as
+    UTC-aware ``datetime.datetime`` (via ``fromtimestamp(..., tz=UTC)``).
+    SQLAlchemy's ``DateTime(timezone=False)`` contract demands naive
+    values; when an expression like ``unixepoch(col)`` or a column with
+    UNIXTIME affinity lands in such a field, the raw UTC-aware
+    datetime would leak through without an override.
+
+    Also accept ``str`` cells (affinity-stripped by an expression such
+    as ``strftime('%Y-%m-%d %H:%M:%S', col)``), parsing them via
+    ``datetime.fromisoformat`` so the ORM field always sees a
+    ``datetime.datetime``.
     """
+
+    def bind_processor(self, dialect: Any) -> None:
+        return None
+
+    def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
+        want_timezone = self.timezone
+
+        def process(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                # Affinity-stripped cell: TEXT-tagged on the wire, so
+                # dqlitedbapi did not run its datetime converter.
+                try:
+                    value = datetime.datetime.fromisoformat(value)
+                except ValueError:
+                    return value
+            if isinstance(value, datetime.datetime):
+                if want_timezone:
+                    return value
+                # DateTime(timezone=False): strip the UTC tz the
+                # UNIXTIME decoder attached so the ORM field sees a
+                # naive wall-clock (interpreted as UTC).
+                if value.tzinfo is not None:
+                    return value.replace(tzinfo=None)
+                return value
+            return value
+
+        return process
 
 
 class _DqliteDate(sqltypes.Date):
-    """Passthrough Date — ``dqlitedbapi`` returns ``datetime.datetime`` for
-    DATE columns (the C server tags all of DATETIME/DATE/TIMESTAMP as
-    ``DQLITE_ISO8601``); narrow to ``datetime.date`` on read.
+    """Date processor handling datetime and ISO8601-string inputs.
+
+    ``dqlitedbapi`` returns ``datetime.datetime`` for DATE columns
+    (C server tags DATETIME / DATE / TIMESTAMP as ``DQLITE_ISO8601``)
+    — narrow to ``datetime.date``. Also accept ``str`` for columns
+    whose affinity was stripped by a SQL expression (e.g.
+    ``func.date(col)``), parsing via ``datetime.date.fromisoformat``.
 
     A tz-aware input datetime has its tzinfo silently dropped by
     ``.date()`` (``datetime.date`` has no tz support). The returned
@@ -77,9 +113,16 @@ class _DqliteDate(sqltypes.Date):
 
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         def process(value: Any) -> Any:
+            if value is None:
+                return None
             if isinstance(value, datetime.datetime):
                 # Deliberate: tzinfo is dropped. See class docstring.
                 return value.date()
+            if isinstance(value, str):
+                try:
+                    return datetime.date.fromisoformat(value)
+                except ValueError:
+                    return value
             return value
 
         return process

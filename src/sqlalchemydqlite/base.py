@@ -233,10 +233,16 @@ class DqliteDialect(SQLiteDialect):
     # bool("False") evaluates truthy (non-empty string). Unknown tokens
     # raise ``ArgumentError`` to prevent a typo from silently disabling
     # the opt-in.
+    # Defense-in-depth upper bounds on row / frame governors prevent
+    # a misconfigured URL (``?max_total_rows=9999999999999999``) from
+    # silently disabling the ceiling set by ISSUE-98 / ISSUE-123. The
+    # bounds are pragmatic: 2**31-1 rows and 10x the default frame
+    # cap leave plenty of headroom for real workloads while refusing
+    # values only a typo would supply.
     _URL_QUERY_ALLOWED: dict[str, tuple[Callable[[str], Any], Callable[[Any], bool] | None]] = {
         "timeout": (float, lambda v: math.isfinite(v) and v > 0),
-        "max_total_rows": (int, lambda v: v > 0),
-        "max_continuation_frames": (int, lambda v: v > 0),
+        "max_total_rows": (int, lambda v: 0 < v <= 2**31 - 1),
+        "max_continuation_frames": (int, lambda v: 0 < v <= 1_000_000),
         "trust_server_heartbeat": (
             lambda s: _parse_url_bool("trust_server_heartbeat", s),
             None,

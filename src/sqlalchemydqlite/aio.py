@@ -310,7 +310,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
         await_only(self._connection.close())
 
 
-class DqliteDialect_aio(DqliteDialect):  # noqa: N801
+class DqliteDialect_aio(DqliteDialect):
     """Async SQLAlchemy dialect for dqlite.
 
     Use with SQLAlchemy's async engine:
@@ -392,7 +392,3 @@ class DqliteDialect_aio(DqliteDialect):  # noqa: N801
     def get_driver_connection(self, connection: Any) -> Any:
         """Return the underlying driver-level connection."""
         return connection._connection
-
-
-# Register the dialect
-dialect = DqliteDialect_aio

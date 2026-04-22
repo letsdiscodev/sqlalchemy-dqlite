@@ -489,7 +489,3 @@ class DqliteDialect(SQLiteDialect):
         if info is not None:
             return tuple(info)
         return (3, 35, 0)
-
-
-# Register the dialect
-dialect = DqliteDialect

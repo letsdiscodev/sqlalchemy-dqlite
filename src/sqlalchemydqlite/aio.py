@@ -5,7 +5,7 @@ import contextlib
 import logging
 import types
 from collections import deque
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import pool
@@ -80,7 +80,11 @@ class AsyncAdaptedCursor:
     def close(self) -> None:
         self._rows.clear()
 
-    def execute(self, operation: str, parameters: Any = None) -> None:
+    def execute(
+        self,
+        operation: str,
+        parameters: Sequence[Any] | Mapping[str, Any] | None = None,
+    ) -> None:
         # Clear buffered state FIRST so a CancelledError (or any other
         # exception) during execute/fetchall leaves the adapter in a
         # "no active result" state rather than carrying stale rows
@@ -134,7 +138,11 @@ class AsyncAdaptedCursor:
             with contextlib.suppress(Exception, asyncio.CancelledError):
                 await_only(cursor.close())
 
-    def executemany(self, operation: str, seq_of_parameters: Iterable[Sequence[Any]]) -> None:
+    def executemany(
+        self,
+        operation: str,
+        seq_of_parameters: Iterable[Sequence[Any] | Mapping[str, Any]],
+    ) -> None:
         # Clear state up-front so cancellation mid-call doesn't leak
         # a previous execution's buffered rows.
         self.description = None

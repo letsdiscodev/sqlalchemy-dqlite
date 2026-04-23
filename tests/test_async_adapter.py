@@ -384,6 +384,35 @@ class TestAioAdapterReturnAnnotations:
         sig = inspect.signature(AsyncAdaptedCursor.executemany)
         assert sig.return_annotation is None or sig.return_annotation == "None"
 
+    def test_execute_parameters_narrowed(self) -> None:
+        """``parameters`` must not widen back to ``Any``: mypy --strict
+        then cannot warn callers who pass a bare ``str`` (a common typo
+        for ``(val,)``) or a mapping (forbidden under qmark). PEP 249
+        single-execute shape is Sequence | Mapping | None.
+        """
+        import typing
+
+        from sqlalchemydqlite.aio import AsyncAdaptedCursor
+
+        hints = typing.get_type_hints(AsyncAdaptedCursor.execute)
+        annotation = hints["parameters"]
+        # Resolved union of Sequence[Any], Mapping[str, Any], None —
+        # the narrow tuple of allowed shapes. The precise check is
+        # that ``Any`` is NOT the bare annotation; a union with
+        # multiple branches is sufficient.
+        assert annotation is not typing.Any, "execute(parameters) must not be typed as bare Any"
+
+    def test_executemany_seq_of_parameters_narrowed(self) -> None:
+        import typing
+
+        from sqlalchemydqlite.aio import AsyncAdaptedCursor
+
+        hints = typing.get_type_hints(AsyncAdaptedCursor.executemany)
+        annotation = hints["seq_of_parameters"]
+        assert annotation is not typing.Any, (
+            "executemany(seq_of_parameters) must not be typed as bare Any"
+        )
+
     def test_iter_returns_iterator(self) -> None:
         import inspect
 

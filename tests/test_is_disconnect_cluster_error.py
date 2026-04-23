@@ -67,6 +67,23 @@ class TestClusterPolicyErrorNotDisconnect:
         assert dialect.is_disconnect(outer, None, None) is False
 
 
+class TestClusterPolicyInterfaceErrorWrap:
+    """The dbapi's ``_call_client`` wraps ``ClusterPolicyError`` into a
+    dbapi ``InterfaceError`` with the distinguishing ``"Cluster policy
+    rejection;"`` prefix. SA's ``is_disconnect`` narrows InterfaceError
+    matching to "connection is closed" / "cursor is closed" — so the
+    wrapped InterfaceError must NOT match, and the pool won't retry.
+    """
+
+    def test_cluster_policy_interface_error_not_disconnect(self) -> None:
+        dialect = DqliteDialect()
+        policy = _client_exc.ClusterPolicyError("leader not in allow-list")
+        try:
+            raise _dbapi_exc.InterfaceError(f"Cluster policy rejection; {policy}") from policy
+        except _dbapi_exc.InterfaceError as wrapped:
+            assert dialect.is_disconnect(wrapped, None, None) is False
+
+
 @pytest.mark.parametrize(
     "wrapped_exc_kind",
     [

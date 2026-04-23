@@ -1,5 +1,6 @@
 """Async dqlite dialect for SQLAlchemy."""
 
+import asyncio
 import contextlib
 import logging
 import types
@@ -123,9 +124,14 @@ class AsyncAdaptedCursor:
             # failure here has no external effect. Suppressing it keeps
             # any primary exception (execute / fetchall raise) the
             # active one rather than being replaced by a secondary
-            # close-time error. BaseException because a cancel can
-            # re-arm mid-greenlet and we must preserve the original.
-            with contextlib.suppress(BaseException):
+            # close-time error. Narrow to ``(Exception,
+            # asyncio.CancelledError)`` so a greenlet-level cancel is
+            # still covered (``CancelledError`` subclasses
+            # ``BaseException`` since 3.8) but ``KeyboardInterrupt`` /
+            # ``SystemExit`` propagate — the stdlib's own
+            # ``contextlib.suppress`` docs call out ``BaseException``
+            # here as an anti-pattern for exactly this reason.
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await_only(cursor.close())
 
     def executemany(self, operation: str, seq_of_parameters: Iterable[Sequence[Any]]) -> None:
@@ -162,7 +168,10 @@ class AsyncAdaptedCursor:
                 self.lastrowid = cursor.lastrowid
                 self.rowcount = cursor.rowcount
         finally:
-            with contextlib.suppress(BaseException):
+            # Same narrow suppression as ``execute``'s finally block
+            # above — see the rationale there. Keeps KI / SystemExit
+            # propagating while still covering greenlet cancellation.
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await_only(cursor.close())
 
     def fetchone(self) -> Any | None:

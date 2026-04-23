@@ -4,7 +4,7 @@ import datetime
 import logging
 import math
 import types
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 from sqlalchemy import types as sqltypes
@@ -23,6 +23,34 @@ __all__ = ["DqliteDialect"]
 
 _TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
 _FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
+
+
+def _walk_cause_chain(e: BaseException, max_depth: int = 10) -> Iterator[BaseException]:
+    """Yield ``e`` and each ``__cause__`` / ``__context__`` up to ``max_depth``.
+
+    The ``visited`` set prevents an infinite loop on pathological
+    cycles (``raise X from X`` or a deeply-nested wrap that loops
+    back). The depth cap is a second line of defence so a truly
+    degenerate chain cannot drag classifier latency even if the
+    visited-set catch misses for some reason. Same shape as
+    ``traceback._format_final_exc_line``'s own chain traversal.
+
+    A single-hop ``__cause__`` check would miss any wrap tower taller
+    than one — retry decorators, telemetry middleware, and circuit
+    breakers layered above the client can push the real
+    ``DqliteConnectionError`` / ``ClusterError`` two or more hops
+    away from the exception SA hands to ``is_disconnect``. Walking
+    the full chain keeps the type-dispatch robust against those
+    layerings.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = e
+    depth = 0
+    while cur is not None and id(cur) not in seen and depth < max_depth:
+        seen.add(id(cur))
+        yield cur
+        cur = cur.__cause__ or cur.__context__
+        depth += 1
 
 
 def _parse_url_bool(key: str, raw: str) -> bool:
@@ -475,18 +503,18 @@ class DqliteDialect(SQLiteDialect):
         cover TCP resets, DNS failures, and partial-read timeouts that
         the hand-maintained substring list misses.
         """
-        # Explicit connection-level error types from the client layer.
-        if isinstance(e, _client_exc.DqliteConnectionError):
-            return True
-        # The dbapi ``_call_client`` handler wraps
-        # ``_client_exc.DqliteConnectionError`` into a bare
-        # ``dbapi.OperationalError`` (no code). The wrapped class is
-        # unreachable by the direct isinstance above, but Python sets
-        # ``__cause__`` from ``raise ... from e``, so walking the chain
-        # keeps the disconnect classification working without inventing
-        # a new attribute.
-        if isinstance(getattr(e, "__cause__", None), _client_exc.DqliteConnectionError):
-            return True
+        # Walk the full ``__cause__`` / ``__context__`` chain. The
+        # dbapi's ``_call_client`` handler wraps
+        # ``DqliteConnectionError`` into a bare ``dbapi.OperationalError``
+        # and chains the original via ``raise ... from e``. A single-hop
+        # check would fail for any additional wrap layer (retry
+        # decorator, telemetry middleware, circuit breaker) between SA
+        # and the dbapi — the inner transport-level cause sits two or
+        # more hops away. A bounded visited-set walk picks up those
+        # layerings while staying pathology-safe.
+        for cause in _walk_cause_chain(e):
+            if isinstance(cause, _client_exc.DqliteConnectionError):
+                return True
         # Underlying OS-level transport failures (socket RST, broken pipe,
         # DNS, connect refused, connection timeout). ``ConnectionError``,
         # ``BrokenPipeError``, and ``TimeoutError`` are all ``OSError``

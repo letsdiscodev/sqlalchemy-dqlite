@@ -73,6 +73,104 @@ class TestAsyncAdaptedConnectionTerminate:
         assert fake.close_calls == 1
 
 
+class TestTerminateSuppressesTransportExceptions:
+    """``terminate()`` is SA's forced-disposal path and
+    ``has_terminate = True`` promises it never raises — an unhandled
+    exception here would abort ``engine.dispose()`` mid-flight and
+    leak subsequent pool slots. The narrow catch tuple
+    ``(OperationalError, InterfaceError, DqliteConnectionError,
+    OSError)`` must genuinely suppress every class, so a future audit
+    that drops one silently re-introduces the leak.
+
+    Pins each class individually so the failure mode is named.
+    """
+
+    @staticmethod
+    def _swap_await_only() -> tuple[object, object]:
+        import asyncio
+
+        from sqlalchemydqlite import aio as aio_module
+
+        def _fake(coro: object) -> object:
+            return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
+
+        orig = aio_module.await_only
+        aio_module.await_only = _fake  # type: ignore[assignment]
+        return aio_module, orig
+
+    def _run_terminate(self, close_exc: BaseException) -> _FakeAsyncConnWithExc:
+        fake = _FakeAsyncConnWithExc(close_exc=close_exc)
+        adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+        aio_module, orig = self._swap_await_only()
+        try:
+            adapter.terminate()  # must not raise
+        finally:
+            aio_module.await_only = orig  # type: ignore[attr-defined]
+        return fake
+
+    def test_operational_error_suppressed(self) -> None:
+        from dqlitedbapi.exceptions import OperationalError
+
+        fake = self._run_terminate(OperationalError("op fail", code=None))
+        assert fake.close_calls == 1
+
+    def test_interface_error_suppressed(self) -> None:
+        from dqlitedbapi.exceptions import InterfaceError
+
+        fake = self._run_terminate(InterfaceError("iface fail"))
+        assert fake.close_calls == 1
+
+    def test_dqlite_connection_error_suppressed(self) -> None:
+        from dqliteclient.exceptions import DqliteConnectionError
+
+        fake = self._run_terminate(DqliteConnectionError("transport down"))
+        assert fake.close_calls == 1
+
+    def test_broken_pipe_os_error_suppressed(self) -> None:
+        fake = self._run_terminate(OSError(32, "Broken pipe"))
+        assert fake.close_calls == 1
+
+    def test_connection_reset_os_error_suppressed(self) -> None:
+        fake = self._run_terminate(ConnectionResetError(104, "reset by peer"))
+        assert fake.close_calls == 1
+
+    def test_programmer_bug_attribute_error_propagates(self) -> None:
+        """Guard against a future audit widening the except list: a
+        programmer bug (AttributeError, TypeError, etc.) must still
+        escape so a refactor regression doesn't get silently eaten."""
+        import pytest
+
+        fake = _FakeAsyncConnWithExc(close_exc=AttributeError("wrong attr"))
+        adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+        aio_module, orig = self._swap_await_only()
+        try:
+            with pytest.raises(AttributeError):
+                adapter.terminate()
+        finally:
+            aio_module.await_only = orig  # type: ignore[attr-defined]
+        # Close was still attempted before the exception escaped.
+        assert fake.close_calls == 1
+
+
+class _FakeAsyncConnWithExc:
+    """Mirror of ``_FakeAsyncConn`` that raises from ``close``. Kept
+    separate so the happy-path fixture above stays trivial."""
+
+    def __init__(self, close_exc: BaseException | None = None) -> None:
+        self._close_exc = close_exc
+        self.rollback_calls = 0
+        self.close_calls = 0
+        self.address = ("10.0.0.1", 9001)
+
+    async def rollback(self) -> None:  # pragma: no cover
+        self.rollback_calls += 1
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        if self._close_exc is not None:
+            raise self._close_exc
+
+
 class TestDoTerminateDelegatesToAdapter:
     def test_do_terminate_calls_terminate_on_dbapi_connection(self) -> None:
         """``dialect.do_terminate(dbapi_conn)`` is SQLAlchemy's single

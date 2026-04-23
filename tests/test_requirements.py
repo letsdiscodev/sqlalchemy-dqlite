@@ -34,6 +34,13 @@ class TestRequirements:
             "index_reflection",
             "temporary_tables",
             "table_ddl_if_exists",
+            "independent_connections",
+            "schemas",
+            "views",
+            "autoincrement_insert",
+            "standalone_binds",
+            "order_by_label_with_expression",
+            "cross_schema_fk_reflection",
         ]
         for prop_name in properties:
             value = getattr(req, prop_name)
@@ -61,6 +68,13 @@ class TestRequirements:
             "delete_returning",
             "on_update_cascade",
             "empty_inserts",
+            "independent_connections",
+            "schemas",
+            "views",
+            "autoincrement_insert",
+            "standalone_binds",
+            "order_by_label_with_expression",
+            "cross_schema_fk_reflection",
         ]
         for name in override_names:
             assert hasattr(SuiteRequirements, name), (

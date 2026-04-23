@@ -159,6 +159,51 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
+    def independent_connections(self) -> compound:
+        """dqlite's Raft consensus gives every connection an independent
+        transactional view of the database — concurrent connections do
+        not share cache state, so the compliance suite's two-connection
+        visibility checks pass unchanged."""
+        return exclusions.open()
+
+    @property
+    def schemas(self) -> compound:
+        """SQLite / dqlite support ATTACH-style schemas — the compliance
+        suite exercises them via schema-qualified table names."""
+        return exclusions.open()
+
+    @property
+    def views(self) -> compound:
+        """CREATE VIEW is supported by SQLite (and therefore dqlite)."""
+        return exclusions.open()
+
+    @property
+    def autoincrement_insert(self) -> compound:
+        """``INTEGER PRIMARY KEY AUTOINCREMENT`` is supported."""
+        return exclusions.open()
+
+    @property
+    def standalone_binds(self) -> compound:
+        """Bind parameters without a surrounding statement
+        (e.g. ``SELECT :value``) are supported."""
+        return exclusions.open()
+
+    @property
+    def order_by_label_with_expression(self) -> compound:
+        """``ORDER BY <label>`` where the label refers back to an
+        expression in the SELECT list — SQLite allows this; dqlite
+        inherits. Re-pin locally so an upstream SQLiteDialect flip
+        cannot silently skip these compliance cases."""
+        return exclusions.open()
+
+    @property
+    def cross_schema_fk_reflection(self) -> compound:
+        """SQLite's FK reflection is single-schema only — ``ATTACH``ed
+        schemas do not surface cross-schema FK relationships through
+        ``PRAGMA foreign_key_list``. dqlite inherits the limitation."""
+        return exclusions.closed()
+
+    @property
     def regexp_match(self) -> compound:
         """The portable ``col.regexp_match(pattern)`` operator compiles
         to ``col REGEXP ?``, which SQLite dispatches to a user-defined

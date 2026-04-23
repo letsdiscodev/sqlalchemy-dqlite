@@ -70,10 +70,10 @@ class AsyncAdaptedCursor:
     # is load-bearing under a busy engine.
     __slots__ = (
         "_adapt_connection",
+        "_arraysize",
         "_closed",
         "_connection",
         "_rows",
-        "arraysize",
         "description",
         "lastrowid",
         "rowcount",
@@ -87,7 +87,7 @@ class AsyncAdaptedCursor:
         self.description: _Description = None
         self.rowcount: int = -1
         self.lastrowid: int | None = None
-        self.arraysize: int = 1
+        self._arraysize: int = 1
         self._rows: deque[Any] = deque()
         # PEP 249: after ``close()`` the cursor is unusable. Track the
         # flag so setinputsizes / setoutputsize can honour the contract
@@ -99,6 +99,26 @@ class AsyncAdaptedCursor:
 
     async def _async_soft_close(self) -> None:
         return
+
+    @property
+    def arraysize(self) -> int:
+        return self._arraysize
+
+    @arraysize.setter
+    def arraysize(self, value: int) -> None:
+        """Validated setter mirroring ``dqlitedbapi.Cursor.arraysize``.
+
+        Rejects ``bool``, non-int, and ``< 1`` so the ``arraysize=0`` /
+        ``arraysize=-1`` footguns are caught at the assignment rather
+        than silently turning every ``fetchmany`` call into ``[]`` (which
+        makes ``while batch := cursor.fetchmany(): ...`` skip the entire
+        result set).
+        """
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ProgrammingError(f"arraysize must be a positive integer, got {value!r}")
+        if value < 1:
+            raise ProgrammingError(f"arraysize must be >= 1, got {value}")
+        self._arraysize = value
 
     def close(self) -> None:
         self._rows.clear()

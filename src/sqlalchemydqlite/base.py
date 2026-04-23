@@ -505,15 +505,32 @@ class DqliteDialect(SQLiteDialect):
         """
         # Walk the full ``__cause__`` / ``__context__`` chain. The
         # dbapi's ``_call_client`` handler wraps
-        # ``DqliteConnectionError`` into a bare ``dbapi.OperationalError``
-        # and chains the original via ``raise ... from e``. A single-hop
-        # check would fail for any additional wrap layer (retry
-        # decorator, telemetry middleware, circuit breaker) between SA
-        # and the dbapi — the inner transport-level cause sits two or
-        # more hops away. A bounded visited-set walk picks up those
-        # layerings while staying pathology-safe.
+        # ``DqliteConnectionError`` / ``ClusterError`` into a bare
+        # ``dbapi.OperationalError`` and chains the original via
+        # ``raise ... from e``. A single-hop check would fail for any
+        # additional wrap layer (retry decorator, telemetry middleware,
+        # circuit breaker) between SA and the dbapi — the inner
+        # transport-level cause sits two or more hops away. A bounded
+        # visited-set walk picks up those layerings while staying
+        # pathology-safe.
+        #
+        # ``ClusterError`` belongs in the disconnect set for the same
+        # reason as ``DqliteConnectionError``: the slot is useless —
+        # the cluster is mid-leader-blip or reporting "no reachable
+        # leader" — and the pool must invalidate it. The policy-error
+        # subclass ``ClusterPolicyError`` is deliberately excluded:
+        # policy rejections are deterministic configuration errors,
+        # and classifying them as disconnect would re-enter the pool's
+        # retry loop against a permanent rejection. The order of the
+        # subclass check matters — ``ClusterPolicyError`` inherits
+        # from ``ClusterError`` so the policy branch must be checked
+        # first to short-circuit.
         for cause in _walk_cause_chain(e):
-            if isinstance(cause, _client_exc.DqliteConnectionError):
+            if isinstance(cause, _client_exc.ClusterPolicyError):
+                # Policy rejection — never a disconnect. Stop walking;
+                # any outer wrap was for classification purposes only.
+                return False
+            if isinstance(cause, (_client_exc.DqliteConnectionError, _client_exc.ClusterError)):
                 return True
         # Underlying OS-level transport failures (socket RST, broken pipe,
         # DNS, connect refused, connection timeout). ``ConnectionError``,

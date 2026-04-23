@@ -284,6 +284,23 @@ class DqliteDialect(SQLiteDialect):
         self.supports_default_values = True
         self.supports_multivalues_insert = True
 
+        # ``SQLiteDialect.__init__`` also version-gates
+        # ``insertmanyvalues_max_parameters``:
+        #
+        #   if self.dbapi.sqlite_version_info < (3, 32, 0):
+        #       self.insertmanyvalues_max_parameters = 999
+        #
+        # dqlitedbapi's pinned ``sqlite_version_info = (3, 35, 0)``
+        # sidesteps the gate today, but match the drift-defense
+        # discipline above: if the parent ever extends the block with
+        # ``or util.pypy`` (symmetric to the RETURNING gate) a
+        # PyPy-hosted engine would silently cap batch INSERTs at 999
+        # parameters — a surprise performance regression. Re-apply
+        # DefaultDialect's value literally (SA 2.x: 32700) so the
+        # instance-level pin is independent of the parent's version
+        # check.
+        self.insertmanyvalues_max_parameters = 32700
+
     @classmethod
     def import_dbapi(cls) -> types.ModuleType:
         import dqlitedbapi

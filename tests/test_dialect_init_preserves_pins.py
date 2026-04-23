@@ -40,3 +40,24 @@ def test_dialect_instance_pins_survive_parent_init(cls: type, flag: str) -> None
         f"{cls.__name__}.{flag} is {getattr(d, flag)!r} on the instance "
         f"(class-level pin was silently shadowed)"
     )
+
+
+@pytest.mark.parametrize("cls", [DqliteDialect, DqliteDialect_aio])
+def test_insertmanyvalues_max_parameters_not_capped(cls: type) -> None:
+    """Regression guard: parent's version-gated ``< (3, 32, 0)`` write
+    to this attribute must not leak into dqlite's instance config. The
+    ``__init__`` re-applies the DefaultDialect value at instance scope
+    so a future parent gate extension (e.g. ``or util.pypy``
+    symmetric to the RETURNING branch) cannot silently cap batch
+    INSERTs at 999 parameters.
+    """
+    d = cls()
+    assert "insertmanyvalues_max_parameters" in vars(d), (
+        f"{cls.__name__}.insertmanyvalues_max_parameters must live at "
+        f"instance level so the parent's version-gated write cannot "
+        f"silently shadow it."
+    )
+    assert d.insertmanyvalues_max_parameters > 999, (  # type: ignore[attr-defined]
+        f"insertmanyvalues_max_parameters={d.insertmanyvalues_max_parameters!r}; "  # type: ignore[attr-defined]
+        f"the parent's pre-3.32 fallback (999) has leaked through"
+    )

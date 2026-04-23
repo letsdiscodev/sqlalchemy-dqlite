@@ -588,6 +588,13 @@ class DqliteDialect(SQLiteDialect):
             except (
                 _dbapi_exc.OperationalError,
                 _dbapi_exc.InterfaceError,
+                # ``_ensure_locks`` raises ``ProgrammingError`` when an
+                # ``AsyncConnection`` is reused on a different event
+                # loop — a permanent per-slot fault, from the pool's
+                # perspective indistinguishable from "dead socket".
+                # Surface it as ping-failure rather than letting it
+                # propagate and leave the slot stuck.
+                _dbapi_exc.ProgrammingError,
                 _client_exc.DqliteConnectionError,
                 OSError,
             ):

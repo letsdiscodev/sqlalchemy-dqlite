@@ -47,6 +47,21 @@ class AsyncAdaptedCursor:
     Eagerly fetches all rows during execute() within the greenlet context,
     then serves fetch* calls synchronously from the buffer. This matches
     the pattern used by SQLAlchemy's aiosqlite dialect.
+
+    .. note::
+       ``arraysize`` on this adapter controls ONLY the chunk size
+       returned by :meth:`fetchmany` from the already-buffered deque —
+       it has **no effect on memory footprint**. ``execute()`` /
+       ``executemany()`` unconditionally call ``fetchall()`` on the
+       underlying ``AsyncCursor`` within the greenlet context, so the
+       full result set is materialised in memory before any
+       ``fetchmany`` call runs. Tuning ``arraysize`` to cap memory —
+       the standard PEP 249 idiom — does not work through the adapter.
+       Callers that need streaming-memory semantics must use
+       :class:`dqlitedbapi.aio.AsyncCursor` directly and drive it from
+       native async code; the greenlet-eager-fetch pattern is a
+       deliberate part of how SA's async engine works, not a
+       per-dialect choice.
     """
 
     # Declare instance layout — matches the slot discipline SA's own

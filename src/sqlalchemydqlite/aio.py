@@ -273,8 +273,16 @@ class AsyncAdaptedCursor:
         raise NotSupportedError("dqlite cursors are not scrollable")
 
     def __iter__(self) -> Iterator[Any]:
-        while self._rows:
-            yield self._rows.popleft()
+        # Return self so ``iter(cursor) is cursor`` — PEP 234 iterator
+        # protocol. The previous generator body (``while self._rows:
+        # yield self._rows.popleft()``) produced a fresh generator each
+        # time and split iteration into two incompatible paths: the
+        # generator popped rows directly while ``__next__`` routed
+        # through ``fetchone``. ``__next__`` now drives iteration for
+        # both ``for row in cursor`` and ``next(cursor)``; the sibling
+        # cursors ``dqlitedbapi.Cursor`` and ``AsyncCursor`` already
+        # follow this pattern.
+        return self
 
     def __next__(self) -> Any:
         row = self.fetchone()

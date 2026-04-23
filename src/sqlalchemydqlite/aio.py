@@ -6,7 +6,7 @@ import logging
 import types
 from collections import deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from sqlalchemy import pool
 from sqlalchemy.engine import URL, AdaptedConnection
@@ -355,11 +355,29 @@ class AsyncAdaptedConnection(AdaptedConnection):
         """
         return "SERIALIZABLE"
 
+    def _handle_exception(self, error: BaseException) -> NoReturn:
+        """Adapter-level exception normalisation hook.
+
+        Matches the ``AsyncAdapt_aiosqlite_connection._handle_exception``
+        extension point in SA's reference dialect. Default is identity
+        re-raise; subclasses can override to remap driver-layer quirks
+        in one place (for example, turning a raw ``RuntimeError`` from
+        ``await_only`` into ``dbapi.OperationalError`` so
+        ``is_disconnect`` can classify it).
+        """
+        raise error
+
     def commit(self) -> None:
-        await_only(self._connection.commit())
+        try:
+            await_only(self._connection.commit())
+        except BaseException as error:
+            self._handle_exception(error)
 
     def rollback(self) -> None:
-        await_only(self._connection.rollback())
+        try:
+            await_only(self._connection.rollback())
+        except BaseException as error:
+            self._handle_exception(error)
 
     def close(self) -> None:
         # Attempt rollback before close so a caller that exits without

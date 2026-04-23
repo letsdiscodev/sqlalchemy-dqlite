@@ -151,7 +151,26 @@ class TestDqliteDialect:
     def test_async_dialect_description(self) -> None:
         # Mirror the sync test for the async dialect; review agent flagged
         # that the sync test alone could mask an async-side drift.
-        assert DqliteDialect_aio().dialect_description == "dqlite+dqlitedbapi_aio"
+        # Must match the entry-point short name so the rendered form is
+        # the URL the user actually types (``dqlite+aio://``).
+        assert DqliteDialect_aio().dialect_description == "dqlite+aio"
+
+    def test_async_driver_matches_entry_point(self) -> None:
+        """Pin ``Dialect.driver`` == EP's second component.
+
+        SA convention: ``dialect_description`` renders
+        ``"{name}+{driver}"`` using the exact ``+driver`` suffix a user
+        writes into the URL. The entry-point name ``"dqlite.aio"``
+        means users type ``dqlite+aio://``, so ``driver`` must be
+        ``"aio"`` — any drift here renders a non-canonical description
+        string and breaks log-grep of the URL shape.
+        """
+        import importlib.metadata as md
+
+        eps = md.entry_points(group="sqlalchemy.dialects")
+        ep_map = {ep.name: ep for ep in eps}
+        aio_ep = ep_map["dqlite.aio"]
+        assert aio_ep.name.split(".", 1)[1] == DqliteDialect_aio.driver
 
 
 class TestDqliteDialectAio:
@@ -199,7 +218,7 @@ class TestDqliteDialectAio:
 
         engine = create_async_engine("dqlite+aio://localhost:19001/test")
         assert engine.dialect.name == "dqlite"
-        assert engine.dialect.driver == "dqlitedbapi_aio"
+        assert engine.dialect.driver == "aio"
 
 
 class TestGetServerVersionInfo:

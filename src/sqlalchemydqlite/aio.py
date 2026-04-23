@@ -380,7 +380,16 @@ class DqliteDialect_aio(DqliteDialect):
         create_async_engine("dqlite+aio://host:port/database")
     """
 
-    driver = "dqlitedbapi_aio"
+    # Match the entry-point short name (``"dqlite.aio"`` in pyproject) so
+    # ``dialect_description`` renders ``"dqlite+aio"`` — the exact form a
+    # user writes into the URL (``dqlite+aio://host:port/db``) and the
+    # form SA's error messages / logs / ``repr(engine)`` show. SA's own
+    # aiosqlite reference does the same (EP ``sqlite.aiosqlite`` ↔
+    # ``driver = "aiosqlite"`` ↔ URL ``sqlite+aiosqlite://``). The
+    # prior value ``"dqlitedbapi_aio"`` produced a non-canonical
+    # description string no user types, breaking log grep of the URL
+    # shape.
+    driver = "aio"
     is_async = True
     # MUST be redeclared here even though the base class already sets it to
     # True: SQLAlchemy reads this attribute via

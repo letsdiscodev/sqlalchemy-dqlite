@@ -264,6 +264,23 @@ class AsyncAdaptedConnection(AdaptedConnection):
     def cursor(self) -> AsyncAdaptedCursor:
         return AsyncAdaptedCursor(self)
 
+    @property
+    def isolation_level(self) -> str:
+        """Report the only level dqlite honours: ``"SERIALIZABLE"``.
+
+        dqlite runs every statement through Raft consensus; there is no
+        mechanism to weaken isolation. SA's reference aiosqlite adapter
+        exposes ``isolation_level`` as a read/write property backed by
+        the underlying connection, and SA diagnostics / third-party
+        middleware probe ``getattr(dbapi_conn, "isolation_level",
+        None)`` on several code paths. Without this property those
+        probes would see ``None`` and either log "isolation unknown"
+        or bypass a pin. Read-only: SA's engine flow already
+        short-circuits ``set_isolation_level`` to accept only
+        ``"SERIALIZABLE"``, so there is no setter surface to proxy.
+        """
+        return "SERIALIZABLE"
+
     def commit(self) -> None:
         await_only(self._connection.commit())
 

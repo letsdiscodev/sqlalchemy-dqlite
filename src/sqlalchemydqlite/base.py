@@ -119,12 +119,20 @@ class _DqliteDateTime(sqltypes.DateTime):
                     return value
             if isinstance(value, datetime.datetime):
                 if want_timezone:
+                    # DateTime(timezone=True) contract promises an aware
+                    # value. A cell written without a tz suffix decodes
+                    # as naive; attach UTC so downstream .astimezone /
+                    # aware-vs-aware comparisons don't raise TypeError.
+                    if value.tzinfo is None:
+                        return value.replace(tzinfo=datetime.UTC)
                     return value
-                # DateTime(timezone=False): strip the UTC tz the
-                # UNIXTIME decoder attached so the ORM field sees a
-                # naive wall-clock (interpreted as UTC).
+                # DateTime(timezone=False): the ORM field sees a naive
+                # wall-clock interpreted as UTC. Convert through UTC
+                # first so a non-UTC aware input (e.g. another writer's
+                # local-offset datetime) has its actual instant
+                # preserved — not just the wall-clock digits.
                 if value.tzinfo is not None:
-                    return value.replace(tzinfo=None)
+                    return value.astimezone(datetime.UTC).replace(tzinfo=None)
                 return value
             return value
 

@@ -457,21 +457,24 @@ class TestIsDisconnect:
 
 
 class TestIsolationLevel:
-    def test_set_isolation_level_warns_on_unsupported(self) -> None:
-        """set_isolation_level should warn when a non-SERIALIZABLE level is requested."""
-        import warnings
+    def test_set_isolation_level_raises_on_unsupported(self) -> None:
+        """set_isolation_level must raise ArgumentError when a
+        non-SERIALIZABLE level is requested. Silently coercing to
+        SERIALIZABLE (the prior ``warnings.warn`` behaviour) would
+        change the caller's requested semantics, the exact footgun
+        the AUTOCOMMIT branch's ArgumentError was installed to
+        prevent.
+        """
         from unittest.mock import MagicMock
+
+        import pytest
+        from sqlalchemy.exc import ArgumentError
 
         dialect = DqliteDialect()
         mock_conn = MagicMock()
 
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with pytest.raises(ArgumentError, match="only supports SERIALIZABLE"):
             dialect.set_isolation_level(mock_conn, "READ UNCOMMITTED")
-
-        assert len(w) == 1
-        assert "SERIALIZABLE" in str(w[0].message)
-        assert "READ UNCOMMITTED" in str(w[0].message)
 
     def test_set_isolation_level_silent_for_serializable(self) -> None:
         """set_isolation_level should not warn for SERIALIZABLE."""

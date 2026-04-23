@@ -52,9 +52,15 @@ class TestSetIsolationLevel:
         with pytest.raises(ArgumentError, match="AUTOCOMMIT"):
             dialect.set_isolation_level(MagicMock(), "AUTOCOMMIT")
 
-    def test_other_levels_warn(self) -> None:
+    def test_other_levels_rejected(self) -> None:
+        """An unknown level raises ArgumentError, matching the
+        AUTOCOMMIT branch. The prior warn-and-coerce path silently
+        changed the caller's requested semantics to SERIALIZABLE,
+        the exact footgun the AUTOCOMMIT rejection was installed to
+        prevent.
+        """
         dialect = DqliteDialect()
-        with pytest.warns(UserWarning, match="SERIALIZABLE"):
+        with pytest.raises(ArgumentError, match="only supports SERIALIZABLE"):
             dialect.set_isolation_level(MagicMock(), "READ COMMITTED")
 
 

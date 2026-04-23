@@ -4,7 +4,6 @@ import datetime
 import logging
 import math
 import types
-import warnings
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -417,22 +416,21 @@ class DqliteDialect(SQLiteDialect):
     def set_isolation_level(self, dbapi_connection: DBAPIConnection, level: str | None) -> None:
         """Set isolation level.
 
-        dqlite only supports SERIALIZABLE. ``AUTOCOMMIT`` is explicitly
-        rejected because silently dropping the request would cause users
-        to lose transactionality without knowing it. Other unsupported
-        levels emit a warning (future-proof for isolation levels dqlite
-        may grow to support).
+        dqlite only supports SERIALIZABLE. Any other level is rejected
+        with ``ArgumentError`` — including the AUTOCOMMIT sentinel and
+        unknown strings like ``"READ COMMITTED"`` — because silently
+        dropping the request would cause callers to lose either
+        transactionality (AUTOCOMMIT) or the specific weaker-isolation
+        semantics they asked for (READ COMMITTED etc.), neither of which
+        is safe to fake.
 
         Note on reachability: SA's engine flow
         (``engine/default.py::_assert_and_set_isolation_level``) calls
         ``get_isolation_level_values()`` first and rejects unknown
         values with ``ArgumentError`` before reaching this method, so
-        the AUTOCOMMIT and warning branches are effectively dead for
-        engine-driven callers. They are kept as belt-and-suspenders
-        for third-party callers (test harnesses, custom engine
-        implementations) that bypass SA's upstream validation, and to
-        provide an explicit error message if the guarantees above
-        ever change.
+        the branches below are largely defence-in-depth for third-party
+        callers (test harnesses, custom engine implementations) that
+        bypass SA's upstream validation.
         """
         if level is None or level == "SERIALIZABLE":
             return
@@ -442,9 +440,9 @@ class DqliteDialect(SQLiteDialect):
                 "Raft consensus and there is no per-statement autocommit mode. "
                 "Use explicit commit() / rollback() on the connection."
             )
-        warnings.warn(
-            f"dqlite only supports SERIALIZABLE isolation. Requested level {level!r} is ignored.",
-            stacklevel=2,
+        raise ArgumentError(
+            f"dqlite only supports SERIALIZABLE isolation; requested level "
+            f"{level!r} is not supported."
         )
 
     # do_rollback / do_commit are intentionally left inherited from the

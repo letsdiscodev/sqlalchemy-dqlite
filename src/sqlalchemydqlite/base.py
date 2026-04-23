@@ -59,6 +59,14 @@ class _DqliteDateTime(sqltypes.DateTime):
     as ``strftime('%Y-%m-%d %H:%M:%S', col)``), parsing them via
     ``datetime.fromisoformat`` so the ORM field always sees a
     ``datetime.datetime``.
+
+    When ``fromisoformat`` raises ``ValueError`` on a TEXT-tagged cell
+    (malformed row inserted by another writer, legacy non-ISO8601
+    format, etc.), log a WARNING and pass the raw ``str`` through. The
+    legacy silent pass-through violated the column-type contract without
+    any observability; a log line makes the data-integrity problem
+    visible while keeping the forgiving behaviour that lets operators
+    repair bad rows at their own pace rather than aborting a full read.
     """
 
     def bind_processor(self, dialect: Any) -> None:
@@ -75,7 +83,12 @@ class _DqliteDateTime(sqltypes.DateTime):
                 # dqlitedbapi did not run its datetime converter.
                 try:
                     value = datetime.datetime.fromisoformat(value)
-                except ValueError:
+                except ValueError as e:
+                    logger.warning(
+                        "DateTime processor received unparseable ISO8601 string %r: %s",
+                        value,
+                        e,
+                    )
                     return value
             if isinstance(value, datetime.datetime):
                 if want_timezone:
@@ -106,6 +119,12 @@ class _DqliteDate(sqltypes.Date):
     value — not the viewer's local day. Applications that care about
     local-day semantics should store DATETIME instead and do the
     narrowing themselves.
+
+    When ``fromisoformat`` raises ``ValueError`` on a TEXT-tagged cell,
+    log a WARNING and pass the raw ``str`` through. Same rationale as
+    :class:`_DqliteDateTime` — a silent type-contract violation is the
+    footgun; a log line surfaces the bad data without aborting the
+    full read.
     """
 
     def bind_processor(self, dialect: Any) -> None:
@@ -121,7 +140,12 @@ class _DqliteDate(sqltypes.Date):
             if isinstance(value, str):
                 try:
                     return datetime.date.fromisoformat(value)
-                except ValueError:
+                except ValueError as e:
+                    logger.warning(
+                        "Date processor received unparseable ISO8601 string %r: %s",
+                        value,
+                        e,
+                    )
                     return value
             return value
 

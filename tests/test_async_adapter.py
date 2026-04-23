@@ -358,6 +358,8 @@ class TestAioCursorSetInputSizes:
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
         cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
+        # __new__ skips __init__; seed the _closed flag the guard reads.
+        cursor._closed = False
         cursor.setinputsizes([10, None, 20])  # no error
 
     def test_extra_positional_argument_rejected(self) -> None:
@@ -366,6 +368,7 @@ class TestAioCursorSetInputSizes:
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
         cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
+        cursor._closed = False
         with pytest.raises(TypeError):
             cursor.setinputsizes([10], 20)  # type: ignore[call-arg]
 

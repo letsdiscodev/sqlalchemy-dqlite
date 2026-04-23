@@ -55,6 +55,7 @@ class AsyncAdaptedCursor:
     # is load-bearing under a busy engine.
     __slots__ = (
         "_adapt_connection",
+        "_closed",
         "_connection",
         "_rows",
         "arraysize",
@@ -73,12 +74,20 @@ class AsyncAdaptedCursor:
         self.lastrowid: int | None = None
         self.arraysize: int = 1
         self._rows: deque[Any] = deque()
+        # PEP 249: after ``close()`` the cursor is unusable. Track the
+        # flag so setinputsizes / setoutputsize can honour the contract
+        # — the underlying AsyncCursor already raises InterfaceError
+        # on the closed-cursor misuse and the adapter's silent
+        # no-op would otherwise hide the bug from callers migrating
+        # between the two cursor types.
+        self._closed: bool = False
 
     async def _async_soft_close(self) -> None:
         return
 
     def close(self) -> None:
         self._rows.clear()
+        self._closed = True
 
     def execute(
         self,
@@ -206,12 +215,17 @@ class AsyncAdaptedCursor:
     def setinputsizes(self, sizes: Sequence[Any]) -> None:
         # PEP 249: called before execute*() to hint bind-parameter sizes.
         # dqlite's wire encoder does not use per-parameter sizing hints,
-        # so the implementation is a no-op — but the signature matches
-        # the standard and the sibling cursors in dqlitedbapi.
-        pass
+        # so the implementation is a no-op on an open cursor — but the
+        # closed-cursor case must raise to match the underlying
+        # AsyncCursor's behaviour and to keep ``is_disconnect``'s
+        # narrow "cursor is closed" InterfaceError branch reachable
+        # through the adapter.
+        if self._closed:
+            raise InterfaceError("cursor is closed")
 
     def setoutputsize(self, size: int, column: int | None = None) -> None:
-        pass
+        if self._closed:
+            raise InterfaceError("cursor is closed")
 
     @property
     def connection(self) -> "AsyncAdaptedConnection":

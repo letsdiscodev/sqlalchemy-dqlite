@@ -550,15 +550,17 @@ class DqliteDialect(SQLiteDialect):
         """Return the server's SQLite version as a tuple.
 
         Forwards ``dqlitedbapi.sqlite_version_info`` (a module-level
-        constant pinning the minimum supported SQLite version). The
-        previous implementation ran a live ``SELECT sqlite_version()``
-        on every fresh engine connection and fell back to ``(3, 0, 0)``
-        on any transient error — which silently disabled RETURNING /
-        multi-values / all 3.35+ features on the affected engine. The
-        DBAPI constant is authoritative and matches how pysqlite
-        implements the same override.
+        constant pinning the minimum supported SQLite version). Matches
+        how pysqlite implements the same override — a one-liner that
+        lets ``AttributeError`` propagate if the bound DBAPI module
+        does not expose the constant.
+
+        The earlier ``(3, 35, 0)`` fallback had the inverse failure
+        mode of the pre-fix ``(3, 0, 0)`` fallback: instead of silently
+        DISABLING RETURNING on a broken DBAPI stub, it silently ENABLED
+        RETURNING / multi-values / insertmanyvalues against a driver
+        that might not implement any of them — yielding cryptic runtime
+        failures far from the real cause. Dropping the fallback so the
+        config error surfaces at dialect-init time.
         """
-        info = getattr(self.dbapi, "sqlite_version_info", None)
-        if info is not None:
-            return tuple(info)
-        return (3, 35, 0)
+        return tuple(self.dbapi.sqlite_version_info)  # type: ignore[union-attr]

@@ -268,19 +268,23 @@ class TestGetServerVersionInfo:
         result = dialect._get_server_version_info(MagicMock())
         assert result == (3, 46, 0)
 
-    def test_falls_back_to_floor_when_dbapi_lacks_attribute(self) -> None:
-        """Defensive floor: returned only when the bound DBAPI module
-        lacks ``sqlite_version_info`` entirely. Unreachable under the
-        real dqlitedbapi module but documents intent.
+    def test_propagates_attribute_error_when_dbapi_lacks_attribute(self) -> None:
+        """A broken / stubbed DBAPI module that does not expose
+        ``sqlite_version_info`` must surface as ``AttributeError`` at
+        dialect-init — not silently engage RETURNING / multi-values
+        against a driver that may not implement them. Matches the
+        one-liner upstream pysqlite uses.
         """
         from types import SimpleNamespace
         from unittest.mock import MagicMock
 
+        import pytest
+
         dialect = DqliteDialect()
         dialect.dbapi = SimpleNamespace()  # type: ignore[assignment]
 
-        result = dialect._get_server_version_info(MagicMock())
-        assert result == (3, 35, 0)
+        with pytest.raises(AttributeError):
+            dialect._get_server_version_info(MagicMock())
 
 
 class TestGetDriverConnection:

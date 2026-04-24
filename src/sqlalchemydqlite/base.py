@@ -295,8 +295,19 @@ class DqliteDialect(SQLiteDialect):
         sqltypes.Date: _DqliteDate,
     }
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, **kwargs: Any) -> None:
+        # Keyword-only: ``SQLiteDialect.__init__`` defines a handful of
+        # keyword slots (``native_datetime``, ``json_serializer``, ...)
+        # followed by ``**kw`` that flows into ``DefaultDialect``, which
+        # in turn accepts a long list of positional slots
+        # (``paramstyle``, ``isolation_level``, ``dbapi``, ...).
+        # Forwarding ``*args`` would silently bind a caller's positional
+        # value to whichever slot lines up in the parent's signature —
+        # never what a third-party caller constructing the dialect
+        # directly intended. SA-internal dialect construction always
+        # passes kwargs, so narrowing the signature is non-breaking for
+        # the engine-factory path and closes the positional-foot-gun.
+        super().__init__(**kwargs)
         # ``SQLiteDialect.__init__`` writes *instance* attributes based
         # on ``self.dbapi.sqlite_version_info`` and ``util.pypy``:
         #

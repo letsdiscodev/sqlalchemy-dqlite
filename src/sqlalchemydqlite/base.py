@@ -498,20 +498,24 @@ class DqliteDialect(SQLiteDialect):
     # Connection.commit / rollback), so the dialect doesn't need its own
     # workaround. Matches stdlib sqlite3 semantics.
 
+    # Patterns are matched case-insensitively at the comparison site.
+    # Stored in lower-case so the single ``.lower()`` at each
+    # ``is_disconnect`` call normalises both sides; the previous
+    # (``"not connected"`` plus ``"Not connected"``) duplicate is now
+    # one entry.
     _dqlite_disconnect_messages = (
-        "Connection closed",
+        "connection closed",
         "timed out",
-        "Failed to connect",
+        "failed to connect",
         "not connected",
-        "Not connected",
         # Wire-layer desync: ProtocolError / DecodeError / StreamError
         # in dqlitewire surface here. Paired with the client wrap at
         # ``dqliteclient/protocol.py`` which emits these prefixes, and
         # the dbapi wrap at ``cursor._call_client`` that now routes
         # ``client.ProtocolError`` to ``OperationalError`` (not
         # ``InterfaceError``) so the substring branch can see it.
-        "Wire decode failed",
-        "Wire stream error",
+        "wire decode failed",
+        "wire stream error",
     )
 
     def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:
@@ -576,11 +580,14 @@ class DqliteDialect(SQLiteDialect):
             if isinstance(e, err) and getattr(e, "code", None) in _LEADER_CHANGE_CODES:
                 return True
         # Legacy substring fallback — kept so we still catch anything
-        # that wasn't modelled as a specific exception type yet.
+        # that wasn't modelled as a specific exception type yet. Match
+        # case-insensitively: wire-layer / client-layer message
+        # formatting is not a contract, and a future uppercase-leading
+        # rewording would otherwise drop the match silently.
         if isinstance(e, _dbapi_exc.OperationalError):
-            msg = str(e)
+            msg_lower = str(e).lower()
             for pattern in self._dqlite_disconnect_messages:
-                if pattern in msg:
+                if pattern in msg_lower:
                     return True
         return super().is_disconnect(e, connection, cursor)
 

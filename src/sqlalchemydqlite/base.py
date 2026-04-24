@@ -96,8 +96,26 @@ class _DqliteDateTime(sqltypes.DateTime):
     repair bad rows at their own pace rather than aborting a full read.
     """
 
-    def bind_processor(self, dialect: Any) -> None:
-        return None
+    def bind_processor(self, dialect: Any) -> Callable[[Any], Any] | None:
+        def process(value: Any) -> Any:
+            if value is None:
+                return None
+            # Pysqlite's DateTime.bind_processor widens a bare
+            # ``datetime.date`` to a midnight ``datetime`` before
+            # handing it to the driver, so a ``date`` bound to a
+            # ``DateTime`` column stores the canonical full-timestamp
+            # shape (``"2021-03-15 00:00:00.000000"``) that a sibling
+            # pysqlite writer would produce. Without this widening,
+            # dqlitedbapi receives the raw ``date`` and encodes it as
+            # a date-only ISO string (``"2021-03-15"``); round-trip
+            # through the result_processor still works (ISO8601 is
+            # bidirectional) but cross-writer parity breaks for
+            # applications with literal-string predicates.
+            if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
+                value = datetime.datetime.combine(value, datetime.time())
+            return value
+
+        return process
 
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         want_timezone = self.timezone

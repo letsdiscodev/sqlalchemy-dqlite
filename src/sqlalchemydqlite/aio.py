@@ -355,6 +355,40 @@ class AsyncAdaptedConnection(AdaptedConnection):
         """
         return "SERIALIZABLE"
 
+    @property
+    def autocommit(self) -> bool:
+        """Report False: dqlite has no autocommit mode.
+
+        Every statement goes through Raft consensus under an explicit
+        transaction lifecycle; there is no per-statement autocommit.
+        Parity with SA's reference ``AsyncAdapt_aiosqlite_connection``,
+        which exposes ``autocommit`` as a read/write property. SA
+        characteristic code and some third-party middleware probe
+        ``getattr(dbapi_conn, "autocommit", None)`` — without the
+        property those probes see ``None`` and may log misleading
+        "autocommit unknown" diagnostics.
+        """
+        return False
+
+    @autocommit.setter
+    def autocommit(self, value: bool) -> None:
+        """Reject attempts to enable autocommit; accept ``False`` as a no-op.
+
+        SA's engine flow short-circuits ``set_isolation_level`` to
+        reject ``"AUTOCOMMIT"`` before reaching the dialect, but a
+        direct ``conn.autocommit = True`` on the adapter would bypass
+        that guard. Fail fast with the same educational message the
+        dialect emits for ``isolation_level="AUTOCOMMIT"``.
+        """
+        if value:
+            from sqlalchemy.exc import ArgumentError
+
+            raise ArgumentError(
+                "dqlite does not support AUTOCOMMIT; every statement goes "
+                "through Raft consensus. Use explicit commit()/rollback()."
+            )
+        # value is False → already the effective mode, no-op.
+
     def _handle_exception(self, error: BaseException) -> NoReturn:
         """Adapter-level exception normalisation hook.
 

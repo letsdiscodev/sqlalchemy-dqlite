@@ -82,3 +82,40 @@ class TestWalkBoundedDepth:
         # is a bare OperationalError, so substring-branch handles the
         # final decision.
         _ = dialect.is_disconnect(deep, None, None)
+
+    def test_disconnect_within_cap_is_found(self) -> None:
+        """DqliteConnectionError at depth 9 (inside the 10-hop cap) must
+        still be classified as disconnect. Pins the upper edge of the
+        walker: a regression lowering the cap would invalidate pool
+        slots off a telemetry/retry stack shorter than the current
+        tower."""
+        dialect = DqliteDialect()
+        target = _client_exc.DqliteConnectionError("peer rst")
+        cur: BaseException = target
+        for i in range(8):
+            wrap = _dbapi_exc.OperationalError(f"wrap {i}")
+            wrap.__cause__ = cur
+            cur = wrap
+        top = _dbapi_exc.OperationalError("top")
+        top.__cause__ = cur  # target is at depth 9
+
+        assert dialect.is_disconnect(top, None, None) is True
+
+    def test_disconnect_beyond_cap_is_not_found_by_type_walk(self) -> None:
+        """DqliteConnectionError hidden past the 10-hop cutoff is
+        invisible to the type-dispatch walk. Give the outer
+        OperationalError a non-matching message so the substring
+        fallback cannot flip the verdict; this isolates the walker's
+        depth behaviour.
+        """
+        dialect = DqliteDialect()
+        target = _client_exc.DqliteConnectionError("peer rst")
+        cur: BaseException = target
+        for i in range(10):
+            wrap = _dbapi_exc.OperationalError(f"wrap {i}")
+            wrap.__cause__ = cur
+            cur = wrap
+        top = _dbapi_exc.OperationalError("nothing matching here")
+        top.__cause__ = cur  # target is at depth 11 past the cap
+
+        assert dialect.is_disconnect(top, None, None) is False

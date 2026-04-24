@@ -504,6 +504,25 @@ class TestIsolationLevel:
 
         assert len(w) == 0
 
+    def test_set_isolation_level_none_does_not_touch_connection(self) -> None:
+        """SA's pool resets isolation between checkouts via
+        ``set_isolation_level(conn, None)``. Pin the true no-op contract:
+        no cursor opened, no attribute accessed, no exception raised —
+        a future refactor that routed ``None`` through autocommit
+        setup would stay warning-free but still break SA's reset path,
+        so observe at the mock-call level.
+        """
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        mock_conn = MagicMock()
+
+        dialect.set_isolation_level(mock_conn, None)
+
+        # No cursor opened and no other attribute access on conn.
+        mock_conn.cursor.assert_not_called()
+        assert mock_conn.mock_calls == []
+
 
 class TestDoPing:
     def test_cursor_closed_in_finally(self) -> None:

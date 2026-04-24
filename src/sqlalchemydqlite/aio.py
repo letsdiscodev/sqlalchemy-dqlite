@@ -129,6 +129,17 @@ class AsyncAdaptedCursor:
         operation: str,
         parameters: Sequence[Any] | Mapping[str, Any] | None = None,
     ) -> None:
+        """Execute a single statement.
+
+        ``parameters`` is typed as ``Sequence | Mapping | None`` to
+        match the PEP 249 DB-API envelope that SQLAlchemy expects, but
+        at runtime the underlying driver is ``paramstyle="qmark"`` and
+        rejects mappings with ``ProgrammingError``. SA's own compiler
+        always hands us a sequence, so the wider hint is documentary:
+        it reflects the envelope the framework layers expect, not
+        driver capability. Passing a ``dict`` directly will surface as
+        ``ProgrammingError`` at the DBAPI cursor layer.
+        """
         # Clear buffered state FIRST so a CancelledError (or any other
         # exception) during execute/fetchall leaves the adapter in a
         # "no active result" state rather than carrying stale rows
@@ -187,6 +198,12 @@ class AsyncAdaptedCursor:
         operation: str,
         seq_of_parameters: Iterable[Sequence[Any] | Mapping[str, Any]],
     ) -> None:
+        """Execute many statements.
+
+        As with ``execute``, mapping parameters are rejected by the
+        underlying qmark-paramstyle driver at runtime. The wider hint
+        matches SA's envelope; see ``execute`` for the rationale.
+        """
         # Clear state up-front so cancellation mid-call doesn't leak
         # a previous execution's buffered rows.
         self.description = None
@@ -231,11 +248,15 @@ class AsyncAdaptedCursor:
         # return on exhaustion (PEP 249 contract, mirroring the
         # dqlitedbapi sync / async cursors that already type this as
         # ``tuple[Any, ...] | None``). Runtime behaviour unchanged.
+        if self._closed:
+            raise InterfaceError("cursor is closed")
         if self._rows:
             return self._rows.popleft()
         return None
 
     def fetchmany(self, size: int | None = None) -> Sequence[Any]:
+        if self._closed:
+            raise InterfaceError("cursor is closed")
         if size is None:
             size = self.arraysize
         if size < 0:
@@ -243,6 +264,8 @@ class AsyncAdaptedCursor:
         return [self._rows.popleft() for _ in range(min(size, len(self._rows)))]
 
     def fetchall(self) -> Sequence[Any]:
+        if self._closed:
+            raise InterfaceError("cursor is closed")
         retval = list(self._rows)
         self._rows.clear()
         return retval
@@ -284,12 +307,18 @@ class AsyncAdaptedCursor:
     def callproc(
         self, procname: str, parameters: Sequence[Any] | None = None
     ) -> Sequence[Any] | None:
+        if self._closed:
+            raise InterfaceError("cursor is closed")
         raise NotSupportedError("dqlite does not support stored procedures")
 
     def nextset(self) -> bool | None:
+        if self._closed:
+            raise InterfaceError("cursor is closed")
         raise NotSupportedError("dqlite does not support multiple result sets")
 
     def scroll(self, value: int, mode: str = "relative") -> None:
+        if self._closed:
+            raise InterfaceError("cursor is closed")
         raise NotSupportedError("dqlite cursors are not scrollable")
 
     def __iter__(self) -> Iterator[Any]:

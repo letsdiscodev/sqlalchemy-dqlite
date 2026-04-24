@@ -441,6 +441,10 @@ class TestAioAdapterCursorFetchMethods:
         cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
         cursor._rows = deque(rows)
         cursor.arraysize = 1
+        # Adapter fetch methods now enforce the closed-state check
+        # (ISSUE-681); set the flag to False so the mock cursor
+        # behaves like a freshly-opened one.
+        cursor._closed = False
         return cursor
 
     def test_fetchone_pops_left(self) -> None:

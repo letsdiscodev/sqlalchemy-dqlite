@@ -22,13 +22,20 @@ from sqlalchemydqlite.base import DqliteDialect
 
 class TestGetIsolationLevelValues:
     def test_only_serializable(self) -> None:
-        """dqlite accepts SERIALIZABLE only; inheriting SQLiteDialect's
-        ``["READ UNCOMMITTED", "SERIALIZABLE"]`` would let callers set a
-        level we cannot honour (PRAGMA read_uncommitted has no effect
-        server-side).
+        """dqlite accepts SERIALIZABLE only. ``AUTOCOMMIT`` is ALSO
+        advertised — as a diagnostic channel so SA routes the value
+        through our ``set_isolation_level`` (which rejects it with an
+        educational message) rather than stopping at SA's generic
+        "invalid isolation level" error. ``READ UNCOMMITTED`` is not
+        advertised because PRAGMA read_uncommitted has no effect
+        server-side; accepting it would let callers think they got
+        a weaker isolation that dqlite cannot honour.
         """
         dialect = DqliteDialect()
-        assert dialect.get_isolation_level_values(MagicMock()) == ["SERIALIZABLE"]
+        values = list(dialect.get_isolation_level_values(MagicMock()))
+        assert "SERIALIZABLE" in values
+        assert "AUTOCOMMIT" in values
+        assert "READ UNCOMMITTED" not in values
 
     def test_read_uncommitted_not_advertised(self) -> None:
         dialect = DqliteDialect()

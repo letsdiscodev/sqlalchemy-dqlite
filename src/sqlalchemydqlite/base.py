@@ -447,10 +447,19 @@ class DqliteDialect(SQLiteDialect):
         ``READ UNCOMMITTED`` via ``PRAGMA read_uncommitted`` in
         shared-cache mode. dqlite runs every statement through Raft
         consensus and has no mechanism to weaken isolation, so advertise
-        only what we can honour — ``set_isolation_level`` below rejects
-        anything else explicitly.
+        only SERIALIZABLE as a level we can actually honour.
+
+        ``AUTOCOMMIT`` is also advertised — NOT as a level we accept,
+        but so SA's engine flow (``_assert_and_set_isolation_level``)
+        passes the value through to our ``set_isolation_level`` below
+        rather than rejecting it with the generic
+        "invalid isolation level" ``ArgumentError``. The dialect's
+        dedicated rejection message (see ``set_isolation_level``)
+        explains *why* autocommit is unsupported, which is strictly
+        more actionable than the generic error. The advertised value
+        is a diagnostic channel, not an acceptance claim.
         """
-        return ["SERIALIZABLE"]
+        return ["SERIALIZABLE", "AUTOCOMMIT"]
 
     def get_isolation_level(self, dbapi_connection: DBAPIConnection) -> IsolationLevel:
         """Return the isolation level.

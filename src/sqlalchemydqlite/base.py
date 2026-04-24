@@ -525,6 +525,19 @@ class DqliteDialect(SQLiteDialect):
         server's error wording is not a contract. Type-based checks
         cover TCP resets, DNS failures, and partial-read timeouts that
         the hand-maintained substring list misses.
+
+        Asymmetry with ``do_ping``: ``do_ping`` catches
+        ``ProgrammingError`` and treats it as "slot is dead" because
+        its only operation is a trivial ``SELECT 1``, where a
+        ProgrammingError is almost certainly an out-of-band state
+        fault (``AsyncConnection`` reused on a different event loop,
+        closed cursor underneath, etc.). During a real query, a
+        ProgrammingError is more likely a caller bug (closed cursor in
+        userland code) and must propagate so the bug is visible. The
+        ``InterfaceError`` substring branch below keeps the narrow
+        "connection is closed" / "cursor is closed" case classified as
+        disconnect because those specifically indicate the SA pool
+        slot itself is invalidated — not a caller mistake.
         """
         # Walk the full ``__cause__`` / ``__context__`` chain. The
         # dbapi's ``_call_client`` handler wraps

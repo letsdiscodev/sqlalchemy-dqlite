@@ -205,6 +205,52 @@ class _DqliteDate(sqltypes.Date):
         return process
 
 
+class _DqliteTime(sqltypes.Time):
+    """Time processor handling ``datetime.time`` and ISO8601-string inputs.
+
+    Pysqlite's ``TIME.result_processor`` calls ``processors.str_to_time``
+    (a thin wrapper over ``datetime.time.fromisoformat``) on the raw
+    cell. dqlitedbapi already decodes ISO8601 time payloads into
+    ``datetime.time`` before the dialect sees them, so the upstream
+    processor would call ``fromisoformat`` on a ``datetime.time``
+    instance and raise ``TypeError``.
+
+    Mirror ``_DqliteDateTime`` / ``_DqliteDate``: pass ``datetime.time``
+    through unchanged, parse ``str`` (affinity-stripped cell from
+    ``func.time(col)`` etc.) via ``datetime.time.fromisoformat``, log
+    and pass through unparseable strings rather than crashing the read.
+
+    No ``bind_processor`` override is needed: dqlitedbapi accepts
+    ``datetime.time`` on the bind path and encodes it as an ISO8601
+    string. A ``str`` bound to a ``Time`` column would be sent verbatim
+    by the parent dialect's processor; we don't widen the contract
+    here.
+    """
+
+    def bind_processor(self, dialect: Any) -> None:
+        return None
+
+    def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
+        def process(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, datetime.time):
+                return value
+            if isinstance(value, str):
+                try:
+                    return datetime.time.fromisoformat(value)
+                except ValueError as e:
+                    logger.warning(
+                        "Time processor received unparseable ISO8601 string %r: %s",
+                        value,
+                        e,
+                    )
+                    return value
+            return value
+
+        return process
+
+
 class DqliteDialect(SQLiteDialect):
     """SQLAlchemy dialect for dqlite.
 
@@ -311,6 +357,7 @@ class DqliteDialect(SQLiteDialect):
         **SQLiteDialect.colspecs,
         sqltypes.DateTime: _DqliteDateTime,
         sqltypes.Date: _DqliteDate,
+        sqltypes.Time: _DqliteTime,
     }
 
     def __init__(self, **kwargs: Any) -> None:

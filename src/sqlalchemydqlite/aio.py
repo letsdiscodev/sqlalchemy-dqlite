@@ -654,6 +654,12 @@ class DqliteDialect_aio(DqliteDialect):
 
     @classmethod
     def import_dbapi(cls) -> types.ModuleType:
+        # Returns ``dqlitedbapi.aio``, NOT the top-level ``dqlitedbapi``
+        # module that the sync dialect imports (see
+        # ``DqliteDialect.import_dbapi`` in base.py). The async dialect
+        # drives ``AsyncConnection`` / ``AsyncCursor`` from the ``aio``
+        # submodule; aligning the two would silently break the async
+        # path. Asymmetry is deliberate.
         from dqlitedbapi import aio
 
         return aio

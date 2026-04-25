@@ -431,6 +431,11 @@ class DqliteDialect(SQLiteDialect):
 
     @classmethod
     def import_dbapi(cls) -> types.ModuleType:
+        # Returns the top-level ``dqlitedbapi`` module exposing the sync
+        # ``Connection`` / ``Cursor``. The async dialect overrides this
+        # to return the ``dqlitedbapi.aio`` submodule (see
+        # ``DqliteDialect_aio.import_dbapi``); the asymmetry is
+        # deliberate.
         import dqlitedbapi
 
         return dqlitedbapi

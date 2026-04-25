@@ -134,6 +134,15 @@ class TestDqliteDialect:
         assert DqliteDialect_aio.supports_server_side_cursors is False
         assert "supports_server_side_cursors" in DqliteDialect_aio.__dict__
 
+    def test_supports_server_side_cursors_pinned_false_on_sync(self) -> None:
+        """Same defensive pin on the sync dialect. The DefaultDialect
+        chain currently sets False, but a future upstream change could
+        flip the inherited default; pin locally so the contract is
+        anchored at the dqlite dialect class itself.
+        """
+        assert DqliteDialect.supports_server_side_cursors is False
+        assert "supports_server_side_cursors" in DqliteDialect.__dict__
+
     def test_returns_native_bytes_pinned_locally(self) -> None:
         """dqlitedbapi returns native Python ``bytes`` for BLOB columns;
         pin True locally so ``LargeBinary.result_processor`` skips the

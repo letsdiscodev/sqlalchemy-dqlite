@@ -272,6 +272,15 @@ class DqliteDialect(SQLiteDialect):
     # skip the redundant ``bytes(value)`` wrap on every BLOB cell.
     returns_native_bytes = True
 
+    # dqlitedbapi cursors are buffered with continuation streaming
+    # (frames fully consumed client-side); they do not implement
+    # SQLAlchemy's server-side cursor protocol. The inherited
+    # ``DefaultDialect.supports_server_side_cursors = False`` is
+    # currently safe, but an explicit pin defends against any future
+    # upstream change that flips the inherited default. Mirrors the
+    # explicit pin on ``DqliteDialect_aio`` (aio.py).
+    supports_server_side_cursors = False
+
     # dqlite's wire protocol has a first-class BOOLEAN tag
     # (``ValueType.BOOLEAN = 11``); the server returns native Python
     # booleans for columns tagged BOOLEAN and dqlitedbapi passes them

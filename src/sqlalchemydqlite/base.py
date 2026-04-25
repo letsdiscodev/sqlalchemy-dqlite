@@ -566,6 +566,27 @@ class DqliteDialect(SQLiteDialect):
             f"{level!r} is not supported."
         )
 
+    def detect_autocommit_setting(self, dbapi_conn: DBAPIConnection) -> bool:
+        """dqlite never operates in autocommit mode.
+
+        Every statement traverses Raft consensus under an explicit
+        transaction lifecycle (see ``set_isolation_level`` rejection of
+        ``"AUTOCOMMIT"`` and the rationale at line 558-562). The dqlite
+        dbapi ``Connection`` deliberately does NOT expose an
+        ``isolation_level`` attribute; the inherited ``DefaultDialect``
+        implementation raises ``NotImplementedError``, and the pysqlite
+        sibling probes ``dbapi_conn.isolation_level is None`` which
+        would also fail here. Both surface inside SA's
+        ``skip_autocommit_rollback`` path
+        (``engine/default.py::do_rollback`` ->
+        ``engine/base.py:1115-1124``), where the user's SQL is healthy
+        but the close path crashes with a confusing diagnostic.
+
+        Returning False unconditionally makes ``skip_autocommit_rollback``
+        a safe no-op for the dqlite dialect.
+        """
+        return False
+
     # do_rollback / do_commit are intentionally left inherited from the
     # parent dialect. The "cannot commit/rollback — no transaction is
     # active" error is swallowed at the DBAPI layer (dqlitedbapi's

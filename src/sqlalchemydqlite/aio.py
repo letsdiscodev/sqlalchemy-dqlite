@@ -121,6 +121,16 @@ class AsyncAdaptedCursor:
         self._arraysize = value
 
     def close(self) -> None:
+        # Scrub the public read-attributes so post-close reads of
+        # ``description`` / ``rowcount`` / ``lastrowid`` see a
+        # consistent "no operation performed" surface. Plain
+        # attributes have no _closed gating, so a caller (or SA's
+        # Result layer) reading them after close would otherwise see
+        # the last statement's values — composes badly with any
+        # subsequent execute that should reset them.
+        self.description = None
+        self.rowcount = -1
+        self.lastrowid = None
         self._rows.clear()
         self._closed = True
 
@@ -140,6 +150,14 @@ class AsyncAdaptedCursor:
         driver capability. Passing a ``dict`` directly will surface as
         ``ProgrammingError`` at the DBAPI cursor layer.
         """
+        # Mirror the closed-cursor guard the other methods on this
+        # class apply (fetch* / setinputsizes / scroll / etc.). Without
+        # it, a stale execute on a closed adapter cursor silently
+        # succeeds and the user only sees ``cursor is closed`` from
+        # the first fetch — a confusing diagnostic that implies the
+        # cursor was closed between execute and fetch.
+        if self._closed:
+            raise InterfaceError("cursor is closed")
         # Clear buffered state FIRST so a CancelledError (or any other
         # exception) during execute/fetchall leaves the adapter in a
         # "no active result" state rather than carrying stale rows
@@ -204,6 +222,10 @@ class AsyncAdaptedCursor:
         underlying qmark-paramstyle driver at runtime. The wider hint
         matches SA's envelope; see ``execute`` for the rationale.
         """
+        # Mirror the closed-cursor guard the other methods on this
+        # class apply; see ``execute`` for the rationale.
+        if self._closed:
+            raise InterfaceError("cursor is closed")
         # Clear state up-front so cancellation mid-call doesn't leak
         # a previous execution's buffered rows.
         self.description = None

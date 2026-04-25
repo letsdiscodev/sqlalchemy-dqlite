@@ -327,6 +327,48 @@ class TestDoRollbackCommit:
         with pytest.raises(dqlitedbapi.exceptions.OperationalError, match="database is locked"):
             dialect.do_rollback(mock_conn)
 
+    def test_async_dialect_do_begin_calls_dbapi_connection(self) -> None:
+        """The async dialect inherits do_begin from DefaultDialect, but
+        the inherited implementation is a pass-through. Pin that the
+        async dialect does NOT override do_begin in a way that fails
+        to call the dbapi connection — and that the inherited
+        no-op contract still holds."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect_aio()
+        mock_conn = MagicMock()
+        # DefaultDialect.do_begin is a no-op (pass) — the dbapi's
+        # implicit-BEGIN handling kicks in on the first DML. Pin the
+        # contract: do_begin must not raise and must not perform any
+        # spurious connection.commit / rollback / close.
+        dialect.do_begin(mock_conn)
+        mock_conn.commit.assert_not_called()
+        mock_conn.rollback.assert_not_called()
+        mock_conn.close.assert_not_called()
+
+    def test_async_dialect_do_commit_delegates_to_connection(self) -> None:
+        """do_commit on the async dialect must call dbapi_conn.commit() —
+        which on the AsyncAdaptedConnection routes through the
+        await_only greenlet bridge to the underlying async client.
+        Pin the call shape so a future SA refactor that begins
+        awaiting do_commit on async dialects (turning our greenlet
+        bridge into a double-await) breaks loudly."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect_aio()
+        mock_conn = MagicMock()
+        dialect.do_commit(mock_conn)
+        mock_conn.commit.assert_called_once_with()
+
+    def test_async_dialect_do_rollback_delegates_to_connection(self) -> None:
+        """Mirror of do_commit; pin the rollback delegation shape."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect_aio()
+        mock_conn = MagicMock()
+        dialect.do_rollback(mock_conn)
+        mock_conn.rollback.assert_called_once_with()
+
 
 class TestIsDisconnect:
     def test_recognizes_connection_closed(self) -> None:
@@ -540,6 +582,40 @@ class TestIsolationLevel:
         # No cursor opened and no other attribute access on conn.
         mock_conn.cursor.assert_not_called()
         assert mock_conn.mock_calls == []
+
+    def test_reset_isolation_level_silent_for_serializable_sync(self) -> None:
+        """SA's ``DefaultDialect.reset_isolation_level`` fires on
+        pool-return when ``_on_connect_isolation_level`` is set.
+        For ``create_engine(..., isolation_level="SERIALIZABLE")`` the
+        path is ``reset_isolation_level → _assert_and_set_isolation_level
+        → set_isolation_level("SERIALIZABLE")``, which our dialect
+        accepts silently. Pin the chain so a future SA refactor cannot
+        silently break the reset path on a configured-isolation engine.
+        """
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect()
+        dialect._on_connect_isolation_level = "SERIALIZABLE"
+        dialect.default_isolation_level = "SERIALIZABLE"
+        mock_conn = MagicMock()
+
+        # Should be a clean no-op — no exception, no cursor opened.
+        dialect.reset_isolation_level(mock_conn)
+        mock_conn.cursor.assert_not_called()
+
+    def test_reset_isolation_level_silent_for_serializable_aio(self) -> None:
+        """Async-side mirror of the SERIALIZABLE pool-return reset path.
+        The async dialect inherits ``reset_isolation_level``; pin that
+        the inheritance chain remains intact and silent."""
+        from unittest.mock import MagicMock
+
+        dialect = DqliteDialect_aio()
+        dialect._on_connect_isolation_level = "SERIALIZABLE"
+        dialect.default_isolation_level = "SERIALIZABLE"
+        mock_conn = MagicMock()
+
+        dialect.reset_isolation_level(mock_conn)
+        mock_conn.cursor.assert_not_called()
 
 
 class TestDoPing:

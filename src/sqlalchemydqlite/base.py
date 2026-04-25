@@ -657,10 +657,20 @@ class DqliteDialect(SQLiteDialect):
         # setinputsizes on a closed cursor) are NOT classified as
         # disconnect. The do_ping path already catches InterfaceError
         # for the same reason.
-        if isinstance(e, _dbapi_exc.InterfaceError):
-            message = str(e).lower()
-            if "connection is closed" in message or "cursor is closed" in message:
-                return True
+        #
+        # Walk the cause chain so a wrapped "closed" InterfaceError
+        # (added by retry middleware, telemetry, circuit breaker, etc.)
+        # is still classified as disconnect — same discipline as the
+        # leader-change branch below and the DqliteConnectionError /
+        # ClusterError branch above. Without the walk, an outer wrap
+        # whose own message has no "closed" substring drops the signal
+        # and the SA pool slot stays alive while the underlying handle
+        # is dead.
+        for cause in _walk_cause_chain(e):
+            if isinstance(cause, _dbapi_exc.InterfaceError):
+                message = str(cause).lower()
+                if "connection is closed" in message or "cursor is closed" in message:
+                    return True
         # Leader-change error codes signal that the connection is useless
         # even though it's TCP-alive. Walk the cause chain so a
         # leader-change OperationalError that was re-wrapped one extra

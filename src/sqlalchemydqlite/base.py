@@ -263,7 +263,15 @@ class DqliteDialect(SQLiteDialect):
     # dqlite uses qmark parameter style
     paramstyle = "qmark"
 
-    # Enable SQLAlchemy statement caching
+    # Enable SQLAlchemy statement caching.
+    #
+    # SA's ``_supports_statement_cache`` discovery reads
+    # ``__class__.__dict__.get("supports_statement_cache")`` (see
+    # ``engine/default.py::_supports_statement_cache``), not the
+    # inherited attribute. Inheriting from the parent SQLite dialect —
+    # even though it also sets True — would silently disable
+    # statement caching here. Mirror the explicit pin and rationale
+    # documented at ``aio.py``'s ``DqliteDialect_aio``.
     supports_statement_cache = True
 
     # dqlitedbapi returns native Python ``bytes`` for BLOB columns (the

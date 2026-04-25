@@ -186,6 +186,7 @@ class TestDqliteDialectAio:
         """Async dialect should inherit shared methods from base, not duplicate them."""
         shared_methods = [
             "create_connect_args",
+            "do_begin",
             "do_rollback",
             "do_commit",
             "_get_server_version_info",
@@ -327,21 +328,30 @@ class TestDoRollbackCommit:
         with pytest.raises(dqlitedbapi.exceptions.OperationalError, match="database is locked"):
             dialect.do_rollback(mock_conn)
 
-    def test_async_dialect_do_begin_calls_dbapi_connection(self) -> None:
-        """The async dialect inherits do_begin from DefaultDialect, but
-        the inherited implementation is a pass-through. Pin that the
-        async dialect does NOT override do_begin in a way that fails
-        to call the dbapi connection — and that the inherited
-        no-op contract still holds."""
+    def test_async_dialect_do_begin_emits_begin_over_wire(self) -> None:
+        """do_begin must emit an explicit BEGIN over the wire. The
+        inherited SQLiteDialect_pysqlite.do_begin is a no-op because
+        pysqlite auto-emits BEGIN before the first DML via the
+        connection-level ``isolation_level`` attribute. The dqlite
+        dbapi has no equivalent mechanism — without an explicit BEGIN
+        every INSERT inside ``engine.begin()`` auto-commits at the
+        server, defeating transactional atomicity. Pin the corrected
+        contract: do_begin opens a cursor, executes ``BEGIN``, closes
+        the cursor, and does not touch the connection-level
+        commit / rollback / close paths."""
         from unittest.mock import MagicMock
 
         dialect = DqliteDialect_aio()
         mock_conn = MagicMock()
-        # DefaultDialect.do_begin is a no-op (pass) — the dbapi's
-        # implicit-BEGIN handling kicks in on the first DML. Pin the
-        # contract: do_begin must not raise and must not perform any
-        # spurious connection.commit / rollback / close.
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
         dialect.do_begin(mock_conn)
+
+        mock_conn.cursor.assert_called_once_with()
+        mock_cursor.execute.assert_called_once_with("BEGIN")
+        mock_cursor.close.assert_called_once_with()
+        # do_begin must NOT touch the connection-level methods.
         mock_conn.commit.assert_not_called()
         mock_conn.rollback.assert_not_called()
         mock_conn.close.assert_not_called()

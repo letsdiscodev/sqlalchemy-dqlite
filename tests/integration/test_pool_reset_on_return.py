@@ -8,13 +8,13 @@ silent no-op when no transaction is active. The contract that
 end-to-end. A regression in the reset path becoming a no-op would
 silently commit uncommitted writes for the next user.
 
-Pin the contract for both sync and async engines.
-
-The test issues a raw BEGIN through ``text()`` rather than relying
-on SA's transaction management because dqlite blocks AUTOCOMMIT
-isolation level — sticking to raw BEGIN keeps the test orthogonal
-to SA's internal transaction-emit logic and exercises the dbapi-
-layer rollback the pool reset relies on.
+Pin the contract for both sync and async engines. The test relies
+on SA's auto-begin-on-first-execute behaviour: ``engine.connect()``
+returns a connection in "no-tx" state; the first ``execute()`` of
+DML triggers SA's internal transaction-begun state, which calls
+``do_begin`` over the wire. Exit without commit/rollback hands the
+connection back to the pool with an open transaction; the pool's
+reset issues ROLLBACK and the row vanishes.
 """
 
 from __future__ import annotations
@@ -33,9 +33,10 @@ class TestPoolResetOnReturn:
                 conn.execute(text("DROP TABLE IF EXISTS sync_pool_reset"))
                 conn.execute(text("CREATE TABLE sync_pool_reset (id INTEGER PRIMARY KEY)"))
 
-            # Uncommitted INSERT inside an explicit BEGIN.
+            # Uncommitted INSERT under SA's auto-begin transaction;
+            # exit without commit/rollback so the pool reset path
+            # has work to do.
             with engine.connect() as conn:
-                conn.execute(text("BEGIN"))
                 conn.execute(text("INSERT INTO sync_pool_reset (id) VALUES (1)"))
                 # Exit context without commit/rollback; the pool's
                 # reset MUST roll back.
@@ -56,7 +57,6 @@ class TestPoolResetOnReturn:
                 await conn.execute(text("CREATE TABLE async_pool_reset (id INTEGER PRIMARY KEY)"))
 
             async with engine.connect() as conn:
-                await conn.execute(text("BEGIN"))
                 await conn.execute(text("INSERT INTO async_pool_reset (id) VALUES (1)"))
 
             async with engine.connect() as conn:

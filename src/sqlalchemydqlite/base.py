@@ -571,6 +571,27 @@ class DqliteDialect(SQLiteDialect):
     # active" error is swallowed at the DBAPI layer (dqlitedbapi's
     # Connection.commit / rollback), so the dialect doesn't need its own
     # workaround. Matches stdlib sqlite3 semantics.
+    #
+    # do_begin, by contrast, MUST be overridden. SA's parent
+    # SQLiteDialect_pysqlite.do_begin is ``pass`` because pysqlite's
+    # stdlib driver auto-emits BEGIN before the first DML via the
+    # connection-level ``isolation_level`` attribute. The dqlite dbapi
+    # has no such auto-BEGIN mechanism — without an explicit BEGIN over
+    # the wire the server auto-commits each statement and engine.begin()
+    # blocks would not be atomic (every INSERT independently committed,
+    # ROLLBACK a no-op). Plain ``BEGIN`` (= BEGIN DEFERRED) matches
+    # ``_TRANSACTION_BEGIN_SQL`` in dqliteclient and the C/Go peer
+    # clients; dqlite serialises writes through Raft regardless of the
+    # qualifier so IMMEDIATE / EXCLUSIVE would have no semantic effect.
+    # Errors propagate unwrapped — SA's Connection._begin_impl wraps the
+    # call in _handle_dbapi_exception, so is_disconnect classification
+    # and pool-invalidation kick in for transport-level BEGIN failures.
+    def do_begin(self, dbapi_connection: DBAPIConnection) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("BEGIN")
+        finally:
+            cursor.close()
 
     # Patterns are matched case-insensitively at the comparison site.
     # Stored in lower-case so the single ``.lower()`` at each

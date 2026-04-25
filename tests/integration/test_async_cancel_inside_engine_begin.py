@@ -29,24 +29,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 @pytest.mark.integration
 class TestAsyncCancelInsideEngineBegin:
-    @pytest.mark.xfail(
-        reason=(
-            "Discovered while writing this test: a CancelledError "
-            "fired inside `async with engine.begin()` does NOT roll "
-            "back the uncommitted INSERT against dqlite as of the "
-            "current dialect commit. The row remains visible to a "
-            "fresh fetch. This is either a real defect in the async "
-            "rollback path's cancellation handling, or a "
-            "documented-but-surprising SA contract on cancellation. "
-            "Pinned as xfail so the discovery is not lost; a "
-            "follow-up issue should determine whether the dialect's "
-            "AsyncAdaptedConnection.rollback / close paths swallow "
-            "the rollback when CancelledError is the exit cause, or "
-            "whether SA's engine.begin context manager skips rollback "
-            "on cancellation by design."
-        ),
-        strict=True,
-    )
     async def test_cancel_inside_engine_begin_rolls_back(self, async_engine_url: str) -> None:
         engine = create_async_engine(async_engine_url)
         try:

@@ -46,6 +46,12 @@ def _sync_await(coro: Any) -> Any:
         raise
 
 
+def _reraise(error: BaseException) -> None:
+    """Stand-in for AsyncAdaptedConnection._handle_exception in tests
+    that don't go through a real adapt-connection."""
+    raise error
+
+
 def test_stale_rows_cleared_when_execute_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     from sqlalchemydqlite import aio as aio_mod
     from sqlalchemydqlite.aio import AsyncAdaptedCursor
@@ -60,6 +66,7 @@ def test_stale_rows_cleared_when_execute_raises(monkeypatch: pytest.MonkeyPatch)
     cursor.execute = boom  # type: ignore[method-assign]
     conn_adapter = MagicMock()
     conn_adapter._connection = _FakeConnection(cursor)
+    conn_adapter._handle_exception = _reraise
 
     adapter = AsyncAdaptedCursor(conn_adapter)
     # Seed stale state simulating a prior successful execute.
@@ -92,7 +99,10 @@ def test_stale_rows_cleared_when_executemany_raises(
         raise RuntimeError("bang")
 
     cursor.executemany = boom  # type: ignore[method-assign]
-    conn_adapter = SimpleNamespace(_connection=_FakeConnection(cursor))
+    conn_adapter = SimpleNamespace(
+        _connection=_FakeConnection(cursor),
+        _handle_exception=_reraise,
+    )
 
     adapter = AsyncAdaptedCursor(conn_adapter)  # type: ignore[arg-type]
     adapter.description = [("a", None, None, None, None, None, None)]

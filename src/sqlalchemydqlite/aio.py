@@ -169,33 +169,42 @@ class AsyncAdaptedCursor:
 
         cursor = self._connection.cursor()
         try:
-            if parameters is not None:
-                await_only(cursor.execute(operation, parameters))
-            else:
-                await_only(cursor.execute(operation))
+            try:
+                if parameters is not None:
+                    await_only(cursor.execute(operation, parameters))
+                else:
+                    await_only(cursor.execute(operation))
 
-            if cursor.description:
-                # Fetch first, assign atomically. If ``fetchall`` raises
-                # (CancelledError from an outer timeout, server fault
-                # mid-stream, etc.), ``self.description`` must not be left
-                # set while ``self._rows`` is still empty — SQLAlchemy's
-                # Result layer treats (description, empty rows) as an
-                # empty result set, indistinguishable from "execute
-                # succeeded but fetched no rows".
-                fetched = deque(await_only(cursor.fetchall()))
-                self.description = cursor.description
-                self._rows = fetched
-                # Mirror the DML branch: rowcount / lastrowid are set by
-                # the underlying cursor on the RETURNING path too
-                # (rowcount = len(rows); lastrowid from the last
-                # INSERT). SQLAlchemy's Result layer reads both through
-                # the adapter, so leaving rowcount at -1 would silently
-                # collapse "N rows returned" into "not determinable".
-                self.rowcount = cursor.rowcount
-                self.lastrowid = cursor.lastrowid
-            else:
-                self.lastrowid = cursor.lastrowid
-                self.rowcount = cursor.rowcount
+                if cursor.description:
+                    # Fetch first, assign atomically. If ``fetchall`` raises
+                    # (CancelledError from an outer timeout, server fault
+                    # mid-stream, etc.), ``self.description`` must not be left
+                    # set while ``self._rows`` is still empty — SQLAlchemy's
+                    # Result layer treats (description, empty rows) as an
+                    # empty result set, indistinguishable from "execute
+                    # succeeded but fetched no rows".
+                    fetched = deque(await_only(cursor.fetchall()))
+                    self.description = cursor.description
+                    self._rows = fetched
+                    # Mirror the DML branch: rowcount / lastrowid are set by
+                    # the underlying cursor on the RETURNING path too
+                    # (rowcount = len(rows); lastrowid from the last
+                    # INSERT). SQLAlchemy's Result layer reads both through
+                    # the adapter, so leaving rowcount at -1 would silently
+                    # collapse "N rows returned" into "not determinable".
+                    self.rowcount = cursor.rowcount
+                    self.lastrowid = cursor.lastrowid
+                else:
+                    self.lastrowid = cursor.lastrowid
+                    self.rowcount = cursor.rowcount
+            except BaseException as error:
+                # Route every cursor-level error through the connection's
+                # _handle_exception hook so a single override remaps
+                # driver-layer quirks (loop-mismatch RuntimeError,
+                # client-layer subclass shape, etc.) once instead of
+                # at every execute call site. Mirrors SA's reference
+                # AsyncAdapt_aiosqlite_cursor wrap-all pattern.
+                self._adapt_connection._handle_exception(error)
         finally:
             # ``cursor.close`` is in-memory state-clearing only; a
             # failure here has no external effect. Suppressing it keeps
@@ -235,29 +244,35 @@ class AsyncAdaptedCursor:
 
         cursor = self._connection.cursor()
         try:
-            await_only(cursor.executemany(operation, seq_of_parameters))
-            # Mirror execute()'s post-call pattern: if the statement had
-            # a RETURNING clause, the underlying cursor accumulates rows
-            # across parameter sets and sets a description. Skipping the
-            # description/rows capture silently loses every returned row
-            # when SQLAlchemy's insertmanyvalues + RETURNING path is
-            # driven through the async engine.
-            if cursor.description:
-                # Same fetch-first-then-assign pattern as ``execute``:
-                # a raise from ``fetchall`` must not leave description
-                # populated with empty rows.
-                fetched = deque(await_only(cursor.fetchall()))
-                self.description = cursor.description
-                self._rows = fetched
-                # Mirror execute()'s RETURNING path: rowcount /
-                # lastrowid are accumulated by the underlying cursor
-                # across parameter sets and must flow through the
-                # adapter so SQLAlchemy's Result layer sees them.
-                self.rowcount = cursor.rowcount
-                self.lastrowid = cursor.lastrowid
-            else:
-                self.lastrowid = cursor.lastrowid
-                self.rowcount = cursor.rowcount
+            try:
+                await_only(cursor.executemany(operation, seq_of_parameters))
+                # Mirror execute()'s post-call pattern: if the statement had
+                # a RETURNING clause, the underlying cursor accumulates rows
+                # across parameter sets and sets a description. Skipping the
+                # description/rows capture silently loses every returned row
+                # when SQLAlchemy's insertmanyvalues + RETURNING path is
+                # driven through the async engine.
+                if cursor.description:
+                    # Same fetch-first-then-assign pattern as ``execute``:
+                    # a raise from ``fetchall`` must not leave description
+                    # populated with empty rows.
+                    fetched = deque(await_only(cursor.fetchall()))
+                    self.description = cursor.description
+                    self._rows = fetched
+                    # Mirror execute()'s RETURNING path: rowcount /
+                    # lastrowid are accumulated by the underlying cursor
+                    # across parameter sets and must flow through the
+                    # adapter so SQLAlchemy's Result layer sees them.
+                    self.rowcount = cursor.rowcount
+                    self.lastrowid = cursor.lastrowid
+                else:
+                    self.lastrowid = cursor.lastrowid
+                    self.rowcount = cursor.rowcount
+            except BaseException as error:
+                # Same routing as ``execute``: errors flow through the
+                # connection's _handle_exception hook for centralized
+                # remapping.
+                self._adapt_connection._handle_exception(error)
         finally:
             # Same narrow suppression as ``execute``'s finally block
             # above — see the rationale there. Keeps KI / SystemExit

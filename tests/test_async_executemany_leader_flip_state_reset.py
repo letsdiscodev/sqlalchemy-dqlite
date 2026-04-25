@@ -70,6 +70,17 @@ def _make_adapted_cursor(underlying: _FakeAsyncCursor) -> AsyncAdaptedCursor:
     fake_conn = _FakeAsyncConnection(underlying)
     adapted_conn = MagicMock()
     adapted_conn._connection = fake_conn
+
+    # AsyncAdapted{Connection,Cursor}._handle_exception is the
+    # adapter's central remap point and contractually re-raises (it
+    # has a NoReturn return type). The cursor execute / executemany
+    # methods route errors through it; without an explicit re-raise
+    # in the mock, the cursor would silently swallow the leader-flip
+    # error this test is asserting on.
+    def _reraise(error: BaseException) -> None:
+        raise error
+
+    adapted_conn._handle_exception = _reraise
     return AsyncAdaptedCursor(adapted_conn)
 
 

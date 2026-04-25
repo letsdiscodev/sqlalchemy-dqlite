@@ -383,6 +383,19 @@ class AsyncAdaptedConnection(AdaptedConnection):
     Provides sync-looking methods that internally use await_only() to
     bridge to the underlying async connection within SQLAlchemy's
     greenlet context.
+
+    Cursor lifecycle: ``AsyncAdaptedCursor`` does NOT hold a long-lived
+    dbapi cursor — each ``execute`` / ``executemany`` call opens a
+    fresh ``dqlitedbapi.aio.AsyncCursor`` and closes it in a finally
+    block. As a result the adapter does not need to track cursors for
+    cascade-close: closing the adapter connection closes the
+    underlying ``AsyncConnection`` (which has its own cursor cascade
+    for any long-lived dbapi cursors). A stale adapter cursor used
+    after the parent adapter connection is closed will surface
+    ``InterfaceError`` from the next execute attempt's
+    ``self._connection.cursor()`` call. Mirrors SA's reference
+    ``AsyncAdapt_aiosqlite_connection`` which also does not track
+    adapter cursors.
     """
 
     # Parent ``sqlalchemy.engine.interfaces.AdaptedConnection`` declares

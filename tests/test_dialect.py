@@ -455,6 +455,24 @@ class TestIsDisconnect:
         except dqlitedbapi.exceptions.OperationalError as wrapped:
             assert dialect.is_disconnect(wrapped, None, None) is True
 
+    def test_recognizes_wrapped_leader_change_via_cause(self) -> None:
+        """A leader-change OperationalError that was re-wrapped one
+        extra layer (by middleware, telemetry, the dbapi wrapper) must
+        still classify as a disconnect. Without walking the cause
+        chain the SA pool slot would stay alive while the connection
+        is actually dead.
+        """
+        import dqliteclient.exceptions as _client_exc
+        import dqlitedbapi.exceptions
+        from dqlitewire.constants import SQLITE_IOERR_NOT_LEADER
+
+        dialect = DqliteDialect()
+        inner = _client_exc.OperationalError(SQLITE_IOERR_NOT_LEADER, "not the leader")
+        try:
+            raise dqlitedbapi.exceptions.OperationalError("wrapped") from inner
+        except dqlitedbapi.exceptions.OperationalError as wrapped:
+            assert dialect.is_disconnect(wrapped, None, None) is True
+
 
 class TestIsolationLevel:
     def test_set_isolation_level_raises_on_unsupported(self) -> None:

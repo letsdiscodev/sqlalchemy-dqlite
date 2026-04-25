@@ -662,10 +662,16 @@ class DqliteDialect(SQLiteDialect):
             if "connection is closed" in message or "cursor is closed" in message:
                 return True
         # Leader-change error codes signal that the connection is useless
-        # even though it's TCP-alive.
-        for err in (_dbapi_exc.OperationalError, _client_exc.OperationalError):
-            if isinstance(e, err) and getattr(e, "code", None) in _LEADER_CHANGE_CODES:
-                return True
+        # even though it's TCP-alive. Walk the cause chain so a
+        # leader-change OperationalError that was re-wrapped one extra
+        # layer deep (by middleware, retry decorators, telemetry, the
+        # dbapi wrapper that strips the code, etc.) is still
+        # classified as a disconnect — without this, the SA pool slot
+        # would stay alive while the connection is actually dead.
+        for cause in _walk_cause_chain(e):
+            for err in (_dbapi_exc.OperationalError, _client_exc.OperationalError):
+                if isinstance(cause, err) and getattr(cause, "code", None) in _LEADER_CHANGE_CODES:
+                    return True
         # Legacy substring fallback — kept so we still catch anything
         # that wasn't modelled as a specific exception type yet. Match
         # case-insensitively: wire-layer / client-layer message

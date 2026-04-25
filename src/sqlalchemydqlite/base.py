@@ -694,6 +694,46 @@ class DqliteDialect(SQLiteDialect):
                     return True
         return super().is_disconnect(e, connection, cursor)
 
+    # Two-phase commit is not supported by dqlite (no XA transaction
+    # coordinator on the server). ``requirements.py`` already declares
+    # ``two_phase_transactions = exclusions.closed()`` so the SA
+    # compliance suite skips the corresponding tests; the runtime
+    # overrides below surface the unavailability via PEP 249's
+    # ``NotSupportedError`` rather than the inherited ``DefaultDialect``
+    # ``NotImplementedError``. Callers writing
+    # ``except sqlalchemy.exc.NotSupportedError`` to detect "feature
+    # unavailable in this backend" then catch the dqlite case without
+    # needing a duplicate ``except NotImplementedError`` branch only
+    # for this dialect.
+    def do_begin_twophase(self, connection: Any, xid: Any) -> None:
+        raise _dbapi_exc.NotSupportedError(
+            "dqlite does not support two-phase commit; use single-engine transactions instead."
+        )
+
+    def do_prepare_twophase(self, connection: Any, xid: Any) -> None:
+        raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+
+    def do_commit_twophase(
+        self,
+        connection: Any,
+        xid: Any,
+        is_prepared: bool = True,
+        recover: bool = False,
+    ) -> None:
+        raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+
+    def do_rollback_twophase(
+        self,
+        connection: Any,
+        xid: Any,
+        is_prepared: bool = True,
+        recover: bool = False,
+    ) -> None:
+        raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+
+    def do_recover_twophase(self, connection: Any) -> list[Any]:
+        raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+
     def do_ping(self, dbapi_connection: Any) -> bool:
         """Check if the connection is still alive.
 

@@ -61,3 +61,30 @@ def test_insertmanyvalues_max_parameters_not_capped(cls: type) -> None:
         f"insertmanyvalues_max_parameters={d.insertmanyvalues_max_parameters!r}; "
         f"the parent's pre-3.32 fallback (999) has leaked through"
     )
+
+
+@pytest.mark.parametrize("cls", [DqliteDialect, DqliteDialect_aio])
+def test_paramstyle_kwarg_override_raises_argument_error(cls: type) -> None:
+    """``DefaultDialect.__init__`` accepts a ``paramstyle`` kwarg and
+    overwrites the class-level ``"qmark"`` pin. The dbapi only accepts
+    qmark; silently accepting another paramstyle would compile SQL
+    that produces cryptic ProgrammingError at execute time. Reject
+    the kwarg up-front."""
+    from sqlalchemy.exc import ArgumentError
+
+    with pytest.raises(ArgumentError, match="paramstyle"):
+        cls(paramstyle="named")
+    with pytest.raises(ArgumentError, match="paramstyle"):
+        cls(paramstyle="format")
+    with pytest.raises(ArgumentError, match="paramstyle"):
+        cls(paramstyle="pyformat")
+    with pytest.raises(ArgumentError, match="paramstyle"):
+        cls(paramstyle="numeric")
+
+
+@pytest.mark.parametrize("cls", [DqliteDialect, DqliteDialect_aio])
+def test_paramstyle_kwarg_qmark_accepted_as_noop(cls: type) -> None:
+    """Negative pin: explicit ``paramstyle="qmark"`` (matching the
+    pin) is accepted as a no-op."""
+    d = cls(paramstyle="qmark")
+    assert d.paramstyle == "qmark"

@@ -448,6 +448,19 @@ class DqliteDialect(SQLiteDialect):
         # directly intended. SA-internal dialect construction always
         # passes kwargs, so narrowing the signature is non-breaking for
         # the engine-factory path and closes the positional-foot-gun.
+        #
+        # ``DefaultDialect.__init__`` accepts a ``paramstyle`` kwarg
+        # and assigns it to ``self.paramstyle`` — overwriting the
+        # class-level ``"qmark"`` pin. The dbapi only accepts qmark;
+        # silently accepting ``paramstyle="named"`` would compile SQL
+        # with ``:name`` placeholders that produce cryptic
+        # ProgrammingError at execute time. Reject the kwarg up-front
+        # so the user sees a config-time ArgumentError.
+        if "paramstyle" in kwargs and kwargs["paramstyle"] != "qmark":
+            raise ArgumentError(
+                "dqlite dialect requires paramstyle='qmark'; "
+                f"got {kwargs['paramstyle']!r}"
+            )
         super().__init__(**kwargs)
         # ``SQLiteDialect.__init__`` writes *instance* attributes based
         # on ``self.dbapi.sqlite_version_info`` and ``util.pypy``:

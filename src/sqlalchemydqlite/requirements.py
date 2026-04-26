@@ -55,6 +55,22 @@ class Requirements(SuiteRequirements):
         return exclusions.closed()
 
     @property
+    def skip_autocommit_rollback(self) -> compound:
+        """The dialect implements ``detect_autocommit_setting`` (returns
+        False unconditionally; see :meth:`DqliteDialect.detect_autocommit_setting`)
+        and inherits SA's default ``do_rollback``. Per SA's marker
+        docstring ("target dialect supports the
+        detect_autocommit_setting() method and uses the default
+        implementation of do_rollback()"), this enables the SA
+        compliance suite tests for the autocommit-rollback fast-path
+        optimisation. Without the explicit ``open()``, those tests are
+        skipped silently (SA default is ``exclusions.closed()``), so a
+        regression in ``detect_autocommit_setting`` would not surface
+        from compliance runs.
+        """
+        return exclusions.open()
+
+    @property
     def temp_table_reflection(self) -> compound:
         """SQLite supports temp table reflection."""
         return exclusions.open()

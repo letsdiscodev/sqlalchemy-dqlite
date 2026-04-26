@@ -38,7 +38,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 _Base = declarative_base()
 
 
-class _AtomicRow(_Base):
+class _AtomicRow(_Base):  # type: ignore[misc,valid-type]
     __tablename__ = "atomic_orm_rows"
     id = Column(Integer, primary_key=True)
     val = Column(String, nullable=True)
@@ -255,7 +255,7 @@ class TestEngineBeginEmitsBeginOverWire:
         recorded: list[str] = []
         orig_execute = cc.DqliteConnection.execute
 
-        async def traced(self, sql, params=None):  # type: ignore[no-untyped-def]
+        async def traced(self, sql, params=None):
             recorded.append(sql)
             return await orig_execute(self, sql, params)
 
@@ -266,12 +266,12 @@ class TestEngineBeginEmitsBeginOverWire:
                 await conn.execute(text("CREATE TABLE wire_trace (id INTEGER PRIMARY KEY)"))
 
             recorded.clear()
-            cc.DqliteConnection.execute = traced  # type: ignore[method-assign]
+            cc.DqliteConnection.execute = traced
             try:
                 async with engine.begin() as conn:
                     await conn.execute(text("INSERT INTO wire_trace (id) VALUES (1)"))
             finally:
-                cc.DqliteConnection.execute = orig_execute  # type: ignore[method-assign]
+                cc.DqliteConnection.execute = orig_execute
 
             # The trace MUST start with BEGIN; the INSERT MUST follow;
             # the COMMIT MUST close it. Other entries (pool reset
@@ -284,7 +284,7 @@ class TestEngineBeginEmitsBeginOverWire:
         finally:
             await engine.dispose()
             # Be paranoid about restoration in case of test infrastructure failure.
-            cc.DqliteConnection.execute = orig_execute  # type: ignore[method-assign]
+            cc.DqliteConnection.execute = orig_execute
 
 
 # Suppress unused-import warning for asyncio (tests use it implicitly via pytest-asyncio).

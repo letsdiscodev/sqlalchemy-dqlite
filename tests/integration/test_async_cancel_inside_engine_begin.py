@@ -72,7 +72,7 @@ class TestAsyncCancelInsideEngineBegin:
             # Pool checkedout should be 0 (all returned/discarded);
             # checkedin + checkedout should be ≤ pool_size + max_overflow.
             pool = engine.pool
-            checkedout = pool.checkedout()
+            checkedout = pool.checkedout()  # type: ignore[attr-defined]
             assert checkedout == 0, (
                 f"pool slots leaked: {checkedout} still checked out after cancellation cycles"
             )

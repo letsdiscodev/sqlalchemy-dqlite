@@ -50,13 +50,13 @@ def test_close_logs_rollback_failure(caplog: pytest.LogCaptureFixture) -> None:
 
         return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-    orig = aio_module.await_only
-    aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+    orig = aio_module.await_only  # type: ignore[attr-defined]
+    aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
     try:
         with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.aio"):
             adapter.close()
     finally:
-        aio_module.await_only = orig  # type: ignore[assignment]
+        aio_module.await_only = orig  # type: ignore[attr-defined]
 
     matching = [
         r
@@ -86,13 +86,13 @@ def test_close_propagates_programming_bug() -> None:
 
         return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-    orig = aio_module.await_only
-    aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+    orig = aio_module.await_only  # type: ignore[attr-defined]
+    aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
     try:
         with pytest.raises(RuntimeError, match="programming bug"):
             adapter.close()
     finally:
-        aio_module.await_only = orig  # type: ignore[assignment]
+        aio_module.await_only = orig  # type: ignore[attr-defined]
 
 
 def test_close_with_also_failing_transport_errors(caplog: pytest.LogCaptureFixture) -> None:
@@ -109,13 +109,13 @@ def test_close_with_also_failing_transport_errors(caplog: pytest.LogCaptureFixtu
 
         return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-    orig = aio_module.await_only
-    aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+    orig = aio_module.await_only  # type: ignore[attr-defined]
+    aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
     try:
         with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.aio"):
             adapter.close()
     finally:
-        aio_module.await_only = orig  # type: ignore[assignment]
+        aio_module.await_only = orig  # type: ignore[attr-defined]
 
     matching = [
         r
@@ -162,13 +162,13 @@ def test_close_suppresses_os_level_rollback_errors(
 
         return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-    orig = aio_module.await_only
-    aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+    orig = aio_module.await_only  # type: ignore[attr-defined]
+    aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
     try:
         with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.aio"):
             adapter.close()
     finally:
-        aio_module.await_only = orig  # type: ignore[assignment]
+        aio_module.await_only = orig  # type: ignore[attr-defined]
 
     matching = [
         r
@@ -200,10 +200,10 @@ def test_close_propagates_value_error_out_of_tuple() -> None:
 
         return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-    orig = aio_module.await_only
-    aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+    orig = aio_module.await_only  # type: ignore[attr-defined]
+    aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
     try:
         with pytest.raises(ValueError, match="parameter out of range"):
             adapter.close()
     finally:
-        aio_module.await_only = orig  # type: ignore[assignment]
+        aio_module.await_only = orig  # type: ignore[attr-defined]

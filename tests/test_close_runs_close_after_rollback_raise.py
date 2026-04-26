@@ -43,8 +43,8 @@ def _install_fake_await_only() -> tuple[object, object]:
     def _fake_await_only(coro: object) -> object:
         return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-    orig = aio_module.await_only
-    aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+    orig = aio_module.await_only  # type: ignore[attr-defined]
+    aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
     return aio_module, orig
 
 

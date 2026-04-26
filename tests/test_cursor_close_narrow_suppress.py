@@ -25,7 +25,7 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection, AsyncAdaptedCursor
 def _run_sync(coro_or_value: object) -> object:
     if hasattr(coro_or_value, "__await__") or hasattr(coro_or_value, "cr_await"):
         try:
-            coro_or_value.send(None)  # type: ignore[union-attr]
+            coro_or_value.send(None)  # type: ignore[attr-defined]
         except StopIteration as e:
             return e.value
     return coro_or_value

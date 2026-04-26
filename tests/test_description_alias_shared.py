@@ -8,7 +8,9 @@ modules.
 from __future__ import annotations
 
 from dqlitedbapi.types import _DescriptionTuple as _DbapiDescriptionTuple
-from sqlalchemydqlite.aio import _DescriptionTuple as _AdapterDescriptionTuple
+from sqlalchemydqlite.aio import (  # type: ignore[attr-defined]
+    _DescriptionTuple as _AdapterDescriptionTuple,
+)
 
 
 def test_description_tuple_alias_is_shared() -> None:

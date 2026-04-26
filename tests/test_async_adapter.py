@@ -24,7 +24,7 @@ def _run_sync(coro_or_value: object) -> object:
         # It's a coroutine -- we can't actually await it in sync context,
         # but our mocks return plain values, so send(None) is enough.
         try:
-            coro_or_value.send(None)  # type: ignore[union-attr]
+            coro_or_value.send(None)  # type: ignore[attr-defined]
         except StopIteration as e:
             return e.value
     return coro_or_value
@@ -153,7 +153,7 @@ class TestAsyncAdaptedCursorRowsCleared:
 
 def _has_finally_with_close(func: object) -> bool:
     """Check if a function has cursor.close() inside a finally block."""
-    source = textwrap.dedent(inspect.getsource(func))
+    source = textwrap.dedent(inspect.getsource(func))  # type: ignore[arg-type]
     tree = ast.parse(source)
 
     for node in ast.walk(tree):
@@ -225,8 +225,8 @@ class TestAsyncAdaptedConnectionClose:
     def test_close_attempts_rollback_first(self) -> None:
         mock_conn = MagicMock()
         calls: list[str] = []
-        mock_conn.rollback.side_effect = lambda: calls.append("rollback") or object()
-        mock_conn.close.side_effect = lambda: calls.append("close") or object()
+        mock_conn.rollback.side_effect = lambda: calls.append("rollback") or object()  # type: ignore[func-returns-value]
+        mock_conn.close.side_effect = lambda: calls.append("close") or object()  # type: ignore[func-returns-value]
 
         adapted = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
         adapted._connection = mock_conn
@@ -250,7 +250,7 @@ class TestAsyncAdaptedConnectionClose:
             raise OperationalError("simulated rollback failure")
 
         mock_conn.rollback.side_effect = failing_rollback
-        mock_conn.close.side_effect = lambda: calls.append("close") or object()
+        mock_conn.close.side_effect = lambda: calls.append("close") or object()  # type: ignore[func-returns-value]
 
         adapted = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
         adapted._connection = mock_conn
@@ -485,7 +485,7 @@ class TestAioAdapterCursorFetchMethods:
 
     def test_iter_drains_deque(self) -> None:
         cursor = self._cursor_with_rows([(1,), (2,), (3,)])
-        assert list(cursor) == [(1,), (2,), (3,)]
+        assert list(cursor) == [(1,), (2,), (3,)]  # type: ignore[call-overload]
         assert len(cursor._rows) == 0  # type: ignore[attr-defined]
 
 

@@ -89,7 +89,7 @@ class TestAsyncExecutemany:
                 result = await conn.execute(
                     text("SELECT owner, COUNT(*) FROM async_em_sequential GROUP BY owner")
                 )
-                counts = dict(result.fetchall())
+                counts = dict(result.fetchall())  # type: ignore[arg-type,var-annotated]
                 assert counts == {"a": 3, "b": 4}, (
                     f"executemany leaked rows between sequential tasks: "
                     f"expected {{'a': 3, 'b': 4}}, got {counts}"

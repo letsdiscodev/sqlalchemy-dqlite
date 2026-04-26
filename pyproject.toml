@@ -61,6 +61,33 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.mypy]
 strict = true
 python_version = "3.13"
+# Tests live under ``tests/`` with no ``__init__.py``; mypy needs
+# ``explicit_package_bases`` (or namespace packages) to avoid the
+# duplicate-conftest module-name collision when scanning sibling
+# integration/ subdirectories. ``mypy_path`` mirrors the
+# ``pythonpath = ["src"]`` declared for pytest so the source files
+# resolve under the package name (``sqlalchemydqlite``), not the
+# layout path (``src.sqlalchemydqlite``).
+explicit_package_bases = true
+mypy_path = "src"
+
+# Tests use a few patterns that mypy's strict mode flags but are
+# correct at runtime. Disabling these codes only inside ``tests.*``
+# keeps strict typing on production code while letting the test suite
+# use idiomatic patterns without per-line ``# type: ignore`` noise:
+#
+# * ``method-assign`` — monkey-patching bound methods
+#   (``conn.execute = fake_execute``) is the standard way to inject a
+#   fake without subclassing.
+# * ``no-untyped-def`` / ``no-untyped-call`` — pytest fixtures and
+#   small helpers are conventionally written without type annotations.
+# * ``comparison-overlap`` — ``assert SomeIntEnum.FOO == 0`` is the
+#   canonical "this enum matches its int value" pin against a
+#   reference table; mypy's literal-type narrowing incorrectly flags
+#   it as non-overlapping even though IntEnum's ``__eq__`` works.
+[[tool.mypy.overrides]]
+module = "tests.*"
+disable_error_code = ["method-assign", "no-untyped-def", "no-untyped-call", "comparison-overlap"]
 
 [tool.ruff]
 target-version = "py313"

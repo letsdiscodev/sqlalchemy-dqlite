@@ -53,7 +53,7 @@ class TestDateTzDrop:
             # SQLAlchemy will call str() / isoformat() on the tz-aware
             # datetime at bind time. Whatever the wire protocol returns
             # is narrowed to datetime.date on read.
-            s.add(DateModel(d=utc_midnight.date()))  # type: ignore[arg-type]
+            s.add(DateModel(d=utc_midnight.date()))
             s.commit()
             result = s.query(DateModel).order_by(DateModel.id.desc()).first()
             assert result is not None

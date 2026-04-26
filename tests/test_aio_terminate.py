@@ -62,12 +62,12 @@ class TestAsyncAdaptedConnectionTerminate:
 
             return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-        orig = aio_module.await_only
-        aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+        orig = aio_module.await_only  # type: ignore[attr-defined]
+        aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
         try:
             adapter.terminate()
         finally:
-            aio_module.await_only = orig  # type: ignore[assignment]
+            aio_module.await_only = orig  # type: ignore[attr-defined]
 
         assert fake.rollback_calls == 0
         assert fake.close_calls == 1
@@ -94,8 +94,8 @@ class TestTerminateSuppressesTransportExceptions:
         def _fake(coro: object) -> object:
             return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-        orig = aio_module.await_only
-        aio_module.await_only = _fake  # type: ignore[assignment]
+        orig = aio_module.await_only  # type: ignore[attr-defined]
+        aio_module.await_only = _fake  # type: ignore[assignment,attr-defined]
         return aio_module, orig
 
     def _run_terminate(self, close_exc: BaseException) -> _FakeAsyncConnWithExc:
@@ -202,12 +202,12 @@ class TestDoTerminateDelegatesToAdapter:
 
             return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-        orig = aio_module.await_only
-        aio_module.await_only = _fake_await_only  # type: ignore[assignment]
+        orig = aio_module.await_only  # type: ignore[attr-defined]
+        aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
         try:
             dialect.do_terminate(adapter)
         finally:
-            aio_module.await_only = orig  # type: ignore[assignment]
+            aio_module.await_only = orig  # type: ignore[attr-defined]
 
         assert fake.rollback_calls == 0
         assert fake.close_calls == 1

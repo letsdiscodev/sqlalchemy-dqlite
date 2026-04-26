@@ -47,8 +47,8 @@ def _swap_await_only() -> tuple[object, object]:
     def _fake(coro: object) -> object:
         return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
-    orig = aio_module.await_only
-    aio_module.await_only = _fake  # type: ignore[assignment]
+    orig = aio_module.await_only  # type: ignore[attr-defined]
+    aio_module.await_only = _fake  # type: ignore[assignment,attr-defined]
     return aio_module, orig
 
 

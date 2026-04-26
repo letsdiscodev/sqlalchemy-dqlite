@@ -63,7 +63,7 @@ def test_stale_rows_cleared_when_execute_raises(monkeypatch: pytest.MonkeyPatch)
     async def boom(*a: Any, **kw: Any) -> None:
         raise RuntimeError("bang")
 
-    cursor.execute = boom  # type: ignore[method-assign]
+    cursor.execute = boom
     conn_adapter = MagicMock()
     conn_adapter._connection = _FakeConnection(cursor)
     conn_adapter._handle_exception = _reraise
@@ -98,7 +98,7 @@ def test_stale_rows_cleared_when_executemany_raises(
     async def boom(*a: Any, **kw: Any) -> None:
         raise RuntimeError("bang")
 
-    cursor.executemany = boom  # type: ignore[method-assign]
+    cursor.executemany = boom
     conn_adapter = SimpleNamespace(
         _connection=_FakeConnection(cursor),
         _handle_exception=_reraise,

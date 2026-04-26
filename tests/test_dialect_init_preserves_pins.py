@@ -57,7 +57,7 @@ def test_insertmanyvalues_max_parameters_not_capped(cls: type) -> None:
         f"instance level so the parent's version-gated write cannot "
         f"silently shadow it."
     )
-    assert d.insertmanyvalues_max_parameters > 999, (  # type: ignore[attr-defined]
-        f"insertmanyvalues_max_parameters={d.insertmanyvalues_max_parameters!r}; "  # type: ignore[attr-defined]
+    assert d.insertmanyvalues_max_parameters > 999, (
+        f"insertmanyvalues_max_parameters={d.insertmanyvalues_max_parameters!r}; "
         f"the parent's pre-3.32 fallback (999) has leaked through"
     )

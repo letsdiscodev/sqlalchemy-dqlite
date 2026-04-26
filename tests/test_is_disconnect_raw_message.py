@@ -40,6 +40,27 @@ def test_substring_match_falls_back_to_str_when_raw_message_absent() -> None:
     assert DqliteDialect().is_disconnect(e, None, None) is True
 
 
+def test_empty_string_raw_message_falls_back_to_str_cause() -> None:
+    """Pin: an empty-string ``raw_message`` triggers the ``or
+    str(cause)`` fallback so the substring scan still hits the
+    truncated displayed form. Without the falsy-OR (e.g., a
+    ``raw_message if ... is not None else str(cause)`` rewrite), an
+    empty raw_message would short-circuit the scan against ``""`` and
+    drop the disconnect signal.
+
+    The dbapi ``DatabaseError.__init__`` only auto-fills
+    ``raw_message`` when it is passed as ``None``; an explicit
+    ``raw_message=""`` is preserved verbatim. Internal call sites that
+    construct OperationalErrors with an explicit empty ``raw_message``
+    (placeholder while the full text is fetched out-of-band, defensive
+    construction in middleware, etc.) must not lose disconnect
+    classification.
+    """
+    e = OperationalError("Wire decode failed: corrupt frame", raw_message="")
+    assert e.raw_message == ""
+    assert DqliteDialect().is_disconnect(e, None, None) is True
+
+
 def test_substring_branch_safe_for_non_dbapi_causes() -> None:
     """Negative pin: a non-dbapi exception (no ``raw_message``
     attribute) wrapped on the cause chain must not crash the classifier

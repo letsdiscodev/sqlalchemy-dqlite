@@ -81,6 +81,37 @@ def _walk_cause_chain(e: BaseException, max_depth: int = 25) -> Iterator[BaseExc
                 queue.append((child, depth))
 
 
+def _parse_url_int_or_none(key: str, raw: str, *, upper: int) -> int | None:
+    """Strict int-or-``None`` parser for URL row/frame governors.
+
+    Accepts:
+
+    * ``"none"`` (case-insensitive) → ``None`` — disables the cap,
+      mirroring the dbapi ``connect(max_total_rows=None)`` capability
+      so URL-driven config (twelve-factor, env-var-driven engines)
+      can express the same intent.
+    * Any integer in ``1..upper`` — returns the int.
+
+    Raises ``ArgumentError`` on anything else so a typo (``-1``,
+    ``"infinite"``, garbage) fails at URL-parse time instead of much
+    later when the caller tries to fetch.
+    """
+    token = raw.strip().lower()
+    if token == "none":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as e:
+        raise ArgumentError(
+            f"URL query {key}={raw!r} must be a positive integer or 'none' to disable: {e}"
+        ) from e
+    if not (0 < value <= upper):
+        raise ArgumentError(
+            f"URL query {key}={raw!r} is out of range (1..{upper}, or 'none' to disable)"
+        )
+    return value
+
+
 def _parse_url_bool(key: str, raw: str) -> bool:
     """Strict bool parser for URL query parameters.
 
@@ -484,10 +515,24 @@ class DqliteDialect(SQLiteDialect):
     # pragmatic: 2**31-1 rows and 10x the default frame cap leave
     # plenty of headroom for real workloads while refusing values
     # only a typo would supply.
+    #
+    # ``max_total_rows`` and ``max_continuation_frames`` accept the
+    # literal token ``"none"`` (case-insensitive) → ``None`` to disable
+    # the cap, mirroring the dbapi ``connect(max_total_rows=None)``
+    # capability so URL-driven config (twelve-factor, env-var-driven
+    # engines) can express the same intent. The 1_000_000 frame
+    # ceiling is the dialect's own defense-in-depth cap; the dbapi /
+    # wire layers do not enforce a hard ceiling.
     _URL_QUERY_ALLOWED: dict[str, tuple[Callable[[str], Any], Callable[[Any], bool] | None]] = {
         "timeout": (float, lambda v: math.isfinite(v) and v > 0),
-        "max_total_rows": (int, lambda v: 0 < v <= 2**31 - 1),
-        "max_continuation_frames": (int, lambda v: 0 < v <= 1_000_000),
+        "max_total_rows": (
+            lambda s: _parse_url_int_or_none("max_total_rows", s, upper=2**31 - 1),
+            None,
+        ),
+        "max_continuation_frames": (
+            lambda s: _parse_url_int_or_none("max_continuation_frames", s, upper=1_000_000),
+            None,
+        ),
         "trust_server_heartbeat": (
             lambda s: _parse_url_bool("trust_server_heartbeat", s),
             None,

@@ -674,6 +674,12 @@ class DqliteDialect(SQLiteDialect):
         # ``InterfaceError``) so the substring branch can see it.
         "wire decode failed",
         "wire stream error",
+        # ``await_only`` raises ``RuntimeError("<Future ... attached
+        # to a different loop>")`` when an ``AsyncConnection`` is
+        # reused across event loops. The async adapter's
+        # ``_handle_exception`` remaps that to ``OperationalError``
+        # with the substring preserved so this branch can classify it.
+        "different loop",
     )
 
     def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:

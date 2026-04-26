@@ -472,12 +472,28 @@ class AsyncAdaptedConnection(AdaptedConnection):
         """Adapter-level exception normalisation hook.
 
         Matches the ``AsyncAdapt_aiosqlite_connection._handle_exception``
-        extension point in SA's reference dialect. Default is identity
-        re-raise; subclasses can override to remap driver-layer quirks
-        in one place (for example, turning a raw ``RuntimeError`` from
-        ``await_only`` into ``dbapi.OperationalError`` so
-        ``is_disconnect`` can classify it).
+        extension point in SA's reference dialect. Centralises the
+        remap of driver-layer quirks so commit/rollback/execute /
+        executemany do not each re-implement the same translation.
+
+        Concrete remaps:
+
+        * ``RuntimeError`` from ``await_only`` whose message contains
+          ``"different loop"`` (or the variant ``"attached to a
+          different loop"``) — surfaces when an ``AsyncConnection`` is
+          reused across two event loops (e.g., ``asyncio.run()`` per
+          call). The bare ``RuntimeError`` would not be classified by
+          SA (``isinstance(e, dbapi.Error)`` gates ``is_disconnect``),
+          so the pool would not invalidate the slot and the next
+          checkout would hit the same fault. Re-raise as
+          ``dbapi.OperationalError`` (with the ``"different loop"``
+          substring preserved) so the dialect's substring fallback
+          classifies it as a disconnect.
         """
+        if isinstance(error, RuntimeError):
+            msg = str(error)
+            if "different loop" in msg or "attached to a different loop" in msg:
+                raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
         raise error
 
     def commit(self) -> None:

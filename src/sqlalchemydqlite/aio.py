@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from sqlalchemy import pool
 from sqlalchemy.engine import URL, AdaptedConnection
+from sqlalchemy.exc import MissingGreenlet
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
 
@@ -568,6 +569,11 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # Other RuntimeErrors (e.g., "Event loop is closed"
                 # during dispose) propagate.
                 raise
+            except MissingGreenlet:
+                # Non-greenlet finalize path — skip the rollback step
+                # and fall through to the finally's close, which has
+                # its own MissingGreenlet catch + sync fallback.
+                pass
         finally:
             # Narrow the close-time exception set to transport-class
             # failures. A transient OSError / DqliteConnectionError
@@ -592,6 +598,59 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     type(exc).__name__,
                     exc_info=True,
                 )
+            except MissingGreenlet:
+                # ``await_only`` requires an SA greenlet context. SA's
+                # pool can invoke ``_finalize_fairy`` from a non-
+                # greenlet path (GC sweep, atexit, background sync
+                # thread); without this fallback, ``MissingGreenlet``
+                # would propagate to ``pool/base.py``'s ``except
+                # BaseException`` and the underlying socket would leak
+                # until process exit.
+                self._force_close_transport()
+
+    def _force_close_transport(self) -> None:
+        """Best-effort synchronous teardown of the underlying transport.
+
+        Bypasses the async ``DqliteConnection.close`` machinery
+        (which requires an event loop / greenlet context) and closes
+        the writer transport directly. The reader half is closed by
+        the OS as a side effect of the writer close. Used when SA's
+        finalize path runs outside a greenlet (e.g., GC sweep), where
+        ``await_only`` would raise ``MissingGreenlet`` and the SA pool
+        would silently absorb it.
+
+        Idempotent: a missing protocol / writer is logged and
+        absorbed. Any exception from ``writer.close()`` is also
+        absorbed — this is a last-resort cleanup and must not raise.
+        """
+        peer = getattr(self._connection, "address", None)
+        try:
+            proto = getattr(self._connection, "_protocol", None)
+            if proto is not None:
+                writer = getattr(proto, "_writer", None)
+                if writer is not None:
+                    writer.close()  # synchronous; safe outside loop
+            # Null the local refs so a subsequent close()/terminate()
+            # short-circuits cleanly.
+            with contextlib.suppress(AttributeError):  # pragma: no cover - defensive
+                self._connection._protocol = None
+            with contextlib.suppress(AttributeError):  # pragma: no cover - defensive
+                self._connection._closed = True
+            logger.debug(
+                "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
+                "fell back to sync writer.close() outside greenlet",
+                id(self),
+                peer,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(
+                "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
+                "best-effort sync close raised (%s); ignoring",
+                id(self),
+                peer,
+                type(exc).__name__,
+                exc_info=True,
+            )
 
     def terminate(self) -> None:
         """Force-close the underlying connection without rollback.
@@ -623,6 +682,10 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 type(exc).__name__,
                 exc_info=True,
             )
+        except MissingGreenlet:
+            # See close()'s sibling catch — non-greenlet finalize
+            # paths fall back to a sync transport close.
+            self._force_close_transport()
 
 
 class DqliteDialect_aio(DqliteDialect):

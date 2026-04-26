@@ -458,8 +458,7 @@ class DqliteDialect(SQLiteDialect):
         # so the user sees a config-time ArgumentError.
         if "paramstyle" in kwargs and kwargs["paramstyle"] != "qmark":
             raise ArgumentError(
-                "dqlite dialect requires paramstyle='qmark'; "
-                f"got {kwargs['paramstyle']!r}"
+                f"dqlite dialect requires paramstyle='qmark'; got {kwargs['paramstyle']!r}"
             )
         super().__init__(**kwargs)
         # ``SQLiteDialect.__init__`` writes *instance* attributes based

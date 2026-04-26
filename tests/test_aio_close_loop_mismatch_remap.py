@@ -25,9 +25,7 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection
 async def test_close_remaps_loop_mismatch_runtimeerror_to_operational_error() -> None:
     adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
     inner = MagicMock()
-    inner.rollback = AsyncMock(
-        side_effect=RuntimeError("Future ... attached to a different loop")
-    )
+    inner.rollback = AsyncMock(side_effect=RuntimeError("Future ... attached to a different loop"))
     inner.close = AsyncMock()
     inner.address = "localhost:9001"
     adapter._connection = inner

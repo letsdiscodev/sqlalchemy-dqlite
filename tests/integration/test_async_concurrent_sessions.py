@@ -68,7 +68,9 @@ class TestAsyncConcurrentSessions:
 
             async with engine.begin() as conn:
                 rows = (await conn.execute(text("SELECT id FROM async_pk_conflict"))).all()
-            assert rows == [(1,)]
+            # SA Row supports __eq__ with tuples at runtime; mypy's
+            # type stubs for ``Sequence[Row[Any]]`` don't reflect that.
+            assert [tuple(r) for r in rows] == [(1,)]
         finally:
             await engine.dispose()
 

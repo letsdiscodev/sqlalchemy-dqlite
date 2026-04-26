@@ -574,6 +574,16 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # and fall through to the finally's close, which has
                 # its own MissingGreenlet catch + sync fallback.
                 pass
+            # ``CancelledError`` from the rollback await is allowed to
+            # propagate so the cancellation signal is preserved — the
+            # finally below still runs close(), and the close arm's
+            # CancelledError catch routes through the sync force-close
+            # fallback before re-raising. Suppressing here would
+            # convert a still-active cancel into a clean return,
+            # contradicting asyncio's "cancellation propagates"
+            # contract; the prior test
+            # ``test_close_runs_close_after_rollback_raise.py`` pins
+            # that contract.
         finally:
             # Narrow the close-time exception set to transport-class
             # failures. A transient OSError / DqliteConnectionError
@@ -607,6 +617,15 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # BaseException`` and the underlying socket would leak
                 # until process exit.
                 self._force_close_transport()
+            except asyncio.CancelledError:
+                # Cancel landing on the close await (canonical trigger:
+                # an outer ``asyncio.timeout`` mid-``engine.dispose()``
+                # under SIGTERM-with-budget). Run the sync transport
+                # fallback so the writer is closed even though the
+                # async machinery was interrupted, then re-raise so
+                # the cancel still propagates to the caller.
+                self._force_close_transport()
+                raise
 
     def _force_close_transport(self) -> None:
         """Best-effort synchronous teardown of the underlying transport.
@@ -686,6 +705,15 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # See close()'s sibling catch — non-greenlet finalize
             # paths fall back to a sync transport close.
             self._force_close_transport()
+        except asyncio.CancelledError:
+            # See close()'s sibling catch — outer cancel during a
+            # forced reclaim must still close the writer transport
+            # synchronously before propagating, otherwise SA's
+            # ``has_terminate=True`` promise (the pool can always
+            # reclaim a slot) breaks under SIGTERM-with-budget
+            # shutdown.
+            self._force_close_transport()
+            raise
 
 
 class DqliteDialect_aio(DqliteDialect):

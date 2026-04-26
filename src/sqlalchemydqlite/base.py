@@ -851,8 +851,26 @@ class DqliteDialect(SQLiteDialect):
         # server text on ``raw_message``. A disconnect substring past
         # byte 1024 would otherwise be invisible to ``str(cause)``
         # (which returns the truncated ``args[0]``).
+        # Restrict the substring scan to (a) ``OperationalError`` (the
+        # historical surface — wire-decode/transport failures) and (b)
+        # bare ``DatabaseError`` with codes 11/24/26 (CORRUPT / FORMAT /
+        # NOTADB) — the codes that motivated the round-2 widening to
+        # ``DatabaseError``. Without the code-restriction on the
+        # DatabaseError branch, a server-supplied user-defined error
+        # message inside an ``IntegrityError`` (e.g. ``RAISE(ABORT,
+        # '...timed out validating peer')``) would match the loose
+        # ``"timed out"`` substring and be classified as a disconnect.
+        # SA pool would then invalidate-and-retry — duplicating
+        # non-idempotent INSERTs.
+        _BARE_DBE_DISCONNECT_CODES = {11, 24, 26}
         for cause in _walk_cause_chain(e):
-            if isinstance(cause, _dbapi_exc.DatabaseError):
+            if isinstance(cause, _dbapi_exc.OperationalError):
+                applies = True
+            elif isinstance(cause, _dbapi_exc.DatabaseError):
+                applies = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
+            else:
+                applies = False
+            if applies:
                 text = getattr(cause, "raw_message", None) or str(cause)
                 msg_lower = text.lower()
                 for pattern in self._dqlite_disconnect_messages:

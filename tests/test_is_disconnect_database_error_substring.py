@@ -52,3 +52,50 @@ def test_database_error_via_cause_walk() -> None:
     outer = _MyAppError("application wrapper")
     outer.__cause__ = inner
     assert DqliteDialect().is_disconnect(outer, None, None) is True
+
+
+def test_integrity_error_with_disconnect_substring_not_classified() -> None:
+    """Negative pin for the substring widening false-positive surface:
+    an ``IntegrityError`` whose message contains a transport-shaped
+    substring (e.g., a user-defined ``RAISE(ABORT, '...timed out...')``
+    in a constraint trigger) must NOT be classified as a disconnect.
+
+    Without this guard, SA pool would invalidate the slot and retry —
+    duplicating non-idempotent INSERTs.
+
+    The substring scan must be restricted to OperationalError + bare
+    DatabaseError with codes 11/24/26 (the codes that motivated the
+    round-2 widening); IntegrityError (code 19), DataError, etc. must
+    NOT match the substring branch.
+    """
+    from dqlitedbapi.exceptions import IntegrityError
+
+    e = IntegrityError(
+        "constraint failed: timed out validating peer",
+        code=19,
+    )
+    assert DqliteDialect().is_disconnect(e, None, None) is False
+
+
+def test_data_error_with_disconnect_substring_not_classified() -> None:
+    """Symmetric to ``IntegrityError``: ``DataError`` (also a
+    DatabaseError subclass) carrying a substring like ``"connection
+    closed"`` in a server message must NOT classify as disconnect."""
+    from dqlitedbapi.exceptions import DataError
+
+    e = DataError(
+        "datatype mismatch: connection closed in payload",
+        code=20,
+    )
+    assert DqliteDialect().is_disconnect(e, None, None) is False
+
+
+def test_bare_database_error_with_non_motivating_code_not_classified() -> None:
+    """Pin the code-restriction explicitly: bare ``DatabaseError`` with
+    a code OUTSIDE {11, 24, 26} (the round-2 motivating set) must not
+    match the substring branch even with a transport-shaped message."""
+    e = DatabaseError(
+        "wire decode failed in column 42",
+        code=99,  # not in {11, 24, 26}
+    )
+    assert DqliteDialect().is_disconnect(e, None, None) is False

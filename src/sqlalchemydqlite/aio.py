@@ -27,7 +27,7 @@ from sqlalchemydqlite.base import DqliteDialect
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from dqlitedbapi.aio import AsyncConnection
+    from dqlitedbapi.aio import AsyncConnection, AsyncCursor
 
 __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 
@@ -168,11 +168,23 @@ class AsyncAdaptedCursor:
         self.lastrowid = None
         self._rows.clear()
 
-        cursor = self._connection.cursor()
+        # Hoist ``self._connection.cursor()`` inside the try so a
+        # synchronous raise from cursor() (closed connection,
+        # cross-loop ProgrammingError) routes through
+        # ``_handle_exception`` and gets normalized just like a
+        # cursor.execute raise. Initialize ``cursor`` to None so the
+        # finally close path skips when cursor() failed.
+        cursor: AsyncCursor | None = None
         try:
             try:
+                cursor = self._connection.cursor()
                 if parameters is not None:
-                    await_only(cursor.execute(operation, parameters))
+                    # SA's envelope passes ``Sequence | Mapping`` here; the
+                    # underlying qmark-paramstyle dbapi rejects mappings at
+                    # runtime with a clear DataError. Match the typing
+                    # widening upstream by ignoring the assignment-time
+                    # narrowness gap.
+                    await_only(cursor.execute(operation, parameters))  # type: ignore[arg-type]
                 else:
                     await_only(cursor.execute(operation))
 
@@ -207,19 +219,22 @@ class AsyncAdaptedCursor:
                 # AsyncAdapt_aiosqlite_cursor wrap-all pattern.
                 self._adapt_connection._handle_exception(error)
         finally:
-            # ``cursor.close`` is in-memory state-clearing only; a
-            # failure here has no external effect. Suppressing it keeps
-            # any primary exception (execute / fetchall raise) the
-            # active one rather than being replaced by a secondary
-            # close-time error. Narrow to ``(Exception,
-            # asyncio.CancelledError)`` so a greenlet-level cancel is
-            # still covered (``CancelledError`` subclasses
-            # ``BaseException`` since 3.8) but ``KeyboardInterrupt`` /
-            # ``SystemExit`` propagate — the stdlib's own
-            # ``contextlib.suppress`` docs call out ``BaseException``
-            # here as an anti-pattern for exactly this reason.
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                await_only(cursor.close())
+            # Only close if cursor was successfully constructed —
+            # cursor() may have raised inside the try.
+            if cursor is not None:
+                # ``cursor.close`` is in-memory state-clearing only; a
+                # failure here has no external effect. Suppressing it keeps
+                # any primary exception (execute / fetchall raise) the
+                # active one rather than being replaced by a secondary
+                # close-time error. Narrow to ``(Exception,
+                # asyncio.CancelledError)`` so a greenlet-level cancel is
+                # still covered (``CancelledError`` subclasses
+                # ``BaseException`` since 3.8) but ``KeyboardInterrupt`` /
+                # ``SystemExit`` propagate — the stdlib's own
+                # ``contextlib.suppress`` docs call out ``BaseException``
+                # here as an anti-pattern for exactly this reason.
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await_only(cursor.close())
 
     def executemany(
         self,
@@ -243,10 +258,16 @@ class AsyncAdaptedCursor:
         self.lastrowid = None
         self._rows.clear()
 
-        cursor = self._connection.cursor()
+        # Hoist cursor() inside the try, mirroring execute() — a
+        # synchronous raise (closed conn, cross-loop ProgrammingError)
+        # must route through _handle_exception too.
+        cursor: AsyncCursor | None = None
         try:
             try:
-                await_only(cursor.executemany(operation, seq_of_parameters))
+                cursor = self._connection.cursor()
+                # See execute() — mappings are rejected at runtime by the
+                # qmark dbapi; match the SA-envelope widening here too.
+                await_only(cursor.executemany(operation, seq_of_parameters))  # type: ignore[arg-type]
                 # Mirror execute()'s post-call pattern: if the statement had
                 # a RETURNING clause, the underlying cursor accumulates rows
                 # across parameter sets and sets a description. Skipping the
@@ -275,11 +296,12 @@ class AsyncAdaptedCursor:
                 # remapping.
                 self._adapt_connection._handle_exception(error)
         finally:
-            # Same narrow suppression as ``execute``'s finally block
-            # above — see the rationale there. Keeps KI / SystemExit
-            # propagating while still covering greenlet cancellation.
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                await_only(cursor.close())
+            if cursor is not None:
+                # Same narrow suppression as ``execute``'s finally block
+                # above — see the rationale there. Keeps KI / SystemExit
+                # propagating while still covering greenlet cancellation.
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await_only(cursor.close())
 
     def fetchone(self) -> Any | None:
         # Narrow from ``Any`` so callers understand None is a legitimate
@@ -494,6 +516,23 @@ class AsyncAdaptedConnection(AdaptedConnection):
         if isinstance(error, RuntimeError):
             msg = str(error)
             if "different loop" in msg or "attached to a different loop" in msg:
+                raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
+        if isinstance(error, ProgrammingError):
+            # ``dqlitedbapi.AsyncConnection`` raises ProgrammingError
+            # with ``"different event loop"`` (full phrase) when reused
+            # across event loops (see ``dqlitedbapi/aio/connection.py``
+            # ``_ensure_locks`` and ``cursor()``). Without a remap, SA's
+            # ``is_disconnect`` deliberately does not classify
+            # ProgrammingError as a disconnect (programmer-bug shapes
+            # must stay visible during real queries), so the pool slot
+            # would survive the cross-loop fault and the next checkout
+            # would hit it again. Match the RuntimeError remap so
+            # ``is_disconnect``'s ``"different loop"`` substring branch
+            # picks up the wrapped OperationalError. Asymmetric with
+            # ``do_ping``, which already catches ProgrammingError via
+            # the ``DatabaseError`` umbrella.
+            msg = str(error)
+            if "different event loop" in msg or "different loop" in msg:
                 raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
         raise error
 

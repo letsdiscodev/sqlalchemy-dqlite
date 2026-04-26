@@ -73,10 +73,22 @@ class TestAsyncConcurrentSessions:
             await engine.dispose()
 
     async def test_two_sessions_disjoint_keys_both_commit(self, async_engine_url: str) -> None:
-        """Disjoint PKs, no artificial overlap: both sessions commit
-        and final state has both rows. Confirms pool-slot independence
-        without testing writer-lock contention (which is dqlite's
-        Raft-imposed single-writer behaviour, exercised separately)."""
+        """Disjoint PKs: both sessions commit and final state has both
+        rows. Confirms pool-slot independence and that the dialect can
+        drive two concurrent sessions to a successful joint outcome.
+
+        ``asyncio.gather`` runs the two writers concurrently; dqlite
+        serialises writes through a single Raft writer lock, so a
+        writer that tries to INSERT while a sibling is still inside
+        its uncommitted transaction sees ``OperationalError("database
+        is locked")``. That is the SQLite engine's documented response
+        to writer contention — not a dqlite-specific quirk. Real
+        applications respond by retrying with backoff (the same
+        pattern stdlib ``sqlite3`` users follow when they hit
+        SQLITE_BUSY). Mirror that here so the test pins "both commits
+        eventually land" rather than "both commits land on the first
+        try", which is not a contract dqlite (or stock SQLite) gives.
+        """
         engine = create_async_engine(async_engine_url, pool_size=2, max_overflow=0)
         try:
             async with engine.begin() as conn:
@@ -84,15 +96,30 @@ class TestAsyncConcurrentSessions:
                 await conn.execute(text("CREATE TABLE async_pk_disjoint (id INTEGER PRIMARY KEY)"))
 
             async def writer(key: int) -> None:
-                async with AsyncSession(engine) as session, session.begin():
-                    await session.execute(
-                        text("INSERT INTO async_pk_disjoint (id) VALUES (:k)"),
-                        {"k": key},
-                    )
-                    # No artificial sleep — the writer-lock contention
-                    # is dqlite's single-writer Raft behaviour, not
-                    # what this test is about. Each writer commits
-                    # in turn; final state has both rows.
+                # Bounded retry on writer-lock contention. Backoff
+                # caps at ~1.6s total over 5 attempts — enough for the
+                # sibling's tx to commit (typical commit latency is
+                # sub-millisecond on a healthy local cluster) without
+                # masking a genuine deadlock (which would never
+                # resolve and would surface on the final attempt).
+                last_exc: OperationalError | None = None
+                backoff = 0.05
+                for _ in range(5):
+                    try:
+                        async with AsyncSession(engine) as session, session.begin():
+                            await session.execute(
+                                text("INSERT INTO async_pk_disjoint (id) VALUES (:k)"),
+                                {"k": key},
+                            )
+                        return
+                    except OperationalError as exc:
+                        if "database is locked" not in str(exc).lower():
+                            raise
+                        last_exc = exc
+                        await asyncio.sleep(backoff)
+                        backoff *= 2
+                assert last_exc is not None
+                raise last_exc
 
             await asyncio.gather(writer(1), writer(2))
 

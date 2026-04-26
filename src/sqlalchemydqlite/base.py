@@ -26,31 +26,51 @@ _FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
 
 
 def _walk_cause_chain(e: BaseException, max_depth: int = 10) -> Iterator[BaseException]:
-    """Yield ``e`` and each ``__cause__`` / ``__context__`` up to ``max_depth``.
+    """Yield ``e`` and each ``__cause__`` / ``__context__`` /
+    ``BaseExceptionGroup.exceptions`` child up to ``max_depth``.
 
     The ``visited`` set prevents an infinite loop on pathological
     cycles (``raise X from X`` or a deeply-nested wrap that loops
     back). The depth cap is a second line of defence so a truly
     degenerate chain cannot drag classifier latency even if the
     visited-set catch misses for some reason. Same shape as
-    ``traceback._format_final_exc_line``'s own chain traversal.
+    ``traceback._format_final_exc_line``'s own chain traversal,
+    extended with PEP 654 ``ExceptionGroup`` children.
 
     A single-hop ``__cause__`` check would miss any wrap tower taller
     than one — retry decorators, telemetry middleware, and circuit
     breakers layered above the client can push the real
     ``DqliteConnectionError`` / ``ClusterError`` two or more hops
-    away from the exception SA hands to ``is_disconnect``. Walking
-    the full chain keeps the type-dispatch robust against those
-    layerings.
+    away from the exception SA hands to ``is_disconnect``.
+
+    The ``BaseExceptionGroup`` traversal is essential because the
+    pool's ``initialize`` aggregates multiple connect failures via
+    ``raise BaseExceptionGroup(..., [DqliteConnectionError(...), ...])``
+    — without unwrapping the group's children, the disconnect
+    classifier would never see the wrapped causes and the group
+    would propagate as a non-disconnect error. The walk uses BFS
+    over a queue so the depth budget is shared across cause /
+    context hops AND group children fan-out.
     """
+    from collections import deque
+
     seen: set[int] = set()
-    cur: BaseException | None = e
-    depth = 0
-    while cur is not None and id(cur) not in seen and depth < max_depth:
+    queue: deque[tuple[BaseException, int]] = deque([(e, 0)])
+    while queue:
+        cur, depth = queue.popleft()
+        if id(cur) in seen or depth >= max_depth:
+            continue
         seen.add(id(cur))
         yield cur
-        cur = cur.__cause__ or cur.__context__
-        depth += 1
+        # Cause / context chain (the existing single-hop walk).
+        for nxt in (cur.__cause__, cur.__context__):
+            if nxt is not None:
+                queue.append((nxt, depth + 1))
+        # PEP 654 ExceptionGroup children — flat over the .exceptions
+        # tuple. Nested groups recurse via the queue.
+        if isinstance(cur, BaseExceptionGroup):
+            for child in cur.exceptions:
+                queue.append((child, depth + 1))
 
 
 def _parse_url_bool(key: str, raw: str) -> bool:
@@ -750,12 +770,20 @@ class DqliteDialect(SQLiteDialect):
         # that wasn't modelled as a specific exception type yet. Match
         # case-insensitively: wire-layer / client-layer message
         # formatting is not a contract, and a future uppercase-leading
-        # rewording would otherwise drop the match silently.
-        if isinstance(e, _dbapi_exc.OperationalError):
-            msg_lower = str(e).lower()
-            for pattern in self._dqlite_disconnect_messages:
-                if pattern in msg_lower:
-                    return True
+        # rewording would otherwise drop the match silently. Walk the
+        # cause chain so a wrapped OperationalError (telemetry
+        # middleware, retry decorators) does not silently bypass the
+        # substring classifier — same discipline as the type/code
+        # branches above. Wire-decode errors surface as
+        # ``OperationalError(message, code=None)``, so the substring
+        # branch is the SOLE classifier for those — any wrap would
+        # otherwise defeat disconnect detection entirely.
+        for cause in _walk_cause_chain(e):
+            if isinstance(cause, _dbapi_exc.OperationalError):
+                msg_lower = str(cause).lower()
+                for pattern in self._dqlite_disconnect_messages:
+                    if pattern in msg_lower:
+                        return True
         return super().is_disconnect(e, connection, cursor)
 
     # Two-phase commit is not supported by dqlite (no XA transaction

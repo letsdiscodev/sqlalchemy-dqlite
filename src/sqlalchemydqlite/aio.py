@@ -617,6 +617,28 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # BaseException`` and the underlying socket would leak
                 # until process exit.
                 self._force_close_transport()
+            except RuntimeError as exc:
+                # ``RuntimeError("Event loop is closed")`` /
+                # ``RuntimeError("...attached to a different loop")``
+                # land here during ``engine.dispose()`` after a per-
+                # call ``asyncio.run()`` finished and tore the loop
+                # down. The async machinery cannot run; reap the
+                # writer synchronously so the transport doesn't leak.
+                # ``has_terminate=True`` (the dialect-level promise)
+                # means close()/dispose must not propagate failures
+                # from this path; the debug log preserves the
+                # traceback for triage.
+                peer = getattr(self._connection, "address", None)
+                logger.debug(
+                    "AsyncAdaptedConnection.close (id=%s, peer=%s): "
+                    "close raised RuntimeError (%s); reaped transport "
+                    "synchronously",
+                    id(self),
+                    peer,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+                self._force_close_transport()
             except asyncio.CancelledError:
                 # Cancel landing on the close await (canonical trigger:
                 # an outer ``asyncio.timeout`` mid-``engine.dispose()``
@@ -704,6 +726,25 @@ class AsyncAdaptedConnection(AdaptedConnection):
         except MissingGreenlet:
             # See close()'s sibling catch — non-greenlet finalize
             # paths fall back to a sync transport close.
+            self._force_close_transport()
+        except RuntimeError as exc:
+            # Defunct-loop close during ``engine.dispose()``: an
+            # ``asyncio.run()`` per-call pattern tears the loop down,
+            # then SA's pool finalizer calls ``terminate()`` and the
+            # async machinery raises ``RuntimeError("Event loop is
+            # closed")``. ``has_terminate=True`` promises SA that
+            # dispose never propagates failures from this path; reap
+            # the writer synchronously and stay quiet (DEBUG only).
+            peer = getattr(self._connection, "address", None)
+            logger.debug(
+                "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "
+                "close raised RuntimeError (%s); reaped transport "
+                "synchronously",
+                id(self),
+                peer,
+                type(exc).__name__,
+                exc_info=True,
+            )
             self._force_close_transport()
         except asyncio.CancelledError:
             # See close()'s sibling catch — outer cancel during a

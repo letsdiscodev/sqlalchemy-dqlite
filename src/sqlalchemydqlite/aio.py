@@ -554,6 +554,20 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     type(exc).__name__,
                     exc_info=True,
                 )
+            except RuntimeError as exc:
+                # Route loop-mismatch RuntimeError through the same
+                # remap as commit/rollback/execute/executemany so SA's
+                # is_disconnect classifier (which is gated on
+                # DatabaseError) sees an OperationalError instead of
+                # a bare RuntimeError. Without this, cross-loop
+                # close() would propagate an un-classified RuntimeError
+                # past engine.dispose().
+                msg = str(exc)
+                if "different loop" in msg:
+                    self._handle_exception(exc)
+                # Other RuntimeErrors (e.g., "Event loop is closed"
+                # during dispose) propagate.
+                raise
         finally:
             # Narrow the close-time exception set to transport-class
             # failures. A transient OSError / DqliteConnectionError

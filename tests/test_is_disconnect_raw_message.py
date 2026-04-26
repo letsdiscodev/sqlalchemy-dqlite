@@ -17,15 +17,18 @@ def test_disconnect_substring_past_truncation_boundary_classified_via_raw_messag
     """Construct an ``OperationalError`` whose truncated displayed
     message lacks the disconnect substring but whose ``raw_message``
     contains it — pin that ``is_disconnect`` reads ``raw_message`` and
-    therefore returns True."""
+    therefore returns True. Use ``code=None`` so the OperationalError
+    arm of the cause-chain walk applies (server-routed coded errors
+    are not run through the substring scan; see the OE-arm
+    code-restriction in is_disconnect)."""
     truncated = "constraint A failed; constraint B failed"
-    full = truncated + " ... wire stream error: expected ROWS, got FAILURE"
-    e = OperationalError(truncated, code=5, raw_message=full)
+    full = truncated + " ... wire decode failed: corrupt frame"
+    e = OperationalError(truncated, code=None, raw_message=full)
     # Sanity: `str(e)` must NOT contain the disconnect substring (we
     # rely on the truncated displayed form for the negative half of the
     # contract).
-    assert "wire stream error" not in str(e).lower()
-    assert "wire stream error" in (e.raw_message or "").lower()
+    assert "wire decode failed" not in str(e).lower()
+    assert "wire decode failed" in (e.raw_message or "").lower()
     assert DqliteDialect().is_disconnect(e, None, None) is True
 
 

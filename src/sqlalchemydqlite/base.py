@@ -731,14 +731,12 @@ class DqliteDialect(SQLiteDialect):
         "timed out",
         "failed to connect",
         "not connected",
-        # Wire-layer desync: ProtocolError / DecodeError / StreamError
-        # in dqlitewire surface here. Paired with the client wrap at
-        # ``dqliteclient/protocol.py`` which emits these prefixes, and
-        # the dbapi wrap at ``cursor._call_client`` that now routes
-        # ``client.ProtocolError`` to ``OperationalError`` (not
-        # ``InterfaceError``) so the substring branch can see it.
+        # Wire-layer desync: ProtocolError / DecodeError surface here
+        # via the dbapi wrap at ``cursor._call_client`` that routes
+        # ``client.ProtocolError`` to ``OperationalError(code=None)``.
+        # The literal substring ``"wire decode failed"`` is the
+        # canonical prefix emitted by ``dqliteclient/protocol.py``.
         "wire decode failed",
-        "wire stream error",
         # ``await_only`` raises ``RuntimeError("<Future ... attached
         # to a different loop>")`` when an ``AsyncConnection`` is
         # reused across event loops. The async adapter's
@@ -876,8 +874,22 @@ class DqliteDialect(SQLiteDialect):
         # non-idempotent INSERTs.
         _BARE_DBE_DISCONNECT_CODES = {11, 24, 26}
         for cause in _walk_cause_chain(e):
+            # Restrict the OperationalError arm to ``code is None``: that
+            # is the wire-decode / ProtocolError / ClusterError surface
+            # (cursor.py:_call_client wraps with ``code=None``) where the
+            # substring branch is the SOLE classifier. Server-routed
+            # code-bearing errors (e.g. ``RAISE(FAIL, "...timed out
+            # validating peer ...")`` → SQLITE_ERROR code=1) carry
+            # user-controlled message text and must NOT trip disconnect
+            # classification on a benign RAISE that happens to contain
+            # a transport-style substring; that would let SA invalidate
+            # the slot and retry a non-idempotent INSERT. Leader-change
+            # codes are classified by the dedicated branch above; the
+            # ``_handle_exception`` remap of cross-loop ProgrammingError
+            # / RuntimeError raises ``OperationalError(..., code=None)``
+            # so the substring path picks them up.
             if isinstance(cause, _dbapi_exc.OperationalError):
-                applies = True
+                applies = getattr(cause, "code", None) is None
             elif isinstance(cause, _dbapi_exc.DatabaseError):
                 applies = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
             else:

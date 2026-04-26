@@ -21,7 +21,6 @@ from sqlalchemydqlite.base import DqliteDialect
         "Timed Out",
         "TIMED OUT",
         "Wire Decode Failed at offset 42",
-        "wire stream error: expected ROWS, got FAILURE",
     ],
 )
 def test_is_disconnect_case_insensitive_substring(message: str) -> None:

@@ -25,7 +25,7 @@ _TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
 _FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
 
 
-def _walk_cause_chain(e: BaseException, max_depth: int = 10) -> Iterator[BaseException]:
+def _walk_cause_chain(e: BaseException, max_depth: int = 25) -> Iterator[BaseException]:
     """Yield ``e`` and each ``__cause__`` / ``__context__`` /
     ``BaseExceptionGroup.exceptions`` child up to ``max_depth``.
 
@@ -51,6 +51,14 @@ def _walk_cause_chain(e: BaseException, max_depth: int = 10) -> Iterator[BaseExc
     would propagate as a non-disconnect error. The walk uses BFS
     over a queue so the depth budget is shared across cause /
     context hops AND group children fan-out.
+
+    Group children enqueue at the parent's depth (not depth+1) because
+    they are fan-out, not a wrap layer — preserving the spine-depth
+    budget for cause/context hops which are the deep dimension. The
+    visited-set still bounds total work so a pathologically nested
+    group cannot loop. ``max_depth=25`` accommodates retry +
+    telemetry + circuit-breaker + group-fanout towers of realistic
+    depth without changing the cycle-defence contract.
     """
     from collections import deque
 
@@ -66,11 +74,11 @@ def _walk_cause_chain(e: BaseException, max_depth: int = 10) -> Iterator[BaseExc
         for nxt in (cur.__cause__, cur.__context__):
             if nxt is not None:
                 queue.append((nxt, depth + 1))
-        # PEP 654 ExceptionGroup children — flat over the .exceptions
-        # tuple. Nested groups recurse via the queue.
+        # PEP 654 ExceptionGroup children — fan-out at parent depth.
+        # Nested groups recurse via the queue.
         if isinstance(cur, BaseExceptionGroup):
             for child in cur.exceptions:
-                queue.append((child, depth + 1))
+                queue.append((child, depth))
 
 
 def _parse_url_bool(key: str, raw: str) -> bool:

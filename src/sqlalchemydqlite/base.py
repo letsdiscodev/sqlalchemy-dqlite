@@ -778,9 +778,24 @@ class DqliteDialect(SQLiteDialect):
         # ``OperationalError(message, code=None)``, so the substring
         # branch is the SOLE classifier for those — any wrap would
         # otherwise defeat disconnect detection entirely.
+        #
+        # Widened to ``DatabaseError`` (parent of ``OperationalError``):
+        # codes 11/24/26 (CORRUPT/FORMAT/NOTADB) now route to bare
+        # ``DatabaseError`` per ``_classify_operational``, so a server
+        # message with a wire-tail substring ("wire decode failed",
+        # "wire stream error") on one of those codes would bypass the
+        # ``OperationalError``-only check.
+        #
+        # Read ``raw_message`` first: the dbapi truncates the displayed
+        # ``message`` argument at 1024 chars (``_MAX_DISPLAY_MESSAGE``)
+        # at construction time for log hygiene, and preserves the full
+        # server text on ``raw_message``. A disconnect substring past
+        # byte 1024 would otherwise be invisible to ``str(cause)``
+        # (which returns the truncated ``args[0]``).
         for cause in _walk_cause_chain(e):
-            if isinstance(cause, _dbapi_exc.OperationalError):
-                msg_lower = str(cause).lower()
+            if isinstance(cause, _dbapi_exc.DatabaseError):
+                text = getattr(cause, "raw_message", None) or str(cause)
+                msg_lower = text.lower()
                 for pattern in self._dqlite_disconnect_messages:
                     if pattern in msg_lower:
                         return True
@@ -832,6 +847,14 @@ class DqliteDialect(SQLiteDialect):
         Only connection-level exceptions are interpreted as "dead"; any
         other exception propagates so the caller can see real bugs
         instead of having them silently rewritten as "please reconnect."
+
+        ``DatabaseError`` is included for codes 11/24/26
+        (CORRUPT/FORMAT/NOTADB) which ``_classify_operational`` routes
+        to bare ``DatabaseError`` — pre-ping's purpose is "is this slot
+        usable now?", and a node responding with CORRUPT to ``SELECT 1``
+        is not, regardless of whether the underlying database is
+        recoverable. Treat as ping-failure so the pool can try a
+        different node.
         """
         cursor = dbapi_connection.cursor()
         try:
@@ -839,15 +862,23 @@ class DqliteDialect(SQLiteDialect):
                 cursor.execute("SELECT 1")
                 return True
             except (
-                _dbapi_exc.OperationalError,
+                # ``DatabaseError`` is the PEP 249 parent of
+                # ``OperationalError``, ``ProgrammingError``,
+                # ``IntegrityError``, ``DataError``, ``InternalError``,
+                # ``NotSupportedError``. The umbrella catch covers:
+                #   * ``OperationalError`` — the historical case
+                #     (transient/permanent server-reported faults).
+                #   * ``ProgrammingError`` from ``_ensure_locks`` when
+                #     an ``AsyncConnection`` is reused on a different
+                #     event loop — a permanent per-slot fault, from the
+                #     pool's perspective indistinguishable from "dead
+                #     socket".
+                #   * Bare ``DatabaseError`` for codes 11/24/26
+                #     (CORRUPT/FORMAT/NOTADB) — pre-ping reports the
+                #     slot as unusable so the pool invalidates it; a
+                #     follow-up checkout may land on a healthy node.
+                _dbapi_exc.DatabaseError,
                 _dbapi_exc.InterfaceError,
-                # ``_ensure_locks`` raises ``ProgrammingError`` when an
-                # ``AsyncConnection`` is reused on a different event
-                # loop — a permanent per-slot fault, from the pool's
-                # perspective indistinguishable from "dead socket".
-                # Surface it as ping-failure rather than letting it
-                # propagate and leave the slot stuck.
-                _dbapi_exc.ProgrammingError,
                 _client_exc.DqliteConnectionError,
                 OSError,
             ):
@@ -863,7 +894,10 @@ class DqliteDialect(SQLiteDialect):
             try:
                 cursor.close()
             except (
-                _dbapi_exc.OperationalError,
+                # See the outer ``except`` rationale — same umbrella so
+                # ``cursor.close()`` failures from CORRUPT/FORMAT/NOTADB
+                # are also debug-logged rather than crashing the ping.
+                _dbapi_exc.DatabaseError,
                 _dbapi_exc.InterfaceError,
                 _client_exc.DqliteConnectionError,
                 OSError,

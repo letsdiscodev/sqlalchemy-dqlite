@@ -233,8 +233,24 @@ class AsyncAdaptedCursor:
                 # ``SystemExit`` propagate — the stdlib's own
                 # ``contextlib.suppress`` docs call out ``BaseException``
                 # here as an anti-pattern for exactly this reason.
-                with contextlib.suppress(Exception, asyncio.CancelledError):
+                try:
                     await_only(cursor.close())
+                except (Exception, asyncio.CancelledError) as exc:
+                    # DEBUG-log the suppressed close failure so a
+                    # flapping leader (close fails repeatedly post-
+                    # execute) is observable in logs. Mirrors the
+                    # discipline applied to AsyncAdaptedConnection
+                    # close()/terminate() and to the dialect-side
+                    # do_ping close arm.
+                    peer = getattr(self._adapt_connection._connection, "address", None)
+                    logger.debug(
+                        "AsyncAdaptedCursor.execute (id=%s, peer=%s): "
+                        "underlying cursor close raised %s; suppressed",
+                        id(self),
+                        peer,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
 
     def executemany(
         self,
@@ -300,8 +316,18 @@ class AsyncAdaptedCursor:
                 # Same narrow suppression as ``execute``'s finally block
                 # above — see the rationale there. Keeps KI / SystemExit
                 # propagating while still covering greenlet cancellation.
-                with contextlib.suppress(Exception, asyncio.CancelledError):
+                try:
                     await_only(cursor.close())
+                except (Exception, asyncio.CancelledError) as exc:
+                    peer = getattr(self._adapt_connection._connection, "address", None)
+                    logger.debug(
+                        "AsyncAdaptedCursor.executemany (id=%s, peer=%s): "
+                        "underlying cursor close raised %s; suppressed",
+                        id(self),
+                        peer,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
 
     def fetchone(self) -> Any | None:
         # Narrow from ``Any`` so callers understand None is a legitimate

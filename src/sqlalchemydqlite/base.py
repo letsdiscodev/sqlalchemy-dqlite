@@ -16,6 +16,40 @@ from sqlalchemy.exc import ArgumentError
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqlitewire import LEADER_ERROR_CODES as _LEADER_CHANGE_CODES
+from dqlitewire import SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
+
+# Primary SQLite codes that route to bare ``DatabaseError`` (rather
+# than ``OperationalError`` or its subclasses) and that the dialect
+# treats as slot-fatal — both during failure dispatch
+# (``is_disconnect``'s substring scan) and during pre-ping
+# (``do_ping``'s code-restricted ``DatabaseError`` arm). Hoisted from
+# the two inline sets so a future addition (or removal) updates one
+# place. ``do_ping``'s broader transport-class tuple intentionally
+# stays separate (it includes ``ProgrammingError`` for cross-loop
+# reuse, which is ping-specific and must not bleed into disconnect
+# classification on real-query paths).
+_BARE_DBE_DISCONNECT_CODES: frozenset[int] = frozenset(
+    {SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB}
+)
+
+# Transport-class exception tuple for best-effort cleanup paths that
+# must swallow a flaky close / rollback without aborting
+# ``engine.dispose()``. Used by ``do_begin``'s post-BEGIN cursor
+# close, and by the async adapter's ``close()`` rollback finally,
+# ``close()`` close finally, and ``terminate()`` finally. Narrow on
+# purpose: programmer-bug shapes (AttributeError, TypeError, bare
+# RuntimeError) propagate so refactor regressions stay visible.
+# ``do_ping`` keeps its own broader tuple — it includes
+# ``ProgrammingError`` (cross-loop reuse) and the ``DatabaseError``
+# umbrella (CORRUPT/FORMAT/NOTADB classification path), neither of
+# which belongs on cleanup paths that run after a real query has
+# already failed.
+_TRANSPORT_CLASS_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    _dbapi_exc.OperationalError,
+    _dbapi_exc.InterfaceError,
+    _client_exc.DqliteConnectionError,
+    OSError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -728,12 +762,14 @@ class DqliteDialect(SQLiteDialect):
             # ``is_disconnect`` cause-walk does NOT consult.
             try:
                 cursor.close()
-            except (
-                _dbapi_exc.DatabaseError,
-                _dbapi_exc.InterfaceError,
-                _client_exc.DqliteConnectionError,
-                OSError,
-            ):
+            except _TRANSPORT_CLASS_EXCEPTIONS:
+                # Narrowed from the broader ``DatabaseError`` umbrella to
+                # the shared transport-class tuple. An ``IntegrityError``
+                # from ``cursor.close()`` is implausible (close doesn't
+                # fire constraints) and would more likely indicate a
+                # custom audit trigger or an outright programmer bug —
+                # let it surface instead of silently masking the
+                # BEGIN-time exception.
                 logger.debug(
                     "do_begin: cursor.close failed after BEGIN; BEGIN exception preserved",
                     exc_info=True,
@@ -761,6 +797,16 @@ class DqliteDialect(SQLiteDialect):
         # ``_handle_exception`` remaps that to ``OperationalError``
         # with the substring preserved so this branch can classify it.
         "different loop",
+        # ``dqlitedbapi.AsyncConnection`` raises ``ProgrammingError``
+        # with the wording ``"...different event loop"`` (note the
+        # ``"event "`` between ``"different"`` and ``"loop"``, so this
+        # is a DISTINCT substring from ``"different loop"`` above —
+        # not a superstring). The async adapter's ``_handle_exception``
+        # remaps that to ``OperationalError`` with the wording
+        # preserved; without this entry the remapped error would not
+        # match the substring scan and the cross-loop fault would
+        # survive in the SA pool slot.
+        "different event loop",
     )
 
     def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:
@@ -880,8 +926,10 @@ class DqliteDialect(SQLiteDialect):
         # '...timed out validating peer')``) would match the loose
         # ``"timed out"`` substring and be classified as a disconnect.
         # SA pool would then invalidate-and-retry — duplicating
-        # non-idempotent INSERTs.
-        _BARE_DBE_DISCONNECT_CODES = {11, 24, 26}
+        # non-idempotent INSERTs. The code set is hoisted to a module-
+        # level frozen constant so a future addition / removal updates
+        # one place (and so ``do_ping``'s parallel arm references the
+        # same set).
         for cause in _walk_cause_chain(e):
             # Order: policy short-circuit FIRST (ClusterPolicyError
             # subclasses ClusterError, must short-circuit before the
@@ -1019,7 +1067,7 @@ class DqliteDialect(SQLiteDialect):
                 # ``DatabaseError`` subclasses (Integrity / Data /
                 # Internal / NotSupported) propagate so a buggy setup
                 # surfaces.
-                if getattr(exc, "code", None) in {11, 24, 26}:
+                if getattr(exc, "code", None) in _BARE_DBE_DISCONNECT_CODES:
                     return False
                 raise
         finally:

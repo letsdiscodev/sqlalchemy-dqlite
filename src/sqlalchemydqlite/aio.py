@@ -14,7 +14,6 @@ from sqlalchemy.exc import MissingGreenlet
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
 
-from dqliteclient.exceptions import DqliteConnectionError
 from dqlitedbapi.exceptions import (
     InterfaceError,
     NotSupportedError,
@@ -22,7 +21,7 @@ from dqlitedbapi.exceptions import (
     ProgrammingError,
 )
 from dqlitedbapi.types import _DescriptionTuple
-from sqlalchemydqlite.base import DqliteDialect
+from sqlalchemydqlite.base import _TRANSPORT_CLASS_EXCEPTIONS, DqliteDialect
 
 logger = logging.getLogger(__name__)
 
@@ -528,37 +527,41 @@ class AsyncAdaptedConnection(AdaptedConnection):
         Concrete remaps:
 
         * ``RuntimeError`` from ``await_only`` whose message contains
-          ``"different loop"`` (or the variant ``"attached to a
-          different loop"``) — surfaces when an ``AsyncConnection`` is
-          reused across two event loops (e.g., ``asyncio.run()`` per
-          call). The bare ``RuntimeError`` would not be classified by
-          SA (``isinstance(e, dbapi.Error)`` gates ``is_disconnect``),
-          so the pool would not invalidate the slot and the next
-          checkout would hit the same fault. Re-raise as
-          ``dbapi.OperationalError`` (with the ``"different loop"``
-          substring preserved) so the dialect's substring fallback
-          classifies it as a disconnect.
+          ``"different loop"`` (canonical Python wording: ``"got Future
+          ... attached to a different loop"``) — surfaces when an
+          ``AsyncConnection`` is reused across two event loops (e.g.,
+          ``asyncio.run()`` per call). The bare ``RuntimeError`` would
+          not be classified by SA (``isinstance(e, dbapi.Error)`` gates
+          ``is_disconnect``), so the pool would not invalidate the slot
+          and the next checkout would hit the same fault.
+        * ``ProgrammingError`` from ``dqlitedbapi.AsyncConnection`` whose
+          message contains ``"different event loop"`` (full phrase) —
+          surfaces from ``_ensure_locks`` / ``cursor()`` on the same
+          cross-loop reuse pattern. ``is_disconnect`` deliberately does
+          not classify ProgrammingError as a disconnect on real-query
+          paths (programmer-bug shapes must stay visible), so without
+          a remap the pool slot would survive the cross-loop fault.
+
+        Both shapes route through one substring scan over the two
+        canonical wordings — Python's ``"different loop"`` (which
+        ``"attached to a different loop"`` already contains) and the
+        dbapi's ``"different event loop"`` (a distinct phrase, NOT a
+        superstring of the first since ``"event "`` sits between
+        ``"different"`` and ``"loop"``). Re-raise as
+        ``dbapi.OperationalError`` (with the substring preserved) so
+        the dialect's substring fallback classifies it as a disconnect.
         """
-        if isinstance(error, RuntimeError):
+        if isinstance(error, (RuntimeError, ProgrammingError)):
             msg = str(error)
-            if "different loop" in msg or "attached to a different loop" in msg:
-                raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
-        if isinstance(error, ProgrammingError):
-            # ``dqlitedbapi.AsyncConnection`` raises ProgrammingError
-            # with ``"different event loop"`` (full phrase) when reused
-            # across event loops (see ``dqlitedbapi/aio/connection.py``
-            # ``_ensure_locks`` and ``cursor()``). Without a remap, SA's
-            # ``is_disconnect`` deliberately does not classify
-            # ProgrammingError as a disconnect (programmer-bug shapes
-            # must stay visible during real queries), so the pool slot
-            # would survive the cross-loop fault and the next checkout
-            # would hit it again. Match the RuntimeError remap so
-            # ``is_disconnect``'s ``"different loop"`` substring branch
-            # picks up the wrapped OperationalError. Asymmetric with
-            # ``do_ping``, which already catches ProgrammingError via
-            # the ``DatabaseError`` umbrella.
-            msg = str(error)
-            if "different event loop" in msg or "different loop" in msg:
+            # Both substrings are needed: ``"different loop"`` matches
+            # Python's ``"attached to a different loop"`` and any
+            # variant that uses the bare phrase, while
+            # ``"different event loop"`` matches dqlitedbapi's distinct
+            # wording. The redundant ``or "attached to a different
+            # loop"`` clause from the older arm was dropped — that
+            # phrase strictly contains ``"different loop"`` so the
+            # first check already matches it.
+            if "different loop" in msg or "different event loop" in msg:
                 raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
         raise error
 
@@ -600,12 +603,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
         try:
             try:
                 await_only(self._connection.rollback())
-            except (
-                OperationalError,
-                InterfaceError,
-                DqliteConnectionError,
-                OSError,
-            ) as exc:
+            except _TRANSPORT_CLASS_EXCEPTIONS as exc:
                 # Silent suppression used to hide e.g. "leader flip
                 # mid-rollback" from operators — a DEBUG line preserves
                 # the diagnostic without masking or propagating. Include
@@ -658,12 +656,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # TypeError) still propagate.
             try:
                 await_only(self._connection.close())
-            except (
-                OperationalError,
-                InterfaceError,
-                DqliteConnectionError,
-                OSError,
-            ) as exc:
+            except _TRANSPORT_CLASS_EXCEPTIONS as exc:
                 peer = getattr(self._connection, "address", None)
                 logger.debug(
                     "AsyncAdaptedConnection.close (id=%s, peer=%s): "
@@ -773,12 +766,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # close cannot abort forced reclaim.
         try:
             await_only(self._connection.close())
-        except (
-            OperationalError,
-            InterfaceError,
-            DqliteConnectionError,
-            OSError,
-        ) as exc:
+        except _TRANSPORT_CLASS_EXCEPTIONS as exc:
             peer = getattr(self._connection, "address", None)
             logger.debug(
                 "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "

@@ -719,7 +719,25 @@ class DqliteDialect(SQLiteDialect):
         try:
             cursor.execute("BEGIN")
         finally:
-            cursor.close()
+            # Wrap close in a narrow defensive block so a transport-
+            # class failure here (leader flip mid-BEGIN, dead socket
+            # post-BEGIN) does not mask the BEGIN-time exception. The
+            # close-time exception would replace the BEGIN one in
+            # Python's finally semantics; the BEGIN exception then
+            # only survives on ``__context__``, which SA's
+            # ``is_disconnect`` cause-walk does NOT consult.
+            try:
+                cursor.close()
+            except (
+                _dbapi_exc.DatabaseError,
+                _dbapi_exc.InterfaceError,
+                _client_exc.DqliteConnectionError,
+                OSError,
+            ):
+                logger.debug(
+                    "do_begin: cursor.close failed after BEGIN; BEGIN exception preserved",
+                    exc_info=True,
+                )
 
     # Patterns are matched case-insensitively at the comparison site.
     # Stored in lower-case so the single ``.lower()`` at each

@@ -963,27 +963,37 @@ class DqliteDialect(SQLiteDialect):
                 cursor.execute("SELECT 1")
                 return True
             except (
-                # ``DatabaseError`` is the PEP 249 parent of
-                # ``OperationalError``, ``ProgrammingError``,
-                # ``IntegrityError``, ``DataError``, ``InternalError``,
-                # ``NotSupportedError``. The umbrella catch covers:
-                #   * ``OperationalError`` — the historical case
+                # Narrow per-class catch instead of the ``DatabaseError``
+                # umbrella so ``IntegrityError`` / ``DataError`` /
+                # ``InternalError`` / ``NotSupportedError`` from a buggy
+                # SELECT-trigger setup propagate as real errors instead
+                # of being silently rewritten as "ping failed; reconnect
+                # the slot." The classes below cover the practical pre-
+                # ping faults:
+                #   * ``OperationalError`` — historical case
                 #     (transient/permanent server-reported faults).
-                #   * ``ProgrammingError`` from ``_ensure_locks`` when
-                #     an ``AsyncConnection`` is reused on a different
-                #     event loop — a permanent per-slot fault, from the
-                #     pool's perspective indistinguishable from "dead
-                #     socket".
-                #   * Bare ``DatabaseError`` for codes 11/24/26
-                #     (CORRUPT/FORMAT/NOTADB) — pre-ping reports the
-                #     slot as unusable so the pool invalidates it; a
-                #     follow-up checkout may land on a healthy node.
-                _dbapi_exc.DatabaseError,
+                #   * ``ProgrammingError`` — cross-loop reuse from
+                #     ``AsyncConnection._ensure_locks`` / ``cursor()``;
+                #     a permanent per-slot fault.
+                #   * ``InterfaceError`` — closed cursor / connection.
+                _dbapi_exc.OperationalError,
+                _dbapi_exc.ProgrammingError,
                 _dbapi_exc.InterfaceError,
                 _client_exc.DqliteConnectionError,
                 OSError,
             ):
                 return False
+            except _dbapi_exc.DatabaseError as exc:
+                # Bare ``DatabaseError`` for codes 11/24/26
+                # (CORRUPT/FORMAT/NOTADB) — pre-ping reports the slot
+                # as unusable so the pool invalidates it; a follow-up
+                # checkout may land on a healthy node. Other coded
+                # ``DatabaseError`` subclasses (Integrity / Data /
+                # Internal / NotSupported) propagate so a buggy setup
+                # surfaces.
+                if getattr(exc, "code", None) in {11, 24, 26}:
+                    return False
+                raise
         finally:
             # Narrow the suppression to the same set as the outer
             # except: connection-level errors are expected on a dead

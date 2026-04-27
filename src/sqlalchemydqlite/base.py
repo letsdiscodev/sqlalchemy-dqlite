@@ -774,15 +774,27 @@ class DqliteDialect(SQLiteDialect):
         Asymmetry with ``do_ping``: ``do_ping`` catches
         ``ProgrammingError`` and treats it as "slot is dead" because
         its only operation is a trivial ``SELECT 1``, where a
-        ProgrammingError is almost certainly an out-of-band state
-        fault (``AsyncConnection`` reused on a different event loop,
-        closed cursor underneath, etc.). During a real query, a
-        ProgrammingError is more likely a caller bug (closed cursor in
-        userland code) and must propagate so the bug is visible. The
-        ``InterfaceError`` substring branch below keeps the narrow
-        "connection is closed" / "cursor is closed" case classified as
-        disconnect because those specifically indicate the SA pool
-        slot itself is invalidated — not a caller mistake.
+        ProgrammingError can only be an out-of-band state fault —
+        specifically the cross-event-loop reuse shape that
+        ``dqlitedbapi.AsyncConnection`` raises from
+        ``_ensure_locks`` / ``cursor()``
+        (see ``aio/connection.py:166-172, 418-433``). During a real
+        query, a bare ProgrammingError is more likely a caller bug
+        (passed wrong number of binds, used closed cursor in userland
+        code) and must propagate so the bug is visible.
+
+        Closed-handle surfaces as ``InterfaceError("Cursor is
+        closed")`` / ``InterfaceError("Connection is closed")``, NOT
+        ProgrammingError; the ``InterfaceError`` substring branch
+        below classifies those as disconnect because they specifically
+        indicate the SA pool slot itself is invalidated.
+
+        For loop-mismatch ProgrammingError on a real-query path, the
+        async adapter's ``_handle_exception`` remaps the exception to
+        ``OperationalError("event-loop mismatch: ...")`` so the
+        ``"different loop"`` substring branch picks it up. Without
+        that remap the slot would survive a cross-loop fault and the
+        next checkout would hit it again.
         """
         # Walk the full ``__cause__`` / ``__context__`` chain. The
         # dbapi's ``_call_client`` handler wraps

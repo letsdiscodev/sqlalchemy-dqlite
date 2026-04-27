@@ -818,53 +818,32 @@ class DqliteDialect(SQLiteDialect):
         # subclass check matters — ``ClusterPolicyError`` inherits
         # from ``ClusterError`` so the policy branch must be checked
         # first to short-circuit.
-        for cause in _walk_cause_chain(e):
-            if isinstance(cause, _client_exc.ClusterPolicyError):
-                # Policy rejection — never a disconnect. Stop walking;
-                # any outer wrap was for classification purposes only.
-                return False
-            if isinstance(cause, (_client_exc.DqliteConnectionError, _client_exc.ClusterError)):
-                return True
-        # Underlying OS-level transport failures (socket RST, broken pipe,
-        # DNS, connect refused, connection timeout). ``ConnectionError``,
+        # OS-level transport failures (socket RST, broken pipe, DNS,
+        # connect refused, connection timeout). ``ConnectionError``,
         # ``BrokenPipeError``, and ``TimeoutError`` are all ``OSError``
-        # subclasses, so a single ``OSError`` check covers every stdlib
-        # transport-error shape (including ``ConnectionResetError`` /
-        # ``ConnectionAbortedError`` / ``ConnectionRefusedError`` /
-        # ``socket.gaierror`` that a narrower enumeration would miss).
+        # subclasses, so the single ``OSError`` check covers every
+        # stdlib transport-error shape (including ConnectionResetError
+        # / ConnectionAbortedError / ConnectionRefusedError /
+        # socket.gaierror that a narrower enumeration would miss).
+        # Check on the bare exception before the walk: if ``e`` itself
+        # is an OSError that's enough.
         if isinstance(e, OSError):
             return True
-        # ``dqlitedbapi.Connection`` / ``Cursor`` raise ``InterfaceError``
-        # when operated on after ``close()``; match the narrow
-        # "closed" substring so programming-error InterfaceErrors (e.g.
-        # setinputsizes on a closed cursor) are NOT classified as
-        # disconnect. The do_ping path already catches InterfaceError
-        # for the same reason.
+
+        # Single cause-chain walk applying every classification per
+        # node. Order within the loop body matters: ClusterPolicyError
+        # short-circuits before its parent ClusterError; the leader-
+        # change code check runs before the substring scan so a coded
+        # leader-flip OperationalError doesn't get gated out by the
+        # ``code is None`` substring restriction; the substring scan
+        # is the SOLE classifier for wire-decode / cross-loop
+        # OperationalError(code=None), so it must come last.
         #
-        # Walk the cause chain so a wrapped "closed" InterfaceError
-        # (added by retry middleware, telemetry, circuit breaker, etc.)
-        # is still classified as disconnect — same discipline as the
-        # leader-change branch below and the DqliteConnectionError /
-        # ClusterError branch above. Without the walk, an outer wrap
-        # whose own message has no "closed" substring drops the signal
-        # and the SA pool slot stays alive while the underlying handle
-        # is dead.
-        for cause in _walk_cause_chain(e):
-            if isinstance(cause, _dbapi_exc.InterfaceError):
-                message = str(cause).lower()
-                if "connection is closed" in message or "cursor is closed" in message:
-                    return True
-        # Leader-change error codes signal that the connection is useless
-        # even though it's TCP-alive. Walk the cause chain so a
-        # leader-change OperationalError that was re-wrapped one extra
-        # layer deep (by middleware, retry decorators, telemetry, the
-        # dbapi wrapper that strips the code, etc.) is still
-        # classified as a disconnect — without this, the SA pool slot
-        # would stay alive while the connection is actually dead.
-        for cause in _walk_cause_chain(e):
-            for err in (_dbapi_exc.OperationalError, _client_exc.OperationalError):
-                if isinstance(cause, err) and getattr(cause, "code", None) in _LEADER_CHANGE_CODES:
-                    return True
+        # Replaces the earlier four-walks-per-call shape: each call
+        # rebuilt the BFS queue and visited set, costing O(4N) where
+        # the unified walk is O(N). For typical chains N is small; the
+        # bigger win is consolidating the per-node ordering invariant
+        # (a future predicate change updates one block, not four).
         # Legacy substring fallback — kept so we still catch anything
         # that wasn't modelled as a specific exception type yet. Match
         # case-insensitively: wire-layer / client-layer message
@@ -904,27 +883,46 @@ class DqliteDialect(SQLiteDialect):
         # non-idempotent INSERTs.
         _BARE_DBE_DISCONNECT_CODES = {11, 24, 26}
         for cause in _walk_cause_chain(e):
-            # Restrict the OperationalError arm to ``code is None``: that
-            # is the wire-decode / ProtocolError / ClusterError surface
-            # (cursor.py:_call_client wraps with ``code=None``) where the
-            # substring branch is the SOLE classifier. Server-routed
-            # code-bearing errors (e.g. ``RAISE(FAIL, "...timed out
-            # validating peer ...")`` → SQLITE_ERROR code=1) carry
-            # user-controlled message text and must NOT trip disconnect
-            # classification on a benign RAISE that happens to contain
-            # a transport-style substring; that would let SA invalidate
-            # the slot and retry a non-idempotent INSERT. Leader-change
-            # codes are classified by the dedicated branch above; the
-            # ``_handle_exception`` remap of cross-loop ProgrammingError
-            # / RuntimeError raises ``OperationalError(..., code=None)``
-            # so the substring path picks them up.
+            # Order: policy short-circuit FIRST (ClusterPolicyError
+            # subclasses ClusterError, must short-circuit before the
+            # broader transport-class check below).
+            if isinstance(cause, _client_exc.ClusterPolicyError):
+                return False
+            # Transport-class direct hits.
+            if isinstance(cause, (_client_exc.DqliteConnectionError, _client_exc.ClusterError)):
+                return True
+            # Closed-handle InterfaceError surface.
+            if isinstance(cause, _dbapi_exc.InterfaceError):
+                message = str(cause).lower()
+                if "connection is closed" in message or "cursor is closed" in message:
+                    return True
+            # Leader-change code on either OperationalError shape —
+            # checked before the substring scan so a coded leader-flip
+            # is not gated out by the OE-arm code-is-None restriction
+            # below.
+            for err_class in (_dbapi_exc.OperationalError, _client_exc.OperationalError):
+                if (
+                    isinstance(cause, err_class)
+                    and getattr(cause, "code", None) in _LEADER_CHANGE_CODES
+                ):
+                    return True
+            # Substring scan — restricted to OperationalError(code=None)
+            # (the wire-decode / ProtocolError / cross-loop-remap
+            # surface) and bare DatabaseError with codes 11/24/26
+            # (CORRUPT / FORMAT / NOTADB). Server-routed coded
+            # OperationalErrors carry user-controlled message text and
+            # must NOT trip disconnect classification on a benign
+            # RAISE that happens to contain a transport-style
+            # substring. Use ``raw_message`` first so a >1024-char
+            # server message whose disconnect substring sits past the
+            # truncation boundary is still classified.
             if isinstance(cause, _dbapi_exc.OperationalError):
-                applies = getattr(cause, "code", None) is None
+                applies_substring = getattr(cause, "code", None) is None
             elif isinstance(cause, _dbapi_exc.DatabaseError):
-                applies = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
+                applies_substring = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
             else:
-                applies = False
-            if applies:
+                applies_substring = False
+            if applies_substring:
                 text = getattr(cause, "raw_message", None) or str(cause)
                 msg_lower = text.lower()
                 for pattern in self._dqlite_disconnect_messages:

@@ -63,6 +63,24 @@ See SQLAlchemy's [transaction
 docs](https://docs.sqlalchemy.org/en/20/core/connections.html#using-transactions)
 for the full model.
 
+## Savepoint naming
+
+The dqlite client tracks active SAVEPOINTs to keep the SQLAlchemy
+pool's ROLLBACK-on-checkin path correct. The tracker only handles
+bare-ASCII SQLite identifiers (e.g. `sa_savepoint_1`, `my_sp`) —
+SQLAlchemy's generated savepoint names always match this shape, so
+`engine.begin()` / `Session.begin_nested()` / `connection.begin_nested()`
+are unaffected.
+
+If user-issued raw SQL uses quoted, backticked, square-bracketed,
+unicode, or leading-digit savepoint names (e.g.
+`text('SAVEPOINT "weird name"')`), the client conservatively flags
+the connection as carrying an untracked savepoint. On the next pool
+checkin SQLAlchemy issues a safety `ROLLBACK`, paying one extra
+round-trip per checkout for the remainder of that connection's
+lifetime in the pool. Stick to bare-ASCII SAVEPOINT names in raw
+text SQL to avoid the overhead, or accept the per-checkout cost.
+
 ## URL Format
 
 ```

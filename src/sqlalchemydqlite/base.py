@@ -596,6 +596,15 @@ class DqliteDialect(SQLiteDialect):
         (``?timeout=abc``), and out-of-range values
         (``?max_total_rows=-1``) all raise :class:`ArgumentError` before
         any pool is built.
+
+        When a query parameter is repeated
+        (``?max_total_rows=100&max_total_rows=200``), the **last**
+        occurrence wins. SQLAlchemy's URL parser surfaces repeated
+        values as a tuple; the dialect uses ``raw[-1]``. This mirrors
+        ``urllib.parse.parse_qsl`` ordering and is stable across
+        SQLAlchemy versions, but operators templating connection URLs
+        from layered config should be aware that a duplicated key
+        silently overrides earlier values rather than raising.
         """
         if url.username or url.password:
             # dqlite has no built-in authentication; credentials

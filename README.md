@@ -88,6 +88,13 @@ dqlite://host:port/database
 dqlite+aio://host:port/database
 ```
 
+When a query parameter is repeated
+(`?max_total_rows=100&max_total_rows=200`), the **last** occurrence
+wins. This matches `urllib.parse.parse_qsl` ordering. Templated
+connection URLs that layer values from multiple sources should be
+aware that duplicated keys silently override earlier values rather
+than raising.
+
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for setup and contribution guidelines.

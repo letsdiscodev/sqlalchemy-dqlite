@@ -15,8 +15,7 @@ from sqlalchemy.exc import ArgumentError
 
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
-from dqlitewire import LEADER_ERROR_CODES as _LEADER_CHANGE_CODES
-from dqlitewire import SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
+from dqlitewire import LEADER_ERROR_CODES, SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
 
 # Primary SQLite codes that route to bare ``DatabaseError`` (rather
 # than ``OperationalError`` or its subclasses) and that the dialect
@@ -978,7 +977,7 @@ class DqliteDialect(SQLiteDialect):
             for err_class in (_dbapi_exc.OperationalError, _client_exc.OperationalError):
                 if (
                     isinstance(cause, err_class)
-                    and getattr(cause, "code", None) in _LEADER_CHANGE_CODES
+                    and getattr(cause, "code", None) in LEADER_ERROR_CODES
                 ):
                     return True
             # Substring scan — restricted to OperationalError(code=None)

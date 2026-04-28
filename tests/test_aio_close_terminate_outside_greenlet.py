@@ -25,15 +25,22 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection
 
 
 def _adapter_with_writer() -> tuple[AsyncAdaptedConnection, MagicMock]:
-    """Build an adapter with a fake underlying conn whose protocol
-    has a writer. Returns (adapter, writer-mock)."""
+    """Build an adapter with a fake underlying dbapi connection whose
+    public ``force_close_transport`` hook closes a writer mock.
+    Returns (adapter, writer-mock).
+
+    Models the real chain: the SA adapter owns a dbapi
+    ``AsyncConnection`` (``self._connection``), which exposes the
+    public hook ``force_close_transport``. The hook walks
+    ``self._async_conn._protocol._writer.close()`` internally; we
+    just need the adapter to call the hook for this test, so wire
+    the writer-close into the hook directly.
+    """
     adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
     inner = MagicMock()
     inner.address = "localhost:9001"
     writer = MagicMock()
-    proto = MagicMock()
-    proto._writer = writer
-    inner._protocol = proto
+    inner.force_close_transport = MagicMock(side_effect=writer.close)
     adapter._connection = inner
     return adapter, writer
 
@@ -60,13 +67,32 @@ def test_terminate_outside_greenlet_falls_back_to_sync_writer_close() -> None:
 
 def test_force_close_transport_idempotent_with_no_protocol() -> None:
     """If the protocol is already None (torn down or never opened),
-    the fallback is a clean no-op."""
+    the fallback is a clean no-op. The dbapi hook itself walks the
+    null-check internally; we simply call through."""
     adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
     inner = MagicMock()
-    inner._protocol = None
     inner.address = "localhost:9001"
+    inner.force_close_transport = MagicMock()  # idempotent dbapi hook
     adapter._connection = inner
     # Should not raise.
+    adapter._force_close_transport()
+    inner.force_close_transport.assert_called_once()
+
+
+def test_force_close_transport_falls_back_when_dbapi_hook_missing() -> None:
+    """Older dbapi versions may not expose ``force_close_transport``;
+    the SA adapter must absorb that case (idempotent, never-raises)
+    rather than crash. The cost is a silent FD leak — release notes
+    must highlight the dbapi-version requirement.
+    """
+    adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
+    # ``spec=[]`` denies every auto-generated attribute; ``hasattr`` /
+    # ``getattr(..., default)`` returns the default. Models a dbapi
+    # built before ``force_close_transport`` existed.
+    inner = MagicMock(spec=["address"])
+    inner.address = "localhost:9001"
+    adapter._connection = inner
+    # Must not raise even though no hook exists.
     adapter._force_close_transport()
 
 

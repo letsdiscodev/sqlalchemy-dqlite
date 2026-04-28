@@ -718,17 +718,19 @@ class AsyncAdaptedConnection(AdaptedConnection):
         ``await_only`` would raise ``MissingGreenlet`` and the SA pool
         would silently absorb it.
 
-        Idempotent: a missing protocol / writer is logged and
-        absorbed. Any exception from ``writer.close()`` is also
-        absorbed — this is a last-resort cleanup and must not raise.
+        Delegates to the dbapi connection's public
+        ``force_close_transport`` hook so the access boundary stays
+        on a single supported method instead of walking three layers
+        of private attributes.
+
+        Idempotent. Never raises — a missing hook (older dbapi
+        version) or a writer.close() failure is silently absorbed.
         """
         peer = getattr(self._connection, "address", None)
+        hook = getattr(self._connection, "force_close_transport", None)
         try:
-            proto = getattr(self._connection, "_protocol", None)
-            if proto is not None:
-                writer = getattr(proto, "_writer", None)
-                if writer is not None:
-                    writer.close()  # synchronous; safe outside loop
+            if hook is not None:
+                hook()
             # Null the local refs so a subsequent close()/terminate()
             # short-circuits cleanly.
             with contextlib.suppress(AttributeError):  # pragma: no cover - defensive
@@ -737,7 +739,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 self._connection._closed = True
             logger.debug(
                 "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
-                "fell back to sync writer.close() outside greenlet",
+                "delegated to dbapi force_close_transport outside greenlet",
                 id(self),
                 peer,
             )

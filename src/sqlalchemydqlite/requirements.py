@@ -236,3 +236,65 @@ class Requirements(SuiteRequirements):
         instead of failing.
         """
         return exclusions.closed()
+
+    @property
+    def insert_executemany_returning(self) -> compound:
+        """INSERT ... RETURNING with executemany() — dqlite supports
+        it via the dialect pin ``insert_executemany_returning = True``
+        (see ``base.py``) and the ``test_bulk_dml_returning.py``
+        integration test. SA's default returns
+        ``only_if(dialect.insert_executemany_returning)`` — so this
+        is already effective-open via the dialect flag, but the
+        explicit declaration is drift-defense (mirrors the pattern
+        used by ``insert_returning`` / ``update_returning`` /
+        ``delete_returning`` above).
+        """
+        return exclusions.open()
+
+    @property
+    def empty_inserts_executemany(self) -> compound:
+        """``INSERT DEFAULT VALUES`` with executemany(). SA's default
+        returns ``self.empty_inserts``, which we already declare as
+        open above. Pinning this explicitly makes the contract
+        explicit at the executemany site for future maintainers."""
+        return exclusions.open()
+
+    @property
+    def ctes_with_update_delete(self) -> compound:
+        """CTEs riding a normal UPDATE / DELETE. SQLite >= 3.35 (the
+        minimum dqlite ships) supports ``WITH ... UPDATE`` and
+        ``WITH ... DELETE``. SA's base default is ``closed()`` —
+        explicitly opening this is the only behaviour-changing
+        declaration in this set."""
+        return exclusions.open()
+
+    @property
+    def foreign_key_ddl(self) -> compound:
+        """FOREIGN KEY DDL phrases. SQLite supports the syntax;
+        dqlite inherits. The existing
+        ``foreign_key_constraint_reflection`` declaration implies
+        this; pin it explicitly for grep parity."""
+        return exclusions.open()
+
+    @property
+    def named_constraints(self) -> compound:
+        """Named ``UNIQUE`` / ``CHECK`` / ``PRIMARY KEY`` /
+        ``FOREIGN KEY`` constraints in DDL. SQLite-native; dqlite
+        inherits."""
+        return exclusions.open()
+
+    @property
+    def unicode_connections(self) -> compound:
+        """Non-ASCII bind / result data. dqlite's wire protocol is
+        UTF-8 end to end; the dbapi cursors return native ``str`` for
+        TEXT columns. The existing ``unicode_ddl`` declaration
+        implies the connection-level support; pin it explicitly."""
+        return exclusions.open()
+
+    @property
+    def graceful_disconnects(self) -> compound:
+        """``InterfaceError`` on closed-connection ``execute()`` — the
+        dbapi (sync and async) raises per PEP 249, and the SA adapter
+        layer honours that. Existing tests pin every branch of
+        ``_check_in_use`` and the closed-state PEP 249 contracts."""
+        return exclusions.open()

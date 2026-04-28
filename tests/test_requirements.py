@@ -41,6 +41,13 @@ class TestRequirements:
             "standalone_binds",
             "order_by_label_with_expression",
             "cross_schema_fk_reflection",
+            "insert_executemany_returning",
+            "empty_inserts_executemany",
+            "ctes_with_update_delete",
+            "foreign_key_ddl",
+            "named_constraints",
+            "unicode_connections",
+            "graceful_disconnects",
         ]
         for prop_name in properties:
             value = getattr(req, prop_name)
@@ -75,6 +82,13 @@ class TestRequirements:
             "standalone_binds",
             "order_by_label_with_expression",
             "cross_schema_fk_reflection",
+            "insert_executemany_returning",
+            "empty_inserts_executemany",
+            "ctes_with_update_delete",
+            "foreign_key_ddl",
+            "named_constraints",
+            "unicode_connections",
+            "graceful_disconnects",
         ]
         for name in override_names:
             assert hasattr(SuiteRequirements, name), (
@@ -90,6 +104,14 @@ class TestRequirements:
         """
         req = Requirements()
         assert req.regexp_match.enabled is False
+
+    def test_ctes_with_update_delete_is_open(self) -> None:
+        """SA's base default is ``closed()``. Our override is the only
+        behaviour-changing entry in the new requirement set: SQLite
+        >= 3.35 (which dqlite ships) supports CTEs riding UPDATE /
+        DELETE, so the suite cases must run."""
+        req = Requirements()
+        assert req.ctes_with_update_delete.enabled is True
 
 
 class TestRequirementsReturnAnnotations:

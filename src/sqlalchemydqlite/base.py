@@ -625,7 +625,14 @@ class DqliteDialect(SQLiteDialect):
         port = url.port or 9001
         database = url.database or "default"
 
-        address = f"{host}:{port}"
+        # IPv6 hosts contain colons; SA's URL parser strips the
+        # bracket notation (``[::1]:9001`` → ``host="::1"``,
+        # ``port=9001``). The dqlite-client address parser
+        # (``_parse_address``) requires brackets to disambiguate
+        # ``[host]:port`` from a colon-separated host literal, so
+        # re-introduce them here. IPv4 / DNS hostnames cannot contain
+        # ``:`` and pass through unchanged.
+        address = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
         kwargs: dict[str, Any] = {"address": address, "database": database}
 
         query = dict(url.query) if url.query else {}

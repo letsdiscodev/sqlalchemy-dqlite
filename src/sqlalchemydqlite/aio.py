@@ -38,7 +38,7 @@ __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 # underlying cursor returns without copying. The inner 7-tuple shape is
 # imported from the dbapi layer (single source of truth) so a future
 # column (real display_size, etc.) propagates here automatically.
-_Description = Sequence[_DescriptionTuple] | None
+type _Description = Sequence[_DescriptionTuple] | None
 
 
 class AsyncAdaptedCursor:

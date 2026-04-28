@@ -5,7 +5,7 @@ import logging
 import math
 import types
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import types as sqltypes
 from sqlalchemy.dialects.sqlite.base import SQLiteDialect
@@ -28,7 +28,7 @@ from dqlitewire import SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
 # stays separate (it includes ``ProgrammingError`` for cross-loop
 # reuse, which is ping-specific and must not bleed into disconnect
 # classification on real-query paths).
-_BARE_DBE_DISCONNECT_CODES: frozenset[int] = frozenset(
+_BARE_DBE_DISCONNECT_CODES: Final[frozenset[int]] = frozenset(
     {SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB}
 )
 
@@ -44,7 +44,7 @@ _BARE_DBE_DISCONNECT_CODES: frozenset[int] = frozenset(
 # umbrella (CORRUPT/FORMAT/NOTADB classification path), neither of
 # which belongs on cleanup paths that run after a real query has
 # already failed.
-_TRANSPORT_CLASS_EXCEPTIONS: tuple[type[BaseException], ...] = (
+_TRANSPORT_CLASS_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
     _dbapi_exc.OperationalError,
     _dbapi_exc.InterfaceError,
     _client_exc.DqliteConnectionError,
@@ -55,8 +55,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["DqliteDialect"]
 
-_TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
-_FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
+_TRUE_TOKENS: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
+_FALSE_TOKENS: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 
 
 def _walk_cause_chain(e: BaseException, max_depth: int = 25) -> Iterator[BaseException]:

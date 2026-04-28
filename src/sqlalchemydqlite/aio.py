@@ -731,15 +731,9 @@ class AsyncAdaptedConnection(AdaptedConnection):
         try:
             if hook is not None:
                 hook()
-            # Null the local refs so a subsequent close()/terminate()
-            # short-circuits cleanly.
-            with contextlib.suppress(AttributeError):  # pragma: no cover - defensive
-                self._connection._protocol = None
-            with contextlib.suppress(AttributeError):  # pragma: no cover - defensive
-                self._connection._closed = True
             logger.debug(
                 "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
-                "delegated to dbapi force_close_transport outside greenlet",
+                "delegated to dbapi force_close_transport (sync fallback)",
                 id(self),
                 peer,
             )

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from sqlalchemy.util import await_only
 
 from sqlalchemydqlite.aio import AsyncAdaptedConnection
@@ -47,22 +48,23 @@ def _adapter_with_writer() -> tuple[AsyncAdaptedConnection, MagicMock]:
 
 def test_close_outside_greenlet_falls_back_to_sync_writer_close() -> None:
     """``close()`` invoked from a regular sync context (no greenlet)
-    must NOT raise MissingGreenlet — the fallback closes the writer
-    transport directly."""
+    must NOT raise MissingGreenlet — the fallback delegates to the
+    dbapi public ``force_close_transport`` hook, which closes the
+    writer transport directly."""
     adapter, writer = _adapter_with_writer()
     # Sync-context call: no greenlet provider.
     adapter.close()
-    # The sync writer.close() ran in the fallback.
+    # The sync writer.close() ran in the fallback (via the dbapi hook).
     writer.close.assert_called_once()
-    # Local refs cleared so a re-close short-circuits cleanly.
-    assert adapter._connection._protocol is None
+    # The dbapi hook itself was invoked.
+    adapter._connection.force_close_transport.assert_called_once()
 
 
 def test_terminate_outside_greenlet_falls_back_to_sync_writer_close() -> None:
     adapter, writer = _adapter_with_writer()
     adapter.terminate()
     writer.close.assert_called_once()
-    assert adapter._connection._protocol is None
+    adapter._connection.force_close_transport.assert_called_once()
 
 
 def test_force_close_transport_idempotent_with_no_protocol() -> None:
@@ -94,6 +96,23 @@ def test_force_close_transport_falls_back_when_dbapi_hook_missing() -> None:
     adapter._connection = inner
     # Must not raise even though no hook exists.
     adapter._force_close_transport()
+
+
+def test_force_close_transport_logs_sync_fallback_substring(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The fallback's debug log says "sync fallback" — a single
+    substring that operators can grep for, regardless of which of
+    the three caller paths (MissingGreenlet, RuntimeError,
+    CancelledError) reached the fallback."""
+    import logging
+
+    adapter, _ = _adapter_with_writer()
+    caplog.set_level(logging.DEBUG, logger="sqlalchemydqlite.aio")
+    adapter._force_close_transport()
+    assert any("sync fallback" in record.getMessage() for record in caplog.records), (
+        f"missing 'sync fallback' substring; got: {[r.getMessage() for r in caplog.records]}"
+    )
 
 
 def test_close_inside_greenlet_uses_normal_async_path() -> None:

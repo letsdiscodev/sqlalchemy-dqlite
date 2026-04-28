@@ -95,6 +95,14 @@ connection URLs that layer values from multiple sources should be
 aware that duplicated keys silently override earlier values rather
 than raising.
 
+The URL host:port pair is the bootstrap address — the dqlite client
+discovers the rest of the cluster from that one node's leader-info
+response. If the URL host is unreachable, leader-discovery cannot
+start; operators that want bootstrap-from-many-addresses should put
+a load balancer or DNS round-robin in front of the cluster, or rotate
+the URL host across deployments. Multi-address bootstrap is not
+exposed at the dialect URL surface.
+
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for setup and contribution guidelines.

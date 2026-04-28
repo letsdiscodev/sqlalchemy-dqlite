@@ -605,6 +605,17 @@ class DqliteDialect(SQLiteDialect):
         SQLAlchemy versions, but operators templating connection URLs
         from layered config should be aware that a duplicated key
         silently overrides earlier values rather than raising.
+
+        Multi-node bootstrap: the URL format carries a single
+        host:port. The dqlite client side will resolve the leader
+        starting from that one address (other cluster nodes are
+        discovered via the leader-info request), but if the configured
+        URL host is itself unreachable, leader-discovery cannot start.
+        Operators who need bootstrap-from-many-addresses today should
+        use a load-balancer or DNS-RR in front of the cluster, or
+        rotate the URL through multiple node addresses across
+        deployments. Multi-address bootstrap exposed at the dialect
+        level is not part of this surface.
         """
         if url.username or url.password:
             # dqlite has no built-in authentication; credentials

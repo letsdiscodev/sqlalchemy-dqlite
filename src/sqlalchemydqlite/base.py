@@ -736,14 +736,45 @@ class DqliteDialect(SQLiteDialect):
         deployments. Multi-address bootstrap exposed at the dialect
         level is not part of this surface.
         """
-        if url.username or url.password:
-            # dqlite has no built-in authentication; credentials
-            # embedded in the URL would be silently dropped. Reject
-            # at parse time with a clear message — matches pysqlite's
-            # create_connect_args policy.
+        # Reject any userinfo presence (including bare ``@``, empty
+        # username, empty password). The earlier ``or``-truthy guard
+        # let ``dqlite://@host`` slip silently because SA's
+        # ``make_url`` parses ``username=''``, ``password=None`` (both
+        # falsy). Use ``is not None`` so any structural userinfo
+        # surface variant — empty or filled — is rejected at parse
+        # time. dqlite has no built-in authentication; credentials
+        # embedded in the URL would be silently dropped.
+        if url.username is not None or url.password is not None:
             raise ArgumentError(
                 "Invalid URL: dqlite does not accept username or password in the URL"
             )
+        # SA's ``make_url`` does NOT split fragments from queries — a
+        # ``?key=value#frag`` URL parses with ``query={'key':
+        # 'value#frag'}``, and a fragment without query lands in the
+        # database name (``/db#frag`` → ``database='db#frag'``). By
+        # the time ``create_connect_args`` runs, the original URL
+        # string is no longer accessible (no ``url.fragment``
+        # attribute), but the misplaced ``#`` is detectable in those
+        # downstream fields. Detect and raise at parse time so the
+        # operator sees a clear "fragment" diagnostic rather than the
+        # downstream "Cannot convert URL query ..." pointing at the
+        # value (or, worse, a database-name with ``#`` silently being
+        # used). dqlite URL has no semantic for fragments.
+        if url.database is not None and "#" in url.database:
+            raise ArgumentError(
+                f"Invalid URL: dqlite does not accept URL fragments "
+                f"(got database={url.database!r}; '#' likely starts a "
+                f"misplaced fragment)"
+            )
+        if url.query:
+            for key, raw in url.query.items():
+                raw_str = raw[-1] if isinstance(raw, tuple) else raw
+                if isinstance(raw_str, str) and "#" in raw_str:
+                    raise ArgumentError(
+                        f"Invalid URL: dqlite does not accept URL fragments "
+                        f"(got query {key}={raw_str!r}; '#' likely starts a "
+                        f"misplaced fragment)"
+                    )
         host = url.host or "localhost"
         if url.port is not None and not (1 <= url.port <= 65535):
             # SQLAlchemy's URL parser normally rejects non-integer ports
@@ -763,6 +794,20 @@ class DqliteDialect(SQLiteDialect):
         # re-introduce them here. IPv4 / DNS hostnames cannot contain
         # ``:`` and pass through unchanged.
         address = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+        # Pre-validate the host shape at the SA layer so a bad URL
+        # surfaces as ArgumentError from create_engine rather than as
+        # a deferred InterfaceError from the first checkout. The
+        # dbapi-side parse-at-``__init__`` (per the eager-validation
+        # fix) covers the deeper-layer check; this is the
+        # SA-construction-time parity. ``_client_parse_address`` is a
+        # private helper from the client layer; keep the import local
+        # so the SA dialect doesn't require it at module-import time.
+        from dqliteclient.connection import _parse_address as _client_parse_address
+
+        try:
+            _client_parse_address(address)
+        except ValueError as e:
+            raise ArgumentError(f"Invalid dqlite URL host: {e}") from e
         kwargs: dict[str, Any] = {"address": address, "database": database}
 
         query = dict(url.query) if url.query else {}

@@ -192,6 +192,23 @@ class _DqliteDateTime(sqltypes.DateTime):
         def process(value: Any) -> Any:
             if value is None:
                 return None
+            # Cross-type rejection: bind-side mirror of the
+            # result-side raise. A ``datetime.time`` bound to a
+            # DateTime column would be encoded by dqlitedbapi as a
+            # time-only ISO string (``"HH:MM:SS"``); on readback the
+            # cycle-18 result_processor branch raises ``DataError``
+            # ("no defensible date to fabricate"). Without this
+            # bind-side rejection, the same dialect's bind+read
+            # round-trip writes a cell that the same dialect's reader
+            # rejects. Pysqlite raises TypeError on the same input.
+            # Ordered before the date-widen branch because
+            # ``datetime.time`` is not a ``datetime.date`` subclass —
+            # both branches need explicit handling.
+            if isinstance(value, datetime.time) and not isinstance(value, datetime.datetime):
+                raise _dbapi_exc.DataError(
+                    f"DateTime column cannot bind time-only payload "
+                    f"{value!r}: no defensible date to fabricate."
+                )
             # Pysqlite's DateTime.bind_processor widens a bare
             # ``datetime.date`` to a midnight ``datetime`` before
             # handing it to the driver, so a ``date`` bound to a
@@ -291,8 +308,35 @@ class _DqliteDate(sqltypes.Date):
     full read.
     """
 
-    def bind_processor(self, dialect: Any) -> None:
-        return None
+    def bind_processor(self, dialect: Any) -> Callable[[Any], Any] | None:
+        def process(value: Any) -> Any:
+            if value is None:
+                return None
+            # Cross-type rejection: bind-side mirror of the
+            # result-side raise. A ``datetime.time`` bound to a Date
+            # column would encode as ``"HH:MM:SS"``; the result-side
+            # raises ``DataError`` on that shape. Reject at bind so
+            # the round-trip-self-rejection fork doesn't write a
+            # cell the same dialect's reader rejects.
+            if isinstance(value, datetime.time) and not isinstance(value, datetime.datetime):
+                raise _dbapi_exc.DataError(
+                    f"Date column cannot bind time-only payload "
+                    f"{value!r}: a time has no date component."
+                )
+            # Narrow ``datetime.datetime`` to ``datetime.date`` for
+            # pysqlite-parity wire format. Without this narrowing,
+            # ``_iso8601_from_datetime`` writes a full
+            # ``"YYYY-MM-DD HH:MM:SS"`` to a Date cell — breaking
+            # cross-writer parity with pysqlite, which emits only
+            # ``"YYYY-MM-DD"``. Sibling parity with
+            # ``_DqliteDateTime.bind_processor``'s symmetric widen
+            # in the reverse direction. tzinfo is dropped (matches
+            # the result-side documented behaviour and pysqlite).
+            if isinstance(value, datetime.datetime):
+                return value.date()
+            return value
+
+        return process
 
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         def process(value: Any) -> Any:

@@ -63,11 +63,15 @@ class TestAsyncAdaptedConnectionTerminate:
             return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
         orig = aio_module.await_only  # type: ignore[attr-defined]
+        _orig_in_greenlet = aio_module.in_greenlet  # type: ignore[attr-defined]
         aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
+        aio_module.in_greenlet = lambda: True  # type: ignore[attr-defined]
         try:
             adapter.terminate()
         finally:
             aio_module.await_only = orig  # type: ignore[attr-defined]
+
+            aio_module.in_greenlet = _orig_in_greenlet  # type: ignore[attr-defined]
 
         assert fake.rollback_calls == 0
         assert fake.close_calls == 1
@@ -86,7 +90,7 @@ class TestTerminateSuppressesTransportExceptions:
     """
 
     @staticmethod
-    def _swap_await_only() -> tuple[object, object]:
+    def _swap_await_only() -> tuple[object, object, object]:
         import asyncio
 
         from sqlalchemydqlite import aio as aio_module
@@ -95,17 +99,24 @@ class TestTerminateSuppressesTransportExceptions:
             return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
         orig = aio_module.await_only  # type: ignore[attr-defined]
+        orig_in_greenlet = aio_module.in_greenlet  # type: ignore[attr-defined]
         aio_module.await_only = _fake  # type: ignore[assignment,attr-defined]
-        return aio_module, orig
+        # Pretend we're inside an SA greenlet so the terminate()
+        # ``in_greenlet()`` preflight enters the await_only path
+        # under test rather than short-circuiting to the sync
+        # force-close.
+        aio_module.in_greenlet = lambda: True  # type: ignore[attr-defined]
+        return aio_module, orig, orig_in_greenlet
 
     def _run_terminate(self, close_exc: BaseException) -> _FakeAsyncConnWithExc:
         fake = _FakeAsyncConnWithExc(close_exc=close_exc)
         adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
-        aio_module, orig = self._swap_await_only()
+        aio_module, orig, orig_in_greenlet = self._swap_await_only()
         try:
             adapter.terminate()  # must not raise
         finally:
             aio_module.await_only = orig  # type: ignore[attr-defined]
+            aio_module.in_greenlet = orig_in_greenlet  # type: ignore[attr-defined]
         return fake
 
     def test_operational_error_suppressed(self) -> None:
@@ -142,12 +153,13 @@ class TestTerminateSuppressesTransportExceptions:
 
         fake = _FakeAsyncConnWithExc(close_exc=AttributeError("wrong attr"))
         adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
-        aio_module, orig = self._swap_await_only()
+        aio_module, orig, orig_in_greenlet = self._swap_await_only()
         try:
             with pytest.raises(AttributeError):
                 adapter.terminate()
         finally:
             aio_module.await_only = orig  # type: ignore[attr-defined]
+            aio_module.in_greenlet = orig_in_greenlet  # type: ignore[attr-defined]
         # Close was still attempted before the exception escaped.
         assert fake.close_calls == 1
 
@@ -203,11 +215,15 @@ class TestDoTerminateDelegatesToAdapter:
             return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
         orig = aio_module.await_only  # type: ignore[attr-defined]
+        _orig_in_greenlet = aio_module.in_greenlet  # type: ignore[attr-defined]
         aio_module.await_only = _fake_await_only  # type: ignore[assignment,attr-defined]
+        aio_module.in_greenlet = lambda: True  # type: ignore[attr-defined]
         try:
             dialect.do_terminate(adapter)
         finally:
             aio_module.await_only = orig  # type: ignore[attr-defined]
+
+            aio_module.in_greenlet = _orig_in_greenlet  # type: ignore[attr-defined]
 
         assert fake.rollback_calls == 0
         assert fake.close_calls == 1

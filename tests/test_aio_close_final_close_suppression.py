@@ -41,25 +41,32 @@ class _FakeAsyncConn:
             raise self._close_exc
 
 
-def _swap_await_only() -> tuple[object, object]:
+def _swap_await_only() -> tuple[object, object, object]:
     from sqlalchemydqlite import aio as aio_module
 
     def _fake(coro: object) -> object:
         return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
     orig = aio_module.await_only  # type: ignore[attr-defined]
+    orig_in_greenlet = aio_module.in_greenlet  # type: ignore[attr-defined]
     aio_module.await_only = _fake  # type: ignore[assignment,attr-defined]
-    return aio_module, orig
+    # Pretend we're inside an SA greenlet so the close()/terminate()
+    # ``in_greenlet()`` preflight enters the await_only path under
+    # test rather than short-circuiting to the sync force-close.
+    aio_module.in_greenlet = lambda: True  # type: ignore[attr-defined]
+    return aio_module, orig, orig_in_greenlet
 
 
 def _run_close(close_exc: BaseException | None) -> _FakeAsyncConn:
     fake = _FakeAsyncConn(close_exc=close_exc)
     adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
-    aio_module, orig = _swap_await_only()
+    aio_module, orig, _orig_in_greenlet = _swap_await_only()
     try:
         adapter.close()  # must not raise for a class in the narrow tuple
     finally:
         aio_module.await_only = orig  # type: ignore[attr-defined]
+
+        aio_module.in_greenlet = _orig_in_greenlet  # type: ignore[attr-defined]
     return fake
 
 
@@ -96,12 +103,14 @@ class TestFinalCloseSuppression:
         regression doesn't get silently eaten."""
         fake = _FakeAsyncConn(close_exc=AttributeError("typo"))
         adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
-        aio_module, orig = _swap_await_only()
+        aio_module, orig, _orig_in_greenlet = _swap_await_only()
         try:
             with pytest.raises(AttributeError):
                 adapter.close()
         finally:
             aio_module.await_only = orig  # type: ignore[attr-defined]
+
+            aio_module.in_greenlet = _orig_in_greenlet  # type: ignore[attr-defined]
         # close() still ran before the programmer bug escaped.
         assert fake.close_calls == 1
 
@@ -119,11 +128,13 @@ class TestCloseMatrix:
             rollback_exc=OSError(104, "reset by peer"),
         )
         adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
-        aio_module, orig = _swap_await_only()
+        aio_module, orig, _orig_in_greenlet = _swap_await_only()
         try:
             adapter.close()  # neither branch propagates
         finally:
             aio_module.await_only = orig  # type: ignore[attr-defined]
+
+            aio_module.in_greenlet = _orig_in_greenlet  # type: ignore[attr-defined]
         assert fake.rollback_calls == 1
         assert fake.close_calls == 1
 
@@ -135,10 +146,12 @@ class TestCloseMatrix:
             rollback_exc=OperationalError("leader flip", code=None),
         )
         adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
-        aio_module, orig = _swap_await_only()
+        aio_module, orig, _orig_in_greenlet = _swap_await_only()
         try:
             adapter.close()  # both branches suppress
         finally:
             aio_module.await_only = orig  # type: ignore[attr-defined]
+
+            aio_module.in_greenlet = _orig_in_greenlet  # type: ignore[attr-defined]
         assert fake.rollback_calls == 1
         assert fake.close_calls == 1

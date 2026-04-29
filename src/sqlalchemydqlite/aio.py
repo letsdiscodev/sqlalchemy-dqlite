@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from sqlalchemy import pool
 from sqlalchemy.engine import URL, AdaptedConnection
-from sqlalchemy.exc import MissingGreenlet
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
+from sqlalchemy.util.concurrency import in_greenlet
 
 from dqlitedbapi.exceptions import (
     InterfaceError,
@@ -578,6 +578,17 @@ class AsyncAdaptedConnection(AdaptedConnection):
             self._handle_exception(error)
 
     def close(self) -> None:
+        # Preflight on ``in_greenlet()`` matches SA's reference adapter
+        # idiom (``connectors/asyncio.py:217-220, 392-415``). Outside a
+        # greenlet (GC sweep / atexit / non-greenlet finalize), skip
+        # both the rollback and the async close entirely and reap the
+        # writer synchronously. ``await_only`` would otherwise allocate
+        # a ``MissingGreenlet`` exception with full traceback only to be
+        # caught and absorbed; the preflight avoids that throw.
+        if not in_greenlet():
+            self._force_close_transport()
+            return
+
         # Attempt rollback before close so a caller that exits without
         # committing does not leave a dangling server-side transaction.
         # The underlying async connection's rollback is a silent no-op when
@@ -632,11 +643,9 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # Other RuntimeErrors (e.g., "Event loop is closed"
                 # during dispose) propagate.
                 raise
-            except MissingGreenlet:
-                # Non-greenlet finalize path — skip the rollback step
-                # and fall through to the finally's close, which has
-                # its own MissingGreenlet catch + sync fallback.
-                pass
+            # The non-greenlet path is handled by the ``in_greenlet()``
+            # preflight at the top of ``close()``; ``MissingGreenlet``
+            # cannot land here.
             # ``CancelledError`` from the rollback await is allowed to
             # propagate so the cancellation signal is preserved — the
             # finally below still runs close(), and the close arm's
@@ -666,15 +675,6 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     type(exc).__name__,
                     exc_info=True,
                 )
-            except MissingGreenlet:
-                # ``await_only`` requires an SA greenlet context. SA's
-                # pool can invoke ``_finalize_fairy`` from a non-
-                # greenlet path (GC sweep, atexit, background sync
-                # thread); without this fallback, ``MissingGreenlet``
-                # would propagate to ``pool/base.py``'s ``except
-                # BaseException`` and the underlying socket would leak
-                # until process exit.
-                self._force_close_transport()
             except RuntimeError as exc:
                 # ``RuntimeError("Event loop is closed")`` /
                 # ``RuntimeError("...attached to a different loop")``
@@ -757,6 +757,14 @@ class AsyncAdaptedConnection(AdaptedConnection):
         would otherwise block shutdown. Unlike ``close()`` we do NOT
         attempt rollback first: that's the whole point of terminate.
         """
+        # Preflight on ``in_greenlet()`` — see ``close()`` for
+        # rationale. Non-greenlet finalize paths reap the writer
+        # synchronously without paying the ``MissingGreenlet``
+        # exception-allocation cost.
+        if not in_greenlet():
+            self._force_close_transport()
+            return
+
         # ``has_terminate = True`` promises SA that this path never
         # blocks dispose; suppress transport-class failures so a flaky
         # close cannot abort forced reclaim.
@@ -772,10 +780,6 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 type(exc).__name__,
                 exc_info=True,
             )
-        except MissingGreenlet:
-            # See close()'s sibling catch — non-greenlet finalize
-            # paths fall back to a sync transport close.
-            self._force_close_transport()
         except RuntimeError as exc:
             # Defunct-loop close during ``engine.dispose()``: an
             # ``asyncio.run()`` per-call pattern tears the loop down,

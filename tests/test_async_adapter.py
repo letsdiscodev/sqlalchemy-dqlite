@@ -6,7 +6,25 @@ import textwrap
 from collections import deque
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from sqlalchemydqlite.aio import AsyncAdaptedConnection, AsyncAdaptedCursor
+
+
+@pytest.fixture(autouse=True)
+def _simulated_greenlet_for_patched_await_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tests in this module patch ``sqlalchemydqlite.aio.await_only``
+    with a sync driver to resolve coroutines without a real SA
+    greenlet. The ``in_greenlet()`` preflight on close()/terminate()
+    would otherwise short-circuit to the sync force-close path
+    before the patched ``await_only`` is reached. Pretend we're in
+    an SA greenlet so the patched ``await_only`` actually drives.
+    """
+    from sqlalchemydqlite import aio as aio_module
+
+    monkeypatch.setattr(aio_module, "in_greenlet", lambda: True)
 
 
 def _make_cursor() -> AsyncAdaptedCursor:

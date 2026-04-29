@@ -244,6 +244,25 @@ class _DqliteDateTime(sqltypes.DateTime):
                 if value.tzinfo is not None:
                     return value.astimezone(datetime.UTC).replace(tzinfo=None)
                 return value
+            if isinstance(value, datetime.time):
+                # Cross-type confusion: ``dqlitedbapi._datetime_from_iso8601``
+                # is intentionally polymorphic and decodes a time-only
+                # ISO string (e.g. ``"12:30:00"``) into ``datetime.time``.
+                # If such a payload lands in a ``DateTime`` column,
+                # silently passing it through would feed the ORM
+                # ``Row.x: datetime.datetime`` consumer a ``datetime.time``
+                # — surfacing only as a far-from-cause attribute error
+                # (``.year`` / ``.date()`` / etc.). Unlike the symmetric
+                # ``Time``-receives-``datetime`` case (narrowed via
+                # ``.time()``), there is no defensible coercion here:
+                # fabricating a sentinel date would silently produce
+                # bogus instant values. Raise so the type-contract
+                # violation surfaces immediately.
+                raise _dbapi_exc.DataError(
+                    f"DateTime column received time-only payload "
+                    f"{value!r}: the cell decodes as datetime.time and "
+                    f"there is no defensible date to fabricate."
+                )
             return value
 
         return process
@@ -282,6 +301,19 @@ class _DqliteDate(sqltypes.Date):
             if isinstance(value, datetime.datetime):
                 # Deliberate: tzinfo is dropped. See class docstring.
                 return value.date()
+            if isinstance(value, datetime.time):
+                # Cross-type confusion mirror of ``_DqliteDateTime``:
+                # ``dqlitedbapi._datetime_from_iso8601`` decodes a
+                # time-only ISO string into ``datetime.time``. If it
+                # lands in a ``Date`` column, there is no defensible
+                # date to fabricate (analogous to the
+                # ``DateTime``-receives-``time`` case). Raise rather
+                # than silently leak the wrong concrete type.
+                raise _dbapi_exc.DataError(
+                    f"Date column received time-only payload "
+                    f"{value!r}: the cell decodes as datetime.time and "
+                    f"there is no defensible date to fabricate."
+                )
             if isinstance(value, str):
                 try:
                     return datetime.date.fromisoformat(value)
@@ -326,6 +358,21 @@ class _DqliteTime(sqltypes.Time):
         def process(value: Any) -> Any:
             if value is None:
                 return None
+            if isinstance(value, datetime.datetime):
+                # Cross-type confusion: ``dqlitedbapi._datetime_from_iso8601``
+                # is intentionally polymorphic and decodes a full
+                # ``"YYYY-MM-DD HH:MM:SS"`` ISO string into
+                # ``datetime.datetime``. If such a payload lands in a
+                # ``Time`` column, narrow via ``.time()`` — sibling
+                # parity with ``_DqliteDate``'s ``datetime -> date``
+                # narrowing at line ~284. The date component is
+                # silently dropped (mirroring ``_DqliteDate``'s
+                # documented "tzinfo is dropped" decision); ``Time``
+                # has no date dimension to preserve. ``isinstance``
+                # check ordered before ``datetime.time`` because
+                # ``datetime.datetime`` is **not** a ``datetime.time``
+                # subclass — both branches need explicit handling.
+                return value.time()
             if isinstance(value, datetime.time):
                 return value
             if isinstance(value, str):

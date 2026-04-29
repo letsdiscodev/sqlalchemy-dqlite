@@ -355,6 +355,8 @@ class _DqliteTime(sqltypes.Time):
         return None
 
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
+        want_timezone = self.timezone
+
         def process(value: Any) -> Any:
             if value is None:
                 return None
@@ -372,8 +374,35 @@ class _DqliteTime(sqltypes.Time):
                 # check ordered before ``datetime.time`` because
                 # ``datetime.datetime`` is **not** a ``datetime.time``
                 # subclass — both branches need explicit handling.
-                return value.time()
+                #
+                # ``.time()`` always drops tzinfo (its tz-preserving
+                # analogue is ``.timetz()``); the post-narrow value
+                # falls through to the ``datetime.time`` branch below
+                # so ``Time(timezone=True)`` re-attaches UTC and
+                # ``Time(timezone=False)`` keeps it naive — symmetric
+                # with how ``_DqliteDateTime`` handles its sibling
+                # ``datetime`` payloads.
+                value = value.time()
             if isinstance(value, datetime.time):
+                if want_timezone:
+                    # Time(timezone=True) contract promises an aware
+                    # value. A cell written without a tz suffix
+                    # decodes as naive; attach UTC so downstream
+                    # aware-vs-aware comparisons don't raise
+                    # TypeError. Symmetric with
+                    # ``_DqliteDateTime`` at the equivalent branch.
+                    if value.tzinfo is None:
+                        return value.replace(tzinfo=datetime.UTC)
+                    return value
+                # Time(timezone=False) contract promises a naive
+                # value. Strip tzinfo so the column type's contract
+                # is honoured. ``datetime.time`` has no
+                # ``astimezone`` analogue (it would need a date for
+                # DST), so a fixed-offset conversion is unsafe in
+                # general; pysqlite drops tzinfo unconditionally
+                # too. Match the simpler "strip" semantics.
+                if value.tzinfo is not None:
+                    return value.replace(tzinfo=None)
                 return value
             if isinstance(value, str):
                 try:

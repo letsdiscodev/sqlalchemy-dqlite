@@ -424,6 +424,21 @@ class AsyncAdaptedCursor:
             raise StopIteration
         return row
 
+    def __reduce__(self) -> NoReturn:
+        # Wraps a live ``AsyncCursor`` (loop-bound, holds a reference
+        # to a live socket via the connection). Surface a clear
+        # driver-level TypeError naming the SA-adapter class
+        # specifically — without this, the underlying
+        # ``AsyncCursor.__reduce__`` raises a TypeError naming the
+        # dbapi class, which is a wrong-layer diagnostic for SA
+        # users.
+        raise TypeError(
+            f"cannot pickle {type(self).__name__!r} object — wraps a "
+            f"loop-bound dbapi AsyncCursor referencing a live "
+            f"connection; reconstruct from the engine in the target "
+            f"process instead."
+        )
+
 
 class AsyncAdaptedConnection(AdaptedConnection):
     """Adapts an AsyncConnection for SQLAlchemy's greenlet-based async engine.
@@ -461,6 +476,20 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # the store on ``Any`` and rely on the annotation here to document
         # the intended input shape.
         self._connection: Any = connection
+
+    def __reduce__(self) -> NoReturn:
+        # Wraps a live ``AsyncConnection`` (loop-bound, holds a live
+        # socket and asyncio.Lock). Surface a clear driver-level
+        # TypeError naming the SA-adapter class specifically —
+        # without this, the underlying ``AsyncConnection.__reduce__``
+        # raises a TypeError naming the dbapi class, which is a
+        # wrong-layer diagnostic for SA users.
+        raise TypeError(
+            f"cannot pickle {type(self).__name__!r} object — wraps a "
+            f"loop-bound dbapi AsyncConnection holding a live socket "
+            f"and asyncio.Lock; reconstruct from the engine in the "
+            f"target process instead."
+        )
 
     def cursor(self) -> AsyncAdaptedCursor:
         return AsyncAdaptedCursor(self)

@@ -431,7 +431,15 @@ class AsyncAdaptedCursor:
         # ``self``; ``__exit__`` closes the cursor.
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
+    ) -> None:
+        # PEP 343 ``__exit__`` signature. The body always closes and
+        # never suppresses, so ``-> None`` is the correct return; a
+        # truthy return would silently swallow caller exceptions.
         self.close()
 
     def __reduce__(self) -> NoReturn:
@@ -514,12 +522,25 @@ class AsyncAdaptedConnection(AdaptedConnection):
         this and SA-internal code paths (e.g.,
         ``dialects/sqlite/provision.py``) call
         ``dbapi_connection.execute(...)`` directly. Without this
-        method the call hits ``AttributeError`` on the dqlite adapter."""
+        method the call hits ``AttributeError`` on the dqlite adapter.
+
+        On synchronous failure of ``cur.execute(...)`` (a closed
+        connection, cross-loop misuse, etc.) close the freshly-opened
+        cursor before re-raising so the caller's exception path
+        doesn't leak an unowned cursor with loop-bound state. SA's
+        reference connector follows the same try/close/raise
+        discipline.
+        """
         cur = self.cursor()
-        if parameters is None:
-            cur.execute(operation)
-        else:
-            cur.execute(operation, parameters)
+        try:
+            if parameters is None:
+                cur.execute(operation)
+            else:
+                cur.execute(operation, parameters)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                cur.close()
+            raise
         return cur
 
     @property
@@ -989,16 +1010,18 @@ class DqliteDialect_aio(DqliteDialect):
         ``_force_close_transport()`` outside a greenlet and shields
         the close await otherwise — both branches are safe under
         cancel and have no rollback path to crash on.
-        Suppress ``BaseException`` so a CancelledError landing during
-        cleanup doesn't replace the original connect-time error;
-        ``terminate()`` itself runs the synchronous transport reap
-        regardless.
+        Narrow the cleanup-suppress to ``(Exception,
+        asyncio.CancelledError)`` so KeyboardInterrupt and SystemExit
+        propagate through cleanup — matching the discipline applied
+        elsewhere on dispose paths. ``terminate()`` itself runs the
+        synchronous transport reap regardless of whether the suppress
+        absorbs.
         """
         raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
         try:
             await_only(raw_conn.connect())
         except BaseException:
-            with contextlib.suppress(BaseException):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 AsyncAdaptedConnection(raw_conn).terminate()
             raise
         return AsyncAdaptedConnection(raw_conn)

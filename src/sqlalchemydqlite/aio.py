@@ -619,11 +619,9 @@ class AsyncAdaptedConnection(AdaptedConnection):
         if value:
             from sqlalchemy.exc import ArgumentError
 
-            raise ArgumentError(
-                "dqlite does not support SA's AUTOCOMMIT isolation level; "
-                "the SA dialect always brackets statements in BEGIN / COMMIT "
-                "for transactional control. Use explicit commit()/rollback()."
-            )
+            from sqlalchemydqlite.base import _AUTOCOMMIT_REJECTION_MSG
+
+            raise ArgumentError(_AUTOCOMMIT_REJECTION_MSG)
         # value is False → already the effective mode, no-op.
 
     def _handle_exception(self, error: BaseException) -> NoReturn:

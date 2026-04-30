@@ -74,6 +74,23 @@ __all__ = ["DqliteDialect"]
 _TRUE_TOKENS: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_TOKENS: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 
+# Single source of truth for the AUTOCOMMIT-rejection diagnostic. Used
+# by the eager dialect-init reject (positional foot-gun guard at
+# ``__init__``), by ``set_isolation_level`` (SA's connect-listener
+# step), and by ``AsyncAdaptedConnection.autocommit.setter`` (the
+# bottom-layer dbapi setter). Keeping the wording in one place
+# guarantees the four reject-sites stay in lockstep — earlier the
+# message lived in three independent string literals and a future
+# wording change would have drifted across them.
+_AUTOCOMMIT_REJECTION_MSG: Final[str] = (
+    "dqlite does not support SA's AUTOCOMMIT isolation level; "
+    "the SA dialect always brackets statements in BEGIN / COMMIT "
+    "for transactional control. Use explicit commit() / "
+    "rollback() on the connection. (The underlying wire is "
+    "autocommit-by-default; this is about SA's transaction "
+    "model, not the wire.)"
+)
+
 
 def _walk_cause_chain(e: BaseException, max_depth: int = 25) -> Iterator[BaseException]:
     """Yield ``e`` and each ``__cause__`` / ``__context__`` /
@@ -645,6 +662,28 @@ class DqliteDialect(SQLiteDialect):
             raise ArgumentError(
                 f"dqlite dialect requires paramstyle='qmark'; got {kwargs['paramstyle']!r}"
             )
+        # Symmetric eager rejection of ``isolation_level="AUTOCOMMIT"``.
+        # ``set_isolation_level`` rejects the value at SA's connect-
+        # listener step (``engine/default.py::_builtin_onconnect``),
+        # but a deferred reject means ``create_engine()`` succeeds and
+        # the error surfaces at first connect — far from the
+        # configuration site, with a confusing pool-side traceback,
+        # and on some pool configurations as a retry-masked transient
+        # failure. Reject here so the diagnostic points at the kwarg.
+        # Mirrors the paramstyle block above and the bottom-layer
+        # ``AsyncAdaptedConnection.autocommit.setter`` guard.
+        # SA's ``_assert_and_set_isolation_level`` does
+        # ``.replace("_", " ").upper()`` then matches against
+        # ``["SERIALIZABLE", "AUTOCOMMIT"]`` — so an underscore form
+        # like ``"AUTO_COMMIT"`` becomes ``"AUTO COMMIT"`` and is
+        # rejected by SA itself before reaching us. Only the
+        # spaceless ``"AUTOCOMMIT"`` (case-insensitive) form would
+        # otherwise reach the connect-listener step. Match that
+        # form here so we eagerly reject what SA would have routed
+        # to ``set_isolation_level``.
+        iso_level = kwargs.get("isolation_level")
+        if isinstance(iso_level, str) and iso_level.upper() == "AUTOCOMMIT":
+            raise ArgumentError(_AUTOCOMMIT_REJECTION_MSG)
         super().__init__(**kwargs)
         # ``SQLiteDialect.__init__`` writes *instance* attributes based
         # on ``self.dbapi.sqlite_version_info`` and ``util.pypy``:
@@ -920,14 +959,7 @@ class DqliteDialect(SQLiteDialect):
         if level is None or level == "SERIALIZABLE":
             return
         if level == "AUTOCOMMIT":
-            raise ArgumentError(
-                "dqlite does not support SA's AUTOCOMMIT isolation level; "
-                "the SA dialect always brackets statements in BEGIN / COMMIT "
-                "for transactional control. Use explicit commit() / "
-                "rollback() on the connection. (The underlying wire is "
-                "autocommit-by-default; this is about SA's transaction "
-                "model, not the wire.)"
-            )
+            raise ArgumentError(_AUTOCOMMIT_REJECTION_MSG)
         raise ArgumentError(
             f"dqlite only supports SERIALIZABLE isolation; requested level "
             f"{level!r} is not supported."

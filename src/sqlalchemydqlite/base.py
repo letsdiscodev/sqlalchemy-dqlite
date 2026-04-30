@@ -505,6 +505,26 @@ class DqliteDialect(SQLiteDialect):
     """
 
     name = "dqlite"
+    # ``driver`` is the dbapi-module-name convention (matches SA's
+    # pysqlite reference: ``driver = "pysqlite"`` for the
+    # ``sqlite3``-aliased-as-``pysqlite`` module). The async
+    # sibling at ``aio.py`` uses ``driver = "aio"`` for URL-shape
+    # parity with the user-typed ``dqlite+aio://...`` form. The
+    # asymmetry is intentional: the sync URL ``dqlite://...`` has
+    # NO ``+driver`` suffix, so the description-vs-URL parity
+    # argument that motivated the async rename does not apply
+    # here — there is no string the user "typed" in the URL to
+    # mirror. Falling back to the dbapi-module-name convention
+    # (``"dqlitedbapi"``) keeps the rendered ``dialect_description``
+    # = ``"dqlite+dqlitedbapi"`` self-describing — the second half
+    # is exactly what a user would import.
+    #
+    # SA's own dialect ecosystem is internally inconsistent on
+    # this naming pattern (pysqlite = dbapi-module-name; aiosqlite
+    # = both; aiomysql = dbapi-module-name; mariadbconnector =
+    # dbapi-module-name). There is no single SA convention to
+    # follow. See aio.py's ``driver = "aio"`` rationale block for
+    # the async-side parity argument.
     driver = "dqlitedbapi"
 
     # dqlite uses qmark parameter style

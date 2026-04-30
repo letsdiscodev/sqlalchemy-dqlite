@@ -155,6 +155,13 @@ class TestDqliteDialect:
     def test_dialect_description(self) -> None:
         # Pin the derived dialect_description so SQLAlchemy upgrades cannot
         # silently change the rendered identity in ORM error messages.
+        # The sync convention is the dbapi-module-name (matches SA's
+        # pysqlite reference); the async sibling uses URL-shape parity
+        # (driver = "aio") because ``dqlite+aio://`` IS what the user
+        # types. The sync URL ``dqlite://`` has no ``+driver`` suffix
+        # so the URL-parity argument doesn't apply here. See the
+        # ``driver`` block comment in ``base.py`` for the full
+        # rationale and the SA precedent.
         assert DqliteDialect().dialect_description == "dqlite+dqlitedbapi"
 
     def test_async_dialect_description(self) -> None:

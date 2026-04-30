@@ -498,7 +498,6 @@ class TestSupportsSaneRowcountFlags:
             ("supports_sane_rowcount", True),
             ("supports_sane_multi_rowcount", True),
             ("supports_sane_rowcount_returning", False),
-            ("supports_sane_multi_rowcount_returning", False),
         ],
     )
     def test_flag_is_defined_on_dialect_class(self, attr: str, expected: bool) -> None:

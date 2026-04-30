@@ -577,15 +577,20 @@ class DqliteDialect(SQLiteDialect):
 
     # Rowcount truthfulness flags. SQLite (and therefore dqlite) reports
     # accurate UPDATE / DELETE rowcounts and accurate aggregated
-    # executemany rowcounts. The two ``*_returning`` flags are False
-    # because SQLAlchemy's insertmanyvalues-with-RETURNING path relies
-    # on separate accounting; pinning False matches the inherited
-    # SQLiteDialect behaviour but, like the other pins above, guards
-    # against silent upstream drift.
+    # executemany rowcounts. ``supports_sane_rowcount_returning`` is
+    # False because SQLAlchemy's insertmanyvalues-with-RETURNING path
+    # relies on separate accounting; pinning False matches the
+    # inherited SQLiteDialect behaviour but, like the other pins
+    # above, guards against silent upstream drift. There are three
+    # rowcount-truthfulness flags total in SA 2.x — a phantom
+    # ``supports_sane_multi_rowcount_returning`` line was previously
+    # pinned here; SA does not define such an attribute, so the pin
+    # was a no-op decorative entry that would have applied silently
+    # to a future flag of that name with arbitrary semantics. Removed
+    # to keep the drift-defence surface aligned with reality.
     supports_sane_rowcount = True
     supports_sane_multi_rowcount = True
     supports_sane_rowcount_returning = False
-    supports_sane_multi_rowcount_returning = False
 
     # Insert-path flags inherited from SQLiteDialect. SQLAlchemy's
     # insertmanyvalues codegen, DEFAULT VALUES form, and rowid handling

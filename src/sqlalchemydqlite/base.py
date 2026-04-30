@@ -588,6 +588,15 @@ class DqliteDialect(SQLiteDialect):
         sqltypes.DateTime: _DqliteDateTime,
         sqltypes.Date: _DqliteDate,
         sqltypes.Time: _DqliteTime,
+        # TIMESTAMP currently inherits the DateTime processor via the
+        # MRO walk (TIMESTAMP is a sqltypes.DateTime subclass), but
+        # parity with ``SQLiteDialect_pysqlite.colspecs`` is to map
+        # it explicitly so a future change to TIMESTAMP's MRO can't
+        # silently regress the binding to the upstream pysqlite
+        # processor (which calls ``str_to_datetime`` on cells dqlite
+        # already decodes to ``datetime.datetime``, raising
+        # ``TypeError``).
+        sqltypes.TIMESTAMP: _DqliteDateTime,
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -803,7 +812,7 @@ class DqliteDialect(SQLiteDialect):
         # SA-construction-time parity. ``_client_parse_address`` is a
         # private helper from the client layer; keep the import local
         # so the SA dialect doesn't require it at module-import time.
-        from dqliteclient.connection import _parse_address as _client_parse_address
+        from dqliteclient.connection import parse_address as _client_parse_address
 
         try:
             _client_parse_address(address)

@@ -424,6 +424,16 @@ class AsyncAdaptedCursor:
             raise StopIteration
         return row
 
+    def __enter__(self) -> "AsyncAdaptedCursor":
+        # SA's reference connector cursor and aiosqlite cursor both
+        # support the context-manager protocol so callers can
+        # ``with conn.execute(...) as cur:``. The body simply yields
+        # ``self``; ``__exit__`` closes the cursor.
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.close()
+
     def __reduce__(self) -> NoReturn:
         # Wraps a live ``AsyncCursor`` (loop-bound, holds a reference
         # to a live socket via the connection). Surface a clear
@@ -493,6 +503,24 @@ class AsyncAdaptedConnection(AdaptedConnection):
 
     def cursor(self) -> AsyncAdaptedCursor:
         return AsyncAdaptedCursor(self)
+
+    def execute(
+        self,
+        operation: str,
+        parameters: Sequence[Any] | Mapping[str, Any] | None = None,
+    ) -> AsyncAdaptedCursor:
+        """SA-reference parity: open a cursor, run ``execute``, return
+        the cursor. SA's reference ``connectors/asyncio.py`` exposes
+        this and SA-internal code paths (e.g.,
+        ``dialects/sqlite/provision.py``) call
+        ``dbapi_connection.execute(...)`` directly. Without this
+        method the call hits ``AttributeError`` on the dqlite adapter."""
+        cur = self.cursor()
+        if parameters is None:
+            cur.execute(operation)
+        else:
+            cur.execute(operation, parameters)
+        return cur
 
     @property
     def isolation_level(self) -> str:
@@ -823,7 +851,14 @@ class AsyncAdaptedConnection(AdaptedConnection):
 
         # ``has_terminate = True`` promises SA that this path never
         # blocks dispose; suppress transport-class failures so a flaky
-        # close cannot abort forced reclaim.
+        # close cannot abort forced reclaim. Cancel landing during
+        # the close is handled by the explicit CancelledError catch
+        # below which calls ``_force_close_transport`` synchronously
+        # (the writer.close() bypasses the cancel-poisoned async
+        # machinery). ``asyncio.shield`` cannot be applied here — the
+        # await runs through ``await_only`` from a sync greenlet
+        # context where ``shield``'s loop-binding semantics don't
+        # apply, and the explicit catch already covers the same case.
         try:
             await_only(self._connection.close())
         except _TRANSPORT_CLASS_EXCEPTIONS as exc:
@@ -943,20 +978,28 @@ class DqliteDialect_aio(DqliteDialect):
         connect raises, the ``raw_conn`` object is already constructed
         and holds references to loop locks / partially-initialised
         state — without explicit cleanup it leaks until GC and can
-        linger on the event loop it was bound to. Call ``close()`` on
-        ``BaseException`` so cancellation (e.g. a parent
-        ``asyncio.timeout()`` firing during connect) also cleans up,
-        then re-raise unchanged. ``close()`` is documented as
-        idempotent and safe to call even when no TCP connection
-        landed, so the suppression around it is narrow
-        (``Exception`` only; cancellation signals still propagate).
+        linger on the event loop it was bound to. The cleanup uses
+        the SA-adapter's ``terminate()`` shape (force-close, no
+        rollback) wrapped in a temporary ``AsyncAdaptedConnection``:
+        attempting a graceful ``close()`` on a connection whose
+        handshake never completed is meaningless and can re-raise
+        ``RuntimeError("Event loop is closed")`` from a per-call
+        ``asyncio.run()`` torn down by the failed connect, replacing
+        the original error. ``terminate()`` short-circuits to
+        ``_force_close_transport()`` outside a greenlet and shields
+        the close await otherwise — both branches are safe under
+        cancel and have no rollback path to crash on.
+        Suppress ``BaseException`` so a CancelledError landing during
+        cleanup doesn't replace the original connect-time error;
+        ``terminate()`` itself runs the synchronous transport reap
+        regardless.
         """
         raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
         try:
             await_only(raw_conn.connect())
         except BaseException:
-            with contextlib.suppress(Exception):
-                await_only(raw_conn.close())
+            with contextlib.suppress(BaseException):
+                AsyncAdaptedConnection(raw_conn).terminate()
             raise
         return AsyncAdaptedConnection(raw_conn)
 

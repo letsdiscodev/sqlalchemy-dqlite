@@ -36,16 +36,18 @@ def _run_sync(coro_or_value: object) -> object:
 class TestAioConnectClosesRawConnAndSuppressesCloseException:
     """The eager-connect cleanup path must:
 
-    1. Call ``raw_conn.close()`` (already pinned by existing tests).
-    2. SUPPRESS any ``Exception`` raised by close — without this, a
-       broken close would supplant the original connect failure.
+    1. Run the SA-adapter ``terminate()`` shape (force-close, no
+       rollback) on the raw connection — the connection's handshake
+       never completed so a graceful close has nothing to drain.
+    2. SUPPRESS any exception raised by terminate — without this, a
+       broken terminate would supplant the original connect failure.
     3. Re-raise the ORIGINAL connect-time exception unchanged.
     """
 
     def test_close_exception_is_suppressed_when_eager_connect_fails(self) -> None:
         """The original connect-time exception must propagate even
-        when close-time raises ``RuntimeError`` (or any other
-        ``Exception`` subclass)."""
+        when cleanup-time raises (terminate's force-close path may
+        fail on a defunct loop after a per-call ``asyncio.run()``)."""
         from dqliteclient.exceptions import DqliteConnectionError
         from sqlalchemydqlite.aio import DqliteDialect_aio
 
@@ -53,9 +55,10 @@ class TestAioConnectClosesRawConnAndSuppressesCloseException:
 
         raw_conn = MagicMock()
         raw_conn.connect = MagicMock(side_effect=DqliteConnectionError("eager failed"))
-        # Close raises a different error — without contextlib.suppress
-        # the close-time error would supplant the original.
-        raw_conn.close = MagicMock(side_effect=RuntimeError("close raised"))
+        # force_close_transport is the terminate fallback path used
+        # outside a greenlet; raise from it to prove the original
+        # connect-time exception still wins.
+        raw_conn.force_close_transport = MagicMock(side_effect=RuntimeError("force-close raised"))
 
         dbapi = MagicMock()
         dbapi.connect = MagicMock(return_value=raw_conn)
@@ -67,8 +70,9 @@ class TestAioConnectClosesRawConnAndSuppressesCloseException:
         ):
             dialect.connect()
 
-        # Close was attempted exactly once even though it raised.
-        raw_conn.close.assert_called_once()
+        # Cleanup ran via terminate's force-close path even though
+        # it raised; the original exception still propagated.
+        raw_conn.force_close_transport.assert_called()
 
 
 class TestAsyncAdaptedCursorSoftCloseNoop:

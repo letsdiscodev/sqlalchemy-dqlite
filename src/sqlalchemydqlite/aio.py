@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import types
+import weakref
 from collections import deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -133,6 +134,22 @@ class AsyncAdaptedCursor:
         self.lastrowid = None
         self._rows.clear()
         self._closed = True
+        # Drop the strong back-references to the parent adapter
+        # and the inner dbapi connection so a closed cursor that
+        # SA's pool-diagnostic ring / pytest fixture cache retains
+        # does not pin the inner dbapi ``AsyncConnection`` — and
+        # through it the client-layer state, registered
+        # ``weakref.finalize``, and any frame-pinning
+        # ``_invalidation_cause``. ``weakref.proxy`` preserves
+        # forward attribute access while the inner is alive;
+        # post-close calls on the proxy raise ``ReferenceError``
+        # only if the inner has been GC'd, which is benign at
+        # that point. Mirror discipline of dbapi-layer
+        # ``Cursor.close`` / ``AsyncCursor.close``.
+        with contextlib.suppress(TypeError):
+            self._adapt_connection = weakref.proxy(self._adapt_connection)
+        with contextlib.suppress(TypeError):
+            self._connection = weakref.proxy(self._connection)
 
     def execute(
         self,
@@ -799,6 +816,21 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # the cancel still propagates to the caller.
                 self._force_close_transport()
                 raise
+        # Drop the strong back-reference to the inner dbapi
+        # ``AsyncConnection`` so a closed adapter retained by SA's
+        # pool diagnostics / pytest session-fixture cache does
+        # not pin the inner conn — and through it the client-
+        # layer state, registered ``weakref.finalize``, and any
+        # frame-pinning ``_invalidation_cause``. ``weakref.proxy``
+        # preserves SA's expected API surface (calls forward to
+        # the inner while it is alive) — only after the inner is
+        # genuinely GC'd does ``ReferenceError`` surface, which
+        # is benign post-close. SA's reference adapter keeps the
+        # strong ref; this is dqlite-specific lifecycle
+        # discipline matching the dbapi layer's
+        # ``AsyncConnection.close``.
+        with contextlib.suppress(TypeError):
+            self._connection = weakref.proxy(self._connection)
 
     def _force_close_transport(self) -> None:
         """Best-effort synchronous teardown of the underlying transport.

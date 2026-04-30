@@ -1174,6 +1174,17 @@ class DqliteDialect(SQLiteDialect):
                 applies_substring = getattr(cause, "code", None) is None
             elif isinstance(cause, _dbapi_exc.DatabaseError):
                 applies_substring = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
+            elif isinstance(cause, _dbapi_exc.InterfaceError):
+                # Cycle 21 made InterfaceError carry code/raw_message
+                # and broadened the set of paths that emit it
+                # (DQLITE_PROTO=1001, SQLITE_RANGE=25, SQLITE_MISUSE=21).
+                # The closed-handle InterfaceError arm above already
+                # covered code=None; this arm covers the
+                # server-emitted code-bearing flavor so a
+                # transport-style server message lands on the
+                # substring scan instead of falling through to
+                # ``super().is_disconnect``.
+                applies_substring = getattr(cause, "code", None) is not None
             else:
                 applies_substring = False
             if applies_substring:

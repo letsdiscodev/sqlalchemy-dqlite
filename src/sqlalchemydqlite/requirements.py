@@ -31,8 +31,11 @@ class Requirements(SuiteRequirements):
 
     @property
     def time_microseconds(self) -> compound:
-        """SQLite stores time as text without microseconds."""
-        return exclusions.closed()
+        """The dbapi's ``_iso8601_from_time`` emits microsecond
+        precision via ``.{microsecond:06d}`` and the result decoder
+        round-trips through ``time.fromisoformat`` which accepts µs
+        precision, so the dialect preserves microseconds end-to-end."""
+        return exclusions.open()
 
     @property
     def datetime_historic(self) -> compound:

@@ -50,7 +50,7 @@ class TestAsyncDialectSetIsolationLevel:
     def test_autocommit_raises_argumenterror(self) -> None:
         dialect = DqliteDialect_aio()
         mock_conn = MagicMock()
-        with pytest.raises(ArgumentError, match="does not support AUTOCOMMIT"):
+        with pytest.raises(ArgumentError, match="AUTOCOMMIT"):
             dialect.set_isolation_level(mock_conn, "AUTOCOMMIT")
 
     def test_unknown_raises_argumenterror(self) -> None:

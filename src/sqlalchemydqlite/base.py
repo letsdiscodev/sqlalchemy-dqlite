@@ -67,8 +67,9 @@ def _walk_cause_chain(e: BaseException, max_depth: int = 25) -> Iterator[BaseExc
     back). The depth cap is a second line of defence so a truly
     degenerate chain cannot drag classifier latency even if the
     visited-set catch misses for some reason. Same shape as
-    ``traceback._format_final_exc_line``'s own chain traversal,
-    extended with PEP 654 ``ExceptionGroup`` children.
+    ``traceback.TracebackException.__init__``'s ``_seen``-set
+    cause/context traversal, extended with PEP 654
+    ``ExceptionGroup`` children.
 
     A single-hop ``__cause__`` check would miss any wrap tower taller
     than one — retry decorators, telemetry middleware, and circuit
@@ -196,7 +197,7 @@ class _DqliteDateTime(sqltypes.DateTime):
             # result-side raise. A ``datetime.time`` bound to a
             # DateTime column would be encoded by dqlitedbapi as a
             # time-only ISO string (``"HH:MM:SS"``); on readback the
-            # cycle-18 result_processor branch raises ``DataError``
+            # result_processor branch raises ``DataError``
             # ("no defensible date to fabricate"). Without this
             # bind-side rejection, the same dialect's bind+read
             # round-trip writes a cell that the same dialect's reader
@@ -889,9 +890,12 @@ class DqliteDialect(SQLiteDialect):
             return
         if level == "AUTOCOMMIT":
             raise ArgumentError(
-                "dqlite does not support AUTOCOMMIT; every statement goes through "
-                "Raft consensus and there is no per-statement autocommit mode. "
-                "Use explicit commit() / rollback() on the connection."
+                "dqlite does not support SA's AUTOCOMMIT isolation level; "
+                "the SA dialect always brackets statements in BEGIN / COMMIT "
+                "for transactional control. Use explicit commit() / "
+                "rollback() on the connection. (The underlying wire is "
+                "autocommit-by-default; this is about SA's transaction "
+                "model, not the wire.)"
             )
         raise ArgumentError(
             f"dqlite only supports SERIALIZABLE isolation; requested level "
@@ -899,11 +903,14 @@ class DqliteDialect(SQLiteDialect):
         )
 
     def detect_autocommit_setting(self, dbapi_conn: DBAPIConnection) -> bool:
-        """dqlite never operates in autocommit mode.
+        """The SA dialect always brackets statements in BEGIN / COMMIT.
 
-        Every statement traverses Raft consensus under an explicit
-        transaction lifecycle (see ``set_isolation_level`` rejection of
-        ``"AUTOCOMMIT"`` and the rationale at line 558-562). The dqlite
+        The underlying wire protocol is autocommit-by-default and the
+        bare dbapi ``Connection.autocommit`` property reports ``True``,
+        but SA wraps every statement in a transaction lifecycle so
+        from SA's perspective the connection is never in autocommit
+        mode. Mirrors ``set_isolation_level``'s rejection of
+        ``"AUTOCOMMIT"``. The dqlite
         dbapi ``Connection`` deliberately does NOT expose an
         ``isolation_level`` attribute; the inherited ``DefaultDialect``
         implementation raises ``NotImplementedError``, and the pysqlite
@@ -1013,9 +1020,8 @@ class DqliteDialect(SQLiteDialect):
         its only operation is a trivial ``SELECT 1``, where a
         ProgrammingError can only be an out-of-band state fault —
         specifically the cross-event-loop reuse shape that
-        ``dqlitedbapi.AsyncConnection`` raises from
-        ``_ensure_locks`` / ``cursor()``
-        (see ``aio/connection.py:166-172, 418-433``). During a real
+        ``dqlitedbapi.AsyncConnection._ensure_locks`` raises (and
+        which ``AsyncCursor.execute`` propagates). During a real
         query, a bare ProgrammingError is more likely a caller bug
         (passed wrong number of binds, used closed cursor in userland
         code) and must propagate so the bug is visible.

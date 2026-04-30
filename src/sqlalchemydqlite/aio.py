@@ -513,10 +513,18 @@ class AsyncAdaptedConnection(AdaptedConnection):
 
     @property
     def autocommit(self) -> bool:
-        """Report False: dqlite has no autocommit mode.
+        """Report ``False``: SA's transaction model is in effect at this layer.
 
-        Every statement goes through Raft consensus under an explicit
-        transaction lifecycle; there is no per-statement autocommit.
+        The underlying dbapi ``Connection.autocommit`` is ``True`` —
+        the dqlite wire protocol is autocommit-by-default and every
+        statement commits at the server unless the caller issued an
+        explicit ``BEGIN``. The SA adapter deliberately reports
+        ``False`` here because SA wraps the connection with explicit
+        ``BEGIN`` / ``COMMIT`` control via the dialect, taking the
+        wire layer out of autocommit mode for the duration of the
+        SA-managed transaction. Both layers' values are accurate for
+        their respective layer; they are not in conflict.
+
         Parity with SA's reference ``AsyncAdapt_aiosqlite_connection``,
         which exposes ``autocommit`` as a read/write property. SA
         characteristic code and some third-party middleware probe
@@ -528,20 +536,27 @@ class AsyncAdaptedConnection(AdaptedConnection):
 
     @autocommit.setter
     def autocommit(self, value: bool) -> None:
-        """Reject attempts to enable autocommit; accept ``False`` as a no-op.
+        """Reject attempts to enable AUTOCOMMIT mode at the SA layer;
+        accept ``False`` as a no-op.
 
         SA's engine flow short-circuits ``set_isolation_level`` to
         reject ``"AUTOCOMMIT"`` before reaching the dialect, but a
         direct ``conn.autocommit = True`` on the adapter would bypass
         that guard. Fail fast with the same educational message the
-        dialect emits for ``isolation_level="AUTOCOMMIT"``.
+        dialect emits for ``isolation_level="AUTOCOMMIT"``. The
+        underlying wire is autocommit-by-default; what's rejected
+        here is SA's AUTOCOMMIT *isolation level*, which would
+        require the dialect to skip BEGIN/COMMIT wrapping — not
+        compatible with how the adapter manages the dqlite
+        connection.
         """
         if value:
             from sqlalchemy.exc import ArgumentError
 
             raise ArgumentError(
-                "dqlite does not support AUTOCOMMIT; every statement goes "
-                "through Raft consensus. Use explicit commit()/rollback()."
+                "dqlite does not support SA's AUTOCOMMIT isolation level; "
+                "the SA dialect always brackets statements in BEGIN / COMMIT "
+                "for transactional control. Use explicit commit()/rollback()."
             )
         # value is False → already the effective mode, no-op.
 
@@ -758,8 +773,20 @@ class AsyncAdaptedConnection(AdaptedConnection):
         peer = getattr(self._connection, "address", None)
         hook = getattr(self._connection, "force_close_transport", None)
         try:
-            if hook is not None:
-                hook()
+            if hook is None:
+                # Older dbapi without the force-close hook; nothing
+                # we can do synchronously. Log so the audit trail
+                # records the no-op rather than silently lying about
+                # delegating.
+                logger.debug(
+                    "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
+                    "dbapi connection has no force_close_transport hook; "
+                    "transport teardown skipped",
+                    id(self),
+                    peer,
+                )
+                return
+            hook()
             logger.debug(
                 "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
                 "delegated to dbapi force_close_transport (sync fallback)",

@@ -16,6 +16,23 @@ from sqlalchemy.exc import ArgumentError
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqlitewire import LEADER_ERROR_CODES, SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
+from dqlitewire.constants import DQLITE_PROTO
+
+# InterfaceError codes that originate server-side and may carry a
+# transport-style message that the substring scanner should classify
+# as a disconnect. ``DQLITE_PROTO`` (1001) covers protocol-misuse
+# replies the C server emits via ``gateway.c::handle_request_*``; a
+# "wire decode failed" wording embedded in such a reply must
+# invalidate the SA pool slot.
+#
+# SQLITE_RANGE (25) and SQLITE_MISUSE (21) are explicitly EXCLUDED:
+# they are caller-side bind/use bugs (``cursor.execute("SELECT ?",
+# ())``, ``library used incorrectly``) — surfacing them as
+# disconnects would silently retry a permanent caller bug against
+# a fresh connection. The cycle-22 fix that broadened
+# ``applies_substring = code is not None`` over-included them; this
+# constant restores the narrow contract.
+_SERVER_INTERFACEERROR_DISCONNECT_CODES: Final[frozenset[int]] = frozenset({DQLITE_PROTO})
 
 # Primary SQLite codes that route to bare ``DatabaseError`` (rather
 # than ``OperationalError`` or its subclasses) and that the dialect
@@ -1145,9 +1162,16 @@ class DqliteDialect(SQLiteDialect):
             # Transport-class direct hits.
             if isinstance(cause, (_client_exc.DqliteConnectionError, _client_exc.ClusterError)):
                 return True
-            # Closed-handle InterfaceError surface.
+            # Closed-handle InterfaceError surface. Match against
+            # ``raw_message`` (un-truncated server text) when present,
+            # falling back to ``str(cause)``. Without raw_message
+            # priority, a long server message that contains the
+            # closed-handle clause beyond the 1 KiB display cap would
+            # miss the substring. Mirrors the discipline applied to
+            # the OperationalError substring scan below.
             if isinstance(cause, _dbapi_exc.InterfaceError):
-                message = str(cause).lower()
+                raw = getattr(cause, "raw_message", None) or str(cause)
+                message = raw.lower()
                 if "connection is closed" in message or "cursor is closed" in message:
                     return True
             # Leader-change code on either OperationalError shape —
@@ -1175,16 +1199,18 @@ class DqliteDialect(SQLiteDialect):
             elif isinstance(cause, _dbapi_exc.DatabaseError):
                 applies_substring = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
             elif isinstance(cause, _dbapi_exc.InterfaceError):
-                # Cycle 21 made InterfaceError carry code/raw_message
-                # and broadened the set of paths that emit it
-                # (DQLITE_PROTO=1001, SQLITE_RANGE=25, SQLITE_MISUSE=21).
-                # The closed-handle InterfaceError arm above already
-                # covered code=None; this arm covers the
-                # server-emitted code-bearing flavor so a
-                # transport-style server message lands on the
-                # substring scan instead of falling through to
-                # ``super().is_disconnect``.
-                applies_substring = getattr(cause, "code", None) is not None
+                # Server-emitted ``DQLITE_PROTO`` (1001) carries a
+                # transport-style server message the substring
+                # scanner should classify as disconnect.
+                # ``SQLITE_RANGE`` (25) and ``SQLITE_MISUSE`` (21)
+                # are caller-side bugs and MUST NOT trigger pool
+                # invalidation — retrying them against a fresh
+                # connection re-runs the same broken caller code.
+                # Restrict the substring scan to the explicit
+                # disconnect-eligible code set.
+                applies_substring = (
+                    getattr(cause, "code", None) in _SERVER_INTERFACEERROR_DISCONNECT_CODES
+                )
             else:
                 applies_substring = False
             if applies_substring:

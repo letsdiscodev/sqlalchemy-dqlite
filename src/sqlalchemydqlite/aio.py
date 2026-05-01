@@ -122,6 +122,19 @@ class AsyncAdaptedCursor:
         self._arraysize = value
 
     def close(self) -> None:
+        # Idempotent close: stdlib ``sqlite3.Cursor.close`` and the
+        # dbapi ``Cursor.close`` / ``AsyncCursor.close`` siblings all
+        # short-circuit on a second call. Without this gate, double-
+        # close redundantly re-runs the scrub AND attempts to wrap
+        # the already-proxied ``_adapt_connection`` /
+        # ``_connection`` in a second ``weakref.proxy`` — which
+        # raises ``TypeError`` against a ``weakproxy``. The
+        # ``contextlib.suppress(TypeError)`` swallows the failure
+        # so close stays idempotent in practice, but the
+        # short-circuit makes the contract structural rather than
+        # exception-suppression-based.
+        if self._closed:
+            return
         # Scrub the public read-attributes so post-close reads of
         # ``description`` / ``rowcount`` / ``lastrowid`` see a
         # consistent "no operation performed" surface. Plain

@@ -29,17 +29,20 @@ def test_pragma_read_uncommitted_cannot_weaken_isolation(engine_url: str) -> Non
     get_isolation_level`` / ``get_isolation_level_values`` must stop
     returning a constant and start introspecting.
     """
-    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.exc import DatabaseError
 
     engine = create_engine(engine_url)
     try:
         with engine.connect() as conn:
             try:
                 result = conn.execute(text("PRAGMA read_uncommitted")).scalar()
-            except OperationalError as exc:
+            except DatabaseError as exc:
                 # dqlite's authorizer currently rejects the PRAGMA
-                # outright. That's a stronger invariant than "returns
-                # 0" — weaker isolation literally cannot be requested.
+                # outright with SQLite primary code 23 (SQLITE_AUTH),
+                # which routes to ``DatabaseError`` per stdlib parity
+                # (CPython util.c::get_exception_class default arm).
+                # That's a stronger invariant than "returns 0" —
+                # weaker isolation literally cannot be requested.
                 assert "not authorized" in str(exc).lower(), (
                     f"PRAGMA rejected but with unexpected message: {exc}"
                 )

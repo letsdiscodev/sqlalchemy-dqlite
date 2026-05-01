@@ -1452,4 +1452,4 @@ class DqliteDialect(SQLiteDialect):
         failures far from the real cause. Dropping the fallback so the
         config error surfaces at dialect-init time.
         """
-        return tuple(self.dbapi.sqlite_version_info)  # type: ignore[union-attr]
+        return tuple(self.loaded_dbapi.sqlite_version_info)

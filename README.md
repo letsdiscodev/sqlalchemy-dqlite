@@ -103,6 +103,24 @@ a load balancer or DNS round-robin in front of the cluster, or rotate
 the URL host across deployments. Multi-address bootstrap is not
 exposed at the dialect URL surface.
 
+## Cross-version semantic shift: NULL in BOOLEAN/DATETIME columns
+
+Upstream dqlite commit `f30fc99` (`query: preserve SQLITE_NULL type
+for NULL values`, 2026-01-25) changed the wire encoding of NULL cells
+in columns declared `BOOLEAN`, `DATE`, `DATETIME`, or `TIMESTAMP`.
+Before that commit, a NULL in a `BOOLEAN` column was emitted as
+`BOOLEAN(0)` (decodes to `False`) and a NULL in a `DATETIME` column
+was emitted as `ISO8601("")` — indistinguishable on the wire from
+real `FALSE` / empty-string values. After the commit, NULL is emitted
+with the SQLite NULL type and decodes to `None`.
+
+ORM models with `Boolean()` and `DateTime()` columns will start
+returning `None` for previously-`False` / `""` values after a server
+upgrade. SQLAlchemy `nullable=False` constraints will start tripping
+on rows that previously decoded to non-NULL. There is no driver-level
+handshake distinguishing the two server versions — check your dqlite
+cluster version before relying on the post-fix semantics.
+
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for setup and contribution guidelines.

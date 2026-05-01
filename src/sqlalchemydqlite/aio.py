@@ -432,6 +432,13 @@ class AsyncAdaptedCursor:
     def scroll(self, value: int, mode: str = "relative") -> NoReturn:
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
+        # PEP 249 §6.1.1 enumerates ``mode`` ∈ {"relative", "absolute"};
+        # validate before NotSupportedError so a caller typo surfaces
+        # as a caller-side bug. ProgrammingError stays in dbapi.Error.
+        if mode not in ("relative", "absolute"):
+            from dqlitedbapi.exceptions import ProgrammingError
+
+            raise ProgrammingError(f"scroll mode must be 'relative' or 'absolute', got {mode!r}")
         raise NotSupportedError("dqlite cursors are not scrollable")
 
     def __iter__(self) -> Iterator[Any]:

@@ -671,6 +671,20 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # first check already matches it.
             if "different loop" in msg or "different event loop" in msg:
                 raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
+            # ``RuntimeError("Event loop is closed")`` reaches us via
+            # ``commit`` / ``rollback`` / ``execute`` / ``executemany``
+            # when the asyncio loop has been torn down between
+            # checkout and the operation (per-call ``asyncio.run()``
+            # patterns). Without a remap it leaks as a bare
+            # RuntimeError past SA's ``is_disconnect`` classifier
+            # (which is gated on ``DatabaseError``) and the broken
+            # slot survives. Treat as a transport-class disconnect
+            # so the pool invalidates and the next checkout gets a
+            # fresh connection. Symmetric with the
+            # ``"Event loop is closed"`` substring already in the
+            # base.py ``_dqlite_disconnect_messages`` tuple.
+            if "Event loop is closed" in msg:
+                raise OperationalError(f"event loop closed: {msg}", code=None) from error
         raise error
 
     def commit(self) -> None:
@@ -746,10 +760,30 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # close() would propagate an un-classified RuntimeError
                 # past engine.dispose().
                 msg = str(exc)
-                if "different loop" in msg:
+                if "different loop" in msg or "different event loop" in msg:
                     self._handle_exception(exc)
-                # Other RuntimeErrors (e.g., "Event loop is closed"
-                # during dispose) propagate.
+                # ``RuntimeError("Event loop is closed")`` lands here
+                # during ``engine.dispose()`` after a per-call
+                # ``asyncio.run()`` finished and tore the loop down —
+                # symmetric with the close arm below. The
+                # ``has_terminate=True`` dialect promise says
+                # close()/dispose must not propagate failures from
+                # this path; debug-log and continue to the close arm
+                # in the finally (which will itself raise the same
+                # RuntimeError but absorb it via the matching arm).
+                # The debug log preserves the traceback for triage.
+                if "Event loop is closed" in msg:
+                    peer = getattr(self._connection, "address", None)
+                    logger.debug(
+                        "AsyncAdaptedConnection.close (id=%s, peer=%s): "
+                        "rollback raised RuntimeError (%s); proceeding to close",
+                        id(self),
+                        peer,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    return
+                # Other RuntimeErrors (programmer bugs) propagate.
                 raise
             # The non-greenlet path is handled by the ``in_greenlet()``
             # preflight at the top of ``close()``; ``MissingGreenlet``

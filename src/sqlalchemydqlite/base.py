@@ -29,7 +29,7 @@ from dqlitewire.constants import DQLITE_PROTO
 # they are caller-side bind/use bugs (``cursor.execute("SELECT ?",
 # ())``, ``library used incorrectly``) — surfacing them as
 # disconnects would silently retry a permanent caller bug against
-# a fresh connection. The cycle-22 fix that broadened
+# a fresh connection. An earlier broadening of
 # ``applies_substring = code is not None`` over-included them; this
 # constant restores the narrow contract.
 _SERVER_INTERFACEERROR_DISCONNECT_CODES: Final[frozenset[int]] = frozenset({DQLITE_PROTO})

@@ -187,7 +187,7 @@ class AsyncAdaptedCursor:
         # the first fetch — a confusing diagnostic that implies the
         # cursor was closed between execute and fetch.
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
         # Clear buffered state FIRST so a CancelledError (or any other
         # exception) during execute/fetchall leaves the adapter in a
         # "no active result" state rather than carrying stale rows
@@ -295,7 +295,7 @@ class AsyncAdaptedCursor:
         # Mirror the closed-cursor guard the other methods on this
         # class apply; see ``execute`` for the rationale.
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
         # Clear state up-front so cancellation mid-call doesn't leak
         # a previous execution's buffered rows.
         self.description = None
@@ -364,14 +364,14 @@ class AsyncAdaptedCursor:
         # dqlitedbapi sync / async cursors that already type this as
         # ``tuple[Any, ...] | None``). Runtime behaviour unchanged.
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
         if self._rows:
             return self._rows.popleft()
         return None
 
     def fetchmany(self, size: int | None = None) -> Sequence[Any]:
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
         if size is None:
             size = self.arraysize
         if size < 0:
@@ -380,7 +380,7 @@ class AsyncAdaptedCursor:
 
     def fetchall(self) -> Sequence[Any]:
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
         retval = list(self._rows)
         self._rows.clear()
         return retval
@@ -394,11 +394,11 @@ class AsyncAdaptedCursor:
         # narrow "cursor is closed" InterfaceError branch reachable
         # through the adapter.
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
 
     def setoutputsize(self, size: int, column: int | None = None) -> None:
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
 
     @property
     def connection(self) -> "AsyncAdaptedConnection":
@@ -423,17 +423,17 @@ class AsyncAdaptedCursor:
         self, procname: str, parameters: Sequence[Any] | None = None
     ) -> Sequence[Any] | None:
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
         raise NotSupportedError("dqlite does not support stored procedures")
 
     def nextset(self) -> bool | None:
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
         raise NotSupportedError("dqlite does not support multiple result sets")
 
     def scroll(self, value: int, mode: str = "relative") -> None:
         if self._closed:
-            raise InterfaceError("cursor is closed")
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
         raise NotSupportedError("dqlite cursors are not scrollable")
 
     def __iter__(self) -> Iterator[Any]:

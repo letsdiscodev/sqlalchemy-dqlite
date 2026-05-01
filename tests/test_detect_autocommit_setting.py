@@ -1,15 +1,16 @@
 """``DqliteDialect.detect_autocommit_setting`` returns False unconditionally.
 
 dqlite has no AUTOCOMMIT mode (every statement goes through Raft
-consensus; see ``set_isolation_level`` rejection). The pysqlite parent's
-``detect_autocommit_setting`` probes ``dbapi_conn.isolation_level``,
-but the dqlite dbapi ``Connection`` deliberately does NOT expose that
-attribute, so the inherited probe raises ``AttributeError`` from inside
-SA's ``skip_autocommit_rollback`` path. Override to return False so the
-probe is a safe no-op rather than an exception.
-
-Triggered by ``create_engine(..., skip_autocommit_rollback=True)`` (see
-``sqlalchemy/engine/default.py::do_rollback`` and ``base.py:1115-1124``).
+consensus; see ``set_isolation_level`` rejection). The dqlite dbapi
+``Connection`` exposes ``isolation_level`` returning ``None`` for
+stdlib pre-3.12 parity. Without this override, the pysqlite parent's
+probe (``dbapi_conn.isolation_level is None``) would succeed and flip
+on SA's ``skip_autocommit_rollback`` short-circuit
+(``sqlalchemy/engine/default.py::do_rollback`` /
+``base.py:1115-1124``) — which was designed for stdlib's
+connection-level auto-BEGIN, not for dqlite's explicit-BEGIN wire
+discipline. Override to return False so the SA-managed BEGIN/COMMIT
+lifecycle is preserved.
 """
 
 from __future__ import annotations
@@ -50,3 +51,37 @@ class TestDetectAutocommitSetting:
     def test_async_dialect_inherits_override(self) -> None:
         dialect = DqliteDialect_aio()
         assert dialect.detect_autocommit_setting(object()) is False  # type: ignore[arg-type]
+
+    def test_dbapi_connection_exposes_isolation_level_returning_none(self) -> None:
+        """Defence pin: the dbapi ``Connection`` exposes
+        ``isolation_level`` returning ``None`` (stdlib parity stub).
+
+        If a future maintainer reads ``detect_autocommit_setting`` and
+        thinks "the override is redundant, the probe would return None
+        anyway and SA's default would handle it" — this test explains
+        why deleting the override would actually flip SA into stdlib
+        auto-BEGIN behaviour and silently corrupt every
+        ``engine.begin()`` block.
+        """
+        from dqlitedbapi.connection import Connection as DqliteSyncConnection
+
+        prop = DqliteSyncConnection.isolation_level
+        assert isinstance(prop, property)
+        assert prop.__doc__ is not None
+        # The probe SA's pysqlite parent runs
+        # (``dbapi_conn.isolation_level is None``) succeeds against the
+        # dqlite dbapi — that is the load-bearing reason this override
+        # cannot be deleted.
+
+    def test_override_remains_load_bearing_against_isolation_level_eq_none(self) -> None:
+        """Pin: the override returns False even if the dbapi probe
+        says ``isolation_level is None`` (which it does post-stdlib-
+        parity stub). Without the override, SA would flip on
+        ``skip_autocommit_rollback`` and bypass our explicit-BEGIN
+        wire discipline."""
+
+        class _StdlibParityProbe:
+            isolation_level = None
+
+        dialect = DqliteDialect()
+        assert dialect.detect_autocommit_setting(_StdlibParityProbe()) is False  # type: ignore[arg-type]

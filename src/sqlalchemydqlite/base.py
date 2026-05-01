@@ -1020,19 +1020,28 @@ class DqliteDialect(SQLiteDialect):
         but SA wraps every statement in a transaction lifecycle so
         from SA's perspective the connection is never in autocommit
         mode. Mirrors ``set_isolation_level``'s rejection of
-        ``"AUTOCOMMIT"``. The dqlite
-        dbapi ``Connection`` deliberately does NOT expose an
-        ``isolation_level`` attribute; the inherited ``DefaultDialect``
-        implementation raises ``NotImplementedError``, and the pysqlite
-        sibling probes ``dbapi_conn.isolation_level is None`` which
-        would also fail here. Both surface inside SA's
-        ``skip_autocommit_rollback`` path
-        (``engine/default.py::do_rollback`` ->
-        ``engine/base.py:1115-1124``), where the user's SQL is healthy
-        but the close path crashes with a confusing diagnostic.
+        ``"AUTOCOMMIT"``.
 
-        Returning False unconditionally makes ``skip_autocommit_rollback``
-        a safe no-op for the dqlite dialect.
+        The dqlite dbapi ``Connection`` exposes ``isolation_level``
+        returning ``None`` (stdlib pre-3.12 parity stub). Without this
+        override, SA's pysqlite-style probe
+        (``dbapi_conn.isolation_level is None``) would succeed, which
+        in turn flips on ``skip_autocommit_rollback`` in
+        ``engine/default.py::do_rollback`` ->
+        ``engine/base.py:1115-1124``. That short-circuit was designed
+        for stdlib sqlite3's connection-level auto-BEGIN, which dqlite
+        does NOT implement — every ``engine.begin()`` block would
+        bypass our explicit-BEGIN / explicit-COMMIT wire path and
+        silently corrupt transaction atomicity.
+
+        Returning ``False`` unconditionally — regardless of what the
+        dbapi probe says — keeps ``skip_autocommit_rollback`` disabled
+        and preserves the SA-managed BEGIN/COMMIT lifecycle. Do not
+        delete this override even if the dbapi-side
+        ``isolation_level`` probe later returns the same value the
+        parent class would have inferred; the override is the contract
+        between the SA dialect and the dqlite dbapi's stdlib-parity
+        stubs.
         """
         return False
 

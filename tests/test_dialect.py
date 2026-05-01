@@ -123,6 +123,35 @@ class TestDqliteDialect:
         assert getattr(DqliteDialect, flag) is True
         assert flag in DqliteDialect.__dict__
 
+    def test_default_metavalue_token_pinned_locally(self) -> None:
+        """``default_metavalue_token`` is the SQL token emitted on an
+        autoincrement-rowid PK column for ``insertmanyvalues``. The
+        DefaultDialect uses ``"DEFAULT"`` (rejected by SQLite); the
+        SQLite parent overrides to ``"NULL"``. Pin locally as
+        drift defence — a parent override drop would crash on
+        every autoincrement insertmanyvalues compile."""
+        assert DqliteDialect.default_metavalue_token == "NULL"
+        assert "default_metavalue_token" in DqliteDialect.__dict__
+
+    def test_tuple_in_values_pinned_locally(self) -> None:
+        """``tuple_in_values`` drives row-value ``IN`` clause
+        rendering. SQLite supports the syntax; pin locally so a
+        version-gated regression cannot silently break compile
+        output."""
+        assert DqliteDialect.tuple_in_values is True
+        assert "tuple_in_values" in DqliteDialect.__dict__
+
+    def test_alter_and_empty_insert_pinned_false_locally(self) -> None:
+        """``supports_alter`` and ``supports_empty_insert`` are non-
+        default overrides on the SQLite parent: SQLite's ALTER TABLE
+        is limited and ``INSERT () VALUES ()`` is a syntax error.
+        Pin locally so a parent override drop surfaces immediately
+        at our test boundary."""
+        assert DqliteDialect.supports_alter is False
+        assert DqliteDialect.supports_empty_insert is False
+        assert "supports_alter" in DqliteDialect.__dict__
+        assert "supports_empty_insert" in DqliteDialect.__dict__
+
     def test_supports_server_side_cursors_pinned_false_on_aio(self) -> None:
         """dqlite has no server-side cursor notion; pin locally on the
         async dialect so an upstream AsyncDialect default flip cannot

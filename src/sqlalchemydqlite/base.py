@@ -637,8 +637,35 @@ class DqliteDialect(SQLiteDialect):
     # dqlite's insert behaviour otherwise.
     use_insertmanyvalues = True
     supports_default_metavalue = True
+    # Co-pin with ``supports_default_metavalue`` above. The SQLite
+    # parent overrides the DefaultDialect's ``"DEFAULT"`` token to
+    # ``"NULL"`` because SQLite's grammar accepts ``VALUES (NULL)``
+    # at the autoincrement-rowid PK column but rejects
+    # ``VALUES (DEFAULT)``. A regression that drops the parent's
+    # override would silently emit ``VALUES (DEFAULT)`` and crash
+    # at compile-emit time on every ``insertmanyvalues``
+    # autoincrement code path. Pin locally for the same drift-
+    # defence reason as the surrounding flags.
+    default_metavalue_token = "NULL"
     supports_default_values = True
     insert_null_pk_still_autoincrements = True
+    # ``tuple_in_values`` drives row-value ``IN`` clause rendering —
+    # ``WHERE (a, b) IN ((?, ?), (?, ?))``. SQLite supports this
+    # syntax; the parent inherits the DefaultDialect's ``True``
+    # value. Pin locally as drift defence so a future SA release
+    # that conditionally disables the syntax for SQLite (e.g. a
+    # version-gated regression) does not silently break compile
+    # output for our dialect.
+    tuple_in_values = True
+    # ``supports_alter`` and ``supports_empty_insert`` are non-
+    # default overrides on the SQLite parent: SQLite's ``ALTER
+    # TABLE`` is limited (no DROP CONSTRAINT / DROP COLUMN
+    # historically), and ``INSERT () VALUES ()`` is a syntax
+    # error. Pin locally so a parent override drop would surface
+    # immediately at our test boundary instead of as an opaque
+    # syntax error at runtime.
+    supports_alter = False
+    supports_empty_insert = False
 
     # Override the SQLite dialect's string-based DATE/DATETIME processors:
     # dqlitedbapi returns datetime objects (PEP 249), not ISO strings.

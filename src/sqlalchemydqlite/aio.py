@@ -419,19 +419,17 @@ class AsyncAdaptedCursor:
     # counter would need parallel state increments in fetchone /
     # fetchmany / fetchall / __next__. Consumers who need rownumber
     # should use AsyncCursor directly.
-    def callproc(
-        self, procname: str, parameters: Sequence[Any] | None = None
-    ) -> Sequence[Any] | None:
+    def callproc(self, procname: str, parameters: Sequence[Any] | None = None) -> NoReturn:
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         raise NotSupportedError("dqlite does not support stored procedures")
 
-    def nextset(self) -> bool | None:
+    def nextset(self) -> NoReturn:
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         raise NotSupportedError("dqlite does not support multiple result sets")
 
-    def scroll(self, value: int, mode: str = "relative") -> None:
+    def scroll(self, value: int, mode: str = "relative") -> NoReturn:
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         raise NotSupportedError("dqlite cursors are not scrollable")

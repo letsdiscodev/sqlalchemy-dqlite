@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: Database :: Front-Ends",
     "Typing :: Typed",
 ]
-dependencies = ["dqlite-dbapi>=0.1.4", "sqlalchemy>=2.0,<3.0"]
+dependencies = ["dqlite-dbapi>=0.1.4,<0.2.0", "sqlalchemy>=2.0,<3.0"]
 
 [tool.uv.sources]
 dqlite-dbapi = { path = "../python-dqlite-dbapi", editable = true }

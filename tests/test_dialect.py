@@ -232,6 +232,24 @@ class TestDqliteDialect:
         aio_ep = ep_map["dqlite.aio"]
         assert aio_ep.name.split(".", 1)[1] == DqliteDialect_aio.driver
 
+    def test_explicit_dqlitedbapi_driver_url_resolves(self) -> None:
+        """SA URL ``dqlite+dqlitedbapi://`` resolves to the same dialect
+        class as the bare ``dqlite://`` form.
+
+        Pysqlite (built into SA) makes ``sqlite+pysqlite://`` resolvable
+        via SA's internal ``_auto_fn`` name-splitting; we are external,
+        so we must register both bare and explicit-driver entry points
+        in ``pyproject.toml``. URL-canonical templating that emits the
+        ``<dialect>+<driver>://`` form is the common third-party shape,
+        so the explicit form must round-trip.
+        """
+        from sqlalchemy.engine import make_url
+
+        bare = make_url("dqlite://localhost:9001/db").get_dialect()
+        explicit = make_url("dqlite+dqlitedbapi://localhost:9001/db").get_dialect()
+
+        assert bare is explicit, f"Expected the same dialect class, got {bare} vs {explicit}"
+
 
 class TestDqliteDialectAio:
     def test_dialect_name(self) -> None:

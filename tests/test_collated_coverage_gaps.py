@@ -27,7 +27,7 @@ class TestHandleExceptionEventLoopClosedWrap:
         adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
         # The adapter consults ``_dqlite_disconnect_messages`` via base.py;
         # our error message is "Event loop is closed" which matches.
-        adapter._connection = MagicMock()  # type: ignore[assignment]
+        adapter._connection = MagicMock()
 
         original = RuntimeError("Event loop is closed")
         with pytest.raises(DqliteOperationalError) as excinfo:
@@ -43,7 +43,7 @@ class TestHandleExceptionEventLoopClosedWrap:
         from sqlalchemydqlite.aio import AsyncAdaptedConnection
 
         adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
-        adapter._connection = MagicMock()  # type: ignore[assignment]
+        adapter._connection = MagicMock()
 
         original = RuntimeError("some other unrelated error")
         with pytest.raises(RuntimeError) as excinfo:

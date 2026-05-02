@@ -1138,6 +1138,37 @@ class DqliteDialect_aio(DqliteDialect):
         """
         dbapi_connection.terminate()
 
+    def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:
+        """Async-side fast-path on already-closed adapter connections.
+
+        ``AsyncAdaptedConnection.close`` replaces ``self._connection``
+        with ``weakref.proxy(...)`` (documented rationale: SA's pool
+        diagnostic ring otherwise pins frame state and prevents GC).
+        When SA calls ``is_disconnect`` after a failure on such a
+        connection, the inner connection is already torn down — the
+        truthful answer is ``True`` regardless of what the cause chain
+        says.
+
+        Mirrors asyncpg's ``connection._connection.is_closed()``
+        short-circuit (``sqlalchemy/dialects/postgresql/asyncpg.py:1172``).
+        We already use the proxy-type check in
+        :meth:`AsyncAdaptedConnection.cursor` for the same "is the
+        inner connection torn down" question, so reusing it here is a
+        single-source-of-truth choice.
+
+        The non-fast-path (``connection`` is None, not an adapter, or
+        holds a live inner connection) falls through to
+        ``super().is_disconnect`` so the rich type/code/substring
+        classifier in ``DqliteDialect.is_disconnect`` runs unchanged.
+        """
+        if (
+            connection is not None
+            and isinstance(connection, AsyncAdaptedConnection)
+            and isinstance(connection._connection, weakref.ProxyTypes)
+        ):
+            return True
+        return super().is_disconnect(e, connection, cursor)
+
     @classmethod
     def import_dbapi(cls) -> types.ModuleType:
         # Returns ``dqlitedbapi.aio``, NOT the top-level ``dqlitedbapi``

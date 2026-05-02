@@ -69,6 +69,31 @@ _TRANSPORT_CLASS_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
 
 logger = logging.getLogger(__name__)
 
+
+# Cap server-controlled TEXT cells before they enter %r-formatted log
+# lines on the result_processor parse-failure path. The wire layer caps
+# each TEXT cell at _MAX_TEXT_VALUE_SIZE = 16 MiB; %r roughly doubles
+# the size with quoting/escapes, multiplied across each row of a result
+# set. Without truncation, a malicious or compromised server returning
+# oversized TEXT for a column the dialect maps to DateTime / Date /
+# Time produces gigabytes of log output per query — DoS class against
+# operator log infrastructure (rsyslog, journald rate limiters, log
+# shippers). 200 chars matches the cap discipline used elsewhere in the
+# project (cluster._truncate_error, dbapi.exceptions truncation).
+_LOG_TRUNCATE_MAX_CHARS: Final[int] = 200
+
+
+def _truncate_for_log(value: str) -> str:
+    """Return ``value`` truncated to ``_LOG_TRUNCATE_MAX_CHARS`` chars
+    with a marker noting how many chars were dropped, suitable for
+    embedding into a ``logger.warning(..., %r, ...)`` format. Pure;
+    no-op when ``value`` is already within the cap."""
+    if len(value) <= _LOG_TRUNCATE_MAX_CHARS:
+        return value
+    overflow = len(value) - _LOG_TRUNCATE_MAX_CHARS
+    return f"{value[:_LOG_TRUNCATE_MAX_CHARS]}... [truncated, {overflow} chars]"
+
+
 __all__ = ["DqliteDialect"]
 
 _TRUE_TOKENS: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
@@ -275,8 +300,8 @@ class _DqliteDateTime(sqltypes.DateTime):
                 except ValueError as e:
                     logger.warning(
                         "DateTime processor received unparseable ISO8601 string %r: %s",
-                        value,
-                        e,
+                        _truncate_for_log(value),
+                        _truncate_for_log(str(e)),
                     )
                     return value
             if isinstance(value, datetime.datetime):
@@ -399,8 +424,8 @@ class _DqliteDate(sqltypes.Date):
                 except ValueError as e:
                     logger.warning(
                         "Date processor received unparseable ISO8601 string %r: %s",
-                        value,
-                        e,
+                        _truncate_for_log(value),
+                        _truncate_for_log(str(e)),
                     )
                     return value
             return value
@@ -489,8 +514,8 @@ class _DqliteTime(sqltypes.Time):
                 except ValueError as e:
                     logger.warning(
                         "Time processor received unparseable ISO8601 string %r: %s",
-                        value,
-                        e,
+                        _truncate_for_log(value),
+                        _truncate_for_log(str(e)),
                     )
                     return value
             return value

@@ -196,6 +196,37 @@ class TestDqliteDialect:
         """
         assert DqliteDialect.returns_native_bytes is True
 
+    def test_description_encoding_pinned_locally_to_none(self) -> None:
+        """Drift defence: ``description_encoding`` is pinned on
+        ``DqliteDialect`` itself.
+
+        dqlitedbapi returns ``str`` column names (matches pysqlite); a
+        non-``None`` value here would route descriptions through SA's
+        byte-decode pipeline and crash with ``AttributeError`` on
+        every column-name access. Pysqlite already pins ``None``;
+        the local re-pin is documentary parity with the rest of this
+        block — guards against any future upstream refactor that
+        moves the field out from under us.
+        """
+        assert "description_encoding" in DqliteDialect.__dict__
+        assert DqliteDialect.description_encoding is None
+
+    def test_isolation_lookup_pinned_locally_to_serializable_only(self) -> None:
+        """Drift defence: ``_isolation_lookup`` advertises only the
+        level the dialect actually accepts.
+
+        Pysqlite's inherited lookup includes ``READ UNCOMMITTED`` and
+        ``AUTOCOMMIT`` keys we reject at runtime
+        (``set_isolation_level``). The pinned single-level mapping is
+        the truthful surface for SA-internal paths that read the
+        lookup by-key. Note: deliberately diverges from
+        ``get_isolation_level_values`` which advertises AUTOCOMMIT
+        as a diagnostic-routing channel — see the comment block in
+        ``base.py`` for why the two surfaces differ.
+        """
+        assert "_isolation_lookup" in DqliteDialect.__dict__
+        assert dict(DqliteDialect._isolation_lookup) == {"SERIALIZABLE": 0}
+
     def test_dialect_description(self) -> None:
         # Pin the derived dialect_description so SQLAlchemy upgrades cannot
         # silently change the rendered identity in ORM error messages.

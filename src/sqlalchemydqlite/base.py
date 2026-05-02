@@ -7,7 +7,7 @@ import types
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any, Final
 
-from sqlalchemy import pool
+from sqlalchemy import pool, util
 from sqlalchemy import types as sqltypes
 from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
 from sqlalchemy.engine import URL
@@ -636,6 +636,17 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # ``LargeBinary.result_processor`` skips the redundant
     # ``bytes(value)`` wrap on every BLOB cell.
 
+    # Drift defence: pin ``description_encoding = None`` locally so the
+    # contract is evident on the class without an MRO walk. dqlitedbapi
+    # returns ``str`` column names (matches pysqlite); a non-``None``
+    # value here would route descriptions through SA's byte-decode
+    # pipeline (``cursor.description[i][0].decode(encoding)``), crashing
+    # with ``AttributeError: 'str' object has no attribute 'decode'``.
+    # Pysqlite already pins this (pysqlite.py:480); the local re-pin is
+    # documentary parity with the rest of this drift-defence block —
+    # purely a no-op today, future-proofs against an upstream refactor.
+    description_encoding = None
+
     # dqlitedbapi cursors are buffered with continuation streaming
     # (frames fully consumed client-side); they do not implement
     # SQLAlchemy's server-side cursor protocol. The inherited
@@ -1099,6 +1110,28 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         self._validate_connect_kwargs(cparams)
         return self.loaded_dbapi.connect(*cargs, **cparams)
 
+    # Drift defence: pin the isolation-level lookup to match the
+    # runtime contract that ``set_isolation_level`` actually honours
+    # (only SERIALIZABLE). The inherited pysqlite lookup advertises
+    # ``READ UNCOMMITTED`` (rejected with the generic "not supported"
+    # message) and ``AUTOCOMMIT`` (rejected with the dedicated
+    # ``_AUTOCOMMIT_REJECTION_MSG``); the truthful single-level mapping
+    # here matches what we actually accept.
+    #
+    # Note this static surface deliberately diverges from
+    # ``get_isolation_level_values`` below, which DOES advertise
+    # ``AUTOCOMMIT`` as a diagnostic-routing channel so SA's
+    # ``_assert_and_set_isolation_level`` dispatches to our dedicated
+    # rejection message rather than its generic
+    # "invalid isolation level" ``ArgumentError``. The lookup table is
+    # read by SA-internal paths that bypass the values-list (third-
+    # party introspection, future refactors); single-source-of-truth
+    # there.
+    #
+    # Value ``0`` mirrors the parent's PRAGMA-style key shape; we never
+    # read it because ``set_isolation_level`` is fully overridden.
+    _isolation_lookup = util.immutabledict({"SERIALIZABLE": 0})
+
     def get_isolation_level_values(
         self, dbapi_connection: DBAPIConnection
     ) -> Sequence[IsolationLevel]:
@@ -1120,6 +1153,11 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         explains *why* autocommit is unsupported, which is strictly
         more actionable than the generic error. The advertised value
         is a diagnostic channel, not an acceptance claim.
+
+        Note: ``_isolation_lookup`` (pinned above the class methods)
+        deliberately diverges — it is the truthful single-level mapping
+        SA-internal paths read by-key. The two surfaces serve different
+        consumers; see the ``_isolation_lookup`` comment for the why.
         """
         return ["SERIALIZABLE", "AUTOCOMMIT"]
 

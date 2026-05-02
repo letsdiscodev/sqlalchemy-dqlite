@@ -806,6 +806,30 @@ class DqliteDialect(SQLiteDialect):
     # engines) can express the same intent. The 1_000_000 frame
     # ceiling is the dialect's own defense-in-depth cap; the dbapi /
     # wire layers do not enforce a hard ceiling.
+    # Full set of dbapi.connect kwargs the dialect forwards. The URL
+    # query path is restricted to the subset in ``_URL_QUERY_ALLOWED``
+    # below (typed conversion + range validation); the
+    # ``connect_args=`` path bypasses the URL allowlist (SA's
+    # ``cparams.union(connect_args)`` happens AFTER
+    # ``create_connect_args`` returns), so unknown keys would
+    # otherwise reach ``dqlitedbapi.connect`` where they raise
+    # ``NotSupportedError`` at first checkout — far from the user's
+    # ``create_engine(connect_args=...)`` site. Validate the merged
+    # kwarg set inside ``connect()`` against the allowlist below to
+    # catch typos at first checkout with the same ``ArgumentError``
+    # class the URL path emits at engine construction.
+    _CONNECT_KWARG_ALLOWED: frozenset[str] = frozenset(
+        {
+            "address",
+            "database",
+            "timeout",
+            "max_total_rows",
+            "max_continuation_frames",
+            "trust_server_heartbeat",
+            "close_timeout",
+        }
+    )
+
     _URL_QUERY_ALLOWED: dict[str, tuple[Callable[[str], Any], Callable[[Any], bool] | None]] = {
         "timeout": (float, lambda v: math.isfinite(v) and v > 0),
         "max_total_rows": (
@@ -951,6 +975,39 @@ class DqliteDialect(SQLiteDialect):
             kwargs[key] = value
 
         return [], kwargs
+
+    def _validate_connect_kwargs(self, kwargs: dict[str, Any]) -> None:
+        """Reject any kwarg not in ``_CONNECT_KWARG_ALLOWED`` with
+        ``ArgumentError``. Called from ``connect()`` so the merged
+        ``cparams`` (URL-derived plus ``connect_args=`` overlay) gets
+        the same allowlist check the URL path applies to ``url.query``
+        — closing the asymmetry where a typo in ``connect_args=``
+        otherwise reaches ``dqlitedbapi.connect`` and raises
+        ``NotSupportedError`` at first checkout, far from the user's
+        ``create_engine`` site.
+        """
+        unknown = set(kwargs) - self._CONNECT_KWARG_ALLOWED
+        if unknown:
+            raise ArgumentError(
+                f"Unknown dqlite connect kwarg(s) {sorted(unknown)!r}. "
+                f"Allowed: {sorted(self._CONNECT_KWARG_ALLOWED)}. "
+                f"Check ``connect_args=`` for typos — the URL query "
+                f"path's allowlist applies only to ``?key=value`` URL "
+                f"parameters, not to ``connect_args=`` kwargs."
+            )
+
+    def connect(self, *cargs: Any, **cparams: Any) -> Any:
+        """Create a sync dbapi connection.
+
+        Validate ``cparams`` against ``_CONNECT_KWARG_ALLOWED`` before
+        forwarding to ``dqlitedbapi.connect`` so a typo in
+        ``create_engine(connect_args={...})`` raises ``ArgumentError``
+        with the same diagnostic class the URL path emits, instead of
+        deferring to ``dqlitedbapi.connect``'s ``NotSupportedError``
+        at first checkout.
+        """
+        self._validate_connect_kwargs(cparams)
+        return self.loaded_dbapi.connect(*cargs, **cparams)
 
     def get_isolation_level_values(
         self, dbapi_connection: DBAPIConnection

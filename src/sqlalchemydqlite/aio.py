@@ -1104,6 +1104,12 @@ class DqliteDialect_aio(DqliteDialect):
     def connect(self, *cargs: Any, **cparams: Any) -> Any:
         """Create and wrap an async connection.
 
+        Validate ``cparams`` against ``_CONNECT_KWARG_ALLOWED`` before
+        forwarding so a typo in ``create_engine(connect_args={...})``
+        raises ``ArgumentError`` with the same diagnostic class the
+        URL query path emits at engine construction (mirrors the
+        sync ``DqliteDialect.connect``).
+
         Eagerly establishes the TCP connection so errors surface at
         connect-time rather than on the first query. If that eager
         connect raises, the ``raw_conn`` object is already constructed
@@ -1127,6 +1133,7 @@ class DqliteDialect_aio(DqliteDialect):
         synchronous transport reap regardless of whether the suppress
         absorbs.
         """
+        self._validate_connect_kwargs(cparams)
         raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
         try:
             await_only(raw_conn.connect())

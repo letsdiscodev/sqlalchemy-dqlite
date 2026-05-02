@@ -1109,6 +1109,18 @@ class DqliteDialect(SQLiteDialect):
         the branches below are largely defence-in-depth for third-party
         callers (test harnesses, custom engine implementations) that
         bypass SA's upstream validation.
+
+        Note on ``level=None``: ``DefaultDialect.reset_isolation_level``
+        calls this with ``self.default_isolation_level`` which is
+        ``"SERIALIZABLE"`` after ``initialize()`` runs — but
+        ``initialize()`` may be skipped by test harnesses or by direct
+        callers that build a dialect without an engine. Treat
+        ``level=None`` as a deliberate no-op (the level is already
+        SERIALIZABLE, no-op is correct) rather than raising
+        ``ArgumentError``; raising would break the
+        ``reset_isolation_level`` path on harnesses that bypass
+        ``initialize()``. Diverges from pysqlite's
+        ``_isolation_lookup`` which would ``KeyError`` on None.
         """
         if level is None or level == "SERIALIZABLE":
             return

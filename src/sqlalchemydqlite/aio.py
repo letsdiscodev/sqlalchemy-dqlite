@@ -561,7 +561,20 @@ class AsyncAdaptedConnection(AdaptedConnection):
             f"target process instead."
         )
 
-    def cursor(self) -> AsyncAdaptedCursor:
+    def cursor(self, server_side: bool = False) -> AsyncAdaptedCursor:
+        # Match the SA connector reference signature
+        # (``sqlalchemy.connectors.asyncio.AsyncAdapt_dbapi_connection.cursor``)
+        # which takes ``server_side: bool = False``. The dialect pins
+        # ``supports_server_side_cursors=False`` so SA itself never
+        # passes ``server_side=True`` here, but third-party callers
+        # and future SA paths may; raise ``NotImplementedError``
+        # explicitly so misuse surfaces clearly rather than failing
+        # opaquely on an unexpected kwarg.
+        if server_side:
+            raise NotImplementedError(
+                "Server-side cursors are not supported by the dqlite dialect; "
+                "supports_server_side_cursors is pinned to False."
+            )
         # Closed-state guard: ``close()`` replaces ``self._connection``
         # with ``weakref.proxy(...)``. Returning a fresh
         # ``AsyncAdaptedCursor`` over a proxy that may have been GC'd

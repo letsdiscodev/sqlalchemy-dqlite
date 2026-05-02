@@ -69,7 +69,10 @@ def test_default_localhost_unchanged() -> None:
     "ipv6_host",
     [
         "::1",
-        "::",
+        # ``::`` (IPv6 unspecified) deliberately omitted: the client's
+        # ``_parse_address`` rejects unspecified IP literals (TCP cannot
+        # legitimately target them; a server-supplied redirect to the
+        # unspecified IP would burn a retry attempt).
         "2001:db8::1",
         "fe80::1",
         "2001:db8:85a3::8a2e:370:7334",

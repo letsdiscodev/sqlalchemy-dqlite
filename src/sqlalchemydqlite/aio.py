@@ -1138,6 +1138,74 @@ class DqliteDialect_aio(DqliteDialect):
         """
         dbapi_connection.terminate()
 
+    def do_ping(self, dbapi_connection: Any) -> bool:
+        """Async-side bespoke ping.
+
+        Inheriting the sync ``DqliteDialect.do_ping`` from base.py
+        routes through ``AsyncAdaptedCursor`` and pays three
+        ``await_only`` hops per checkout — ``cursor.execute("SELECT 1")``
+        plus ``cursor.fetchall()`` (the description-truthy path
+        materialises ``SELECT 1``'s row) plus ``cursor.close()``. Worse,
+        loop-state ``RuntimeError`` from a closed loop reaches the
+        sync caller without going through the adapter's
+        ``_handle_exception``, so SA's ``is_disconnect`` classifier
+        (gated on ``DatabaseError``) misses it and the broken slot
+        survives.
+
+        Run ``SELECT 1`` directly through the dbapi async cursor
+        instead — one execute + one fetch + one close, all under a
+        single ``await_only`` hop, with explicit RuntimeError routing
+        through ``_handle_exception`` so loop-state shapes classify as
+        ``OperationalError`` and SA evicts the slot. Mirrors asyncpg's
+        ``_async_ping`` shape (asyncpg.py:814).
+
+        The exception arms preserve the sync ``do_ping``'s
+        ``_BARE_DBE_DISCONNECT_CODES`` arm so codes 11/24/26
+        (CORRUPT/FORMAT/NOTADB) still classify as ping-fail.
+        """
+        from dqliteclient.exceptions import DqliteConnectionError
+        from dqlitedbapi.exceptions import DatabaseError
+        from sqlalchemydqlite.base import _BARE_DBE_DISCONNECT_CODES
+
+        try:
+            await_only(self._async_ping(dbapi_connection))
+        except (
+            OperationalError,
+            ProgrammingError,
+            InterfaceError,
+            DqliteConnectionError,
+            OSError,
+        ):
+            return False
+        except DatabaseError as exc:
+            if getattr(exc, "code", None) in _BARE_DBE_DISCONNECT_CODES:
+                return False
+            raise
+        return True
+
+    async def _async_ping(self, dbapi_connection: Any) -> None:
+        """Async leg of ``do_ping``: open a cursor, run ``SELECT 1``,
+        fetch one row, close. ``cursor()`` on the dbapi
+        ``AsyncConnection`` is synchronous (returns an ``AsyncCursor``);
+        ``execute`` / ``fetchone`` / ``close`` on the cursor are
+        coroutines.
+
+        Route any ``RuntimeError`` through the adapter's
+        ``_handle_exception`` so loop-state shapes (different-loop,
+        loop-closed) re-raise as ``OperationalError`` — the outer
+        ``do_ping`` then catches that as ping-fail.
+        """
+        try:
+            cur = dbapi_connection._connection.cursor()
+            try:
+                await cur.execute("SELECT 1")
+                await cur.fetchone()
+            finally:
+                with contextlib.suppress(Exception):
+                    await cur.close()
+        except RuntimeError as error:
+            dbapi_connection._handle_exception(error)
+
     def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:
         """Async-side fast-path on already-closed adapter connections.
 

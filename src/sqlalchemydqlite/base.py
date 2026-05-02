@@ -9,6 +9,7 @@ from typing import Any, Final
 
 from sqlalchemy import pool, util
 from sqlalchemy import types as sqltypes
+from sqlalchemy.dialects.sqlite.base import SQLiteCompiler
 from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
 from sqlalchemy.engine import URL
 from sqlalchemy.engine.interfaces import DBAPIConnection, IsolationLevel
@@ -524,6 +525,51 @@ class _DqliteTime(sqltypes.Time):
         return process
 
 
+class DqliteCompiler(SQLiteCompiler):
+    """SQLite-flavoured compiler with dqlite-specific overrides.
+
+    dqlite has no UDF primitive — the wire protocol exposes prepared
+    statements only, with no equivalent of pysqlite's
+    ``connection.create_function``. Pysqlite's inherited
+    ``visit_regexp_match_op_binary`` (and its negated sibling) emit
+    ``col REGEXP ?`` / ``col NOT REGEXP ?`` SQL that depends on a
+    runtime ``regexp`` UDF registered in pysqlite's ``on_connect``;
+    our ``DqliteDialect.on_connect`` is a no-op (the dqlitedbapi
+    ``Connection.create_function`` raises ``NotSupportedError``) so
+    the inherited compile-then-execute path produces a late
+    ``OperationalError: no such function: regexp`` from the cluster
+    — by which time a SAVEPOINT may already be open and the user has
+    paid the round-trip cost. Raise at compile time instead so the
+    diagnostic surfaces at statement-construction.
+
+    Both visitors are required: SA's ``SQLiteCompiler`` defines
+    ``visit_not_regexp_match_op_binary`` as a separate dispatcher
+    (``.venv/.../sqlite/base.py:1581``), the negation is NOT
+    auto-derived from the positive form.
+
+    The raise uses ``dqlitedbapi.exceptions.NotSupportedError`` rather
+    than ``sqlalchemy.exc.CompileError`` for consistency with the
+    dialect's other "this dbapi does not support X" raises (e.g., the
+    two-phase commit pattern in ``DqliteDialect.do_begin_twophase``).
+    The exception is a PEP 249 standard class and matches the dbapi
+    surface a user already sees for similar capability gaps.
+    """
+
+    _REGEXP_MATCH_NOT_SUPPORTED_MSG = (
+        "regexp_match is not available on dqlite: the wire protocol "
+        "has no UDF primitive, so SQLite's REGEXP operator (which "
+        "pysqlite implements via Connection.create_function) cannot "
+        "be honoured. Filter with LIKE, or pre-compile the regex "
+        "client-side."
+    )
+
+    def visit_regexp_match_op_binary(self, binary: Any, operator: Any, **kw: Any) -> str:
+        raise _dbapi_exc.NotSupportedError(self._REGEXP_MATCH_NOT_SUPPORTED_MSG)
+
+    def visit_not_regexp_match_op_binary(self, binary: Any, operator: Any, **kw: Any) -> str:
+        raise _dbapi_exc.NotSupportedError(self._REGEXP_MATCH_NOT_SUPPORTED_MSG)
+
+
 class DqliteDialect(SQLiteDialect_pysqlite):
     """SQLAlchemy dialect for dqlite.
 
@@ -785,6 +831,12 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         sqltypes.Time: _DqliteTime,
         sqltypes.TIMESTAMP: _DqliteDateTime,
     }
+
+    # Override the inherited statement compiler with a subclass that
+    # raises at compile time on ``regexp_match`` / its negation, since
+    # dqlite has no UDF primitive to support SQLite's ``REGEXP``
+    # operator. See ``DqliteCompiler`` for the full rationale.
+    statement_compiler = DqliteCompiler
 
     def __init__(self, **kwargs: Any) -> None:
         # Keyword-only: ``SQLiteDialect.__init__`` defines a handful of

@@ -370,7 +370,10 @@ class TestAioAllExports:
 
 
 class TestAioCursorSetInputSizes:
-    """PEP 249 conformance: setinputsizes takes a single sequence."""
+    """``setinputsizes`` accepts both PEP 249's single-sequence shape and
+    SA's connector-reference variadic shape (the no-op body ignores
+    the sizes either way; the wide accept-arm avoids a TypeError on
+    the SA-internal variadic call shape)."""
 
     def test_accepts_single_sequence_argument(self) -> None:
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
@@ -380,15 +383,15 @@ class TestAioCursorSetInputSizes:
         cursor._closed = False
         cursor.setinputsizes([10, None, 20])  # no error
 
-    def test_extra_positional_argument_rejected(self) -> None:
-        import pytest
-
+    def test_accepts_variadic_sa_shape(self) -> None:
+        """SA's connector reference uses ``setinputsizes(*inputsizes)``.
+        The adapter must accept that shape."""
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
         cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
         cursor._closed = False
-        with pytest.raises(TypeError):
-            cursor.setinputsizes([10], 20)  # type: ignore[call-arg]
+        cursor.setinputsizes(10, None, 20)  # no error
+        cursor.setinputsizes()  # empty variadic — no error
 
 
 class TestAioAdapterReturnAnnotations:

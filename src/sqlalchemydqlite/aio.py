@@ -399,7 +399,7 @@ class AsyncAdaptedCursor:
         self._rows.clear()
         return retval
 
-    def setinputsizes(self, sizes: Sequence[Any]) -> None:
+    def setinputsizes(self, *args: Any) -> None:
         # PEP 249: called before execute*() to hint bind-parameter sizes.
         # dqlite's wire encoder does not use per-parameter sizing hints,
         # so the implementation is a no-op on an open cursor — but the
@@ -407,6 +407,21 @@ class AsyncAdaptedCursor:
         # AsyncCursor's behaviour and to keep ``is_disconnect``'s
         # narrow "cursor is closed" InterfaceError branch reachable
         # through the adapter.
+        #
+        # Accept BOTH PEP 249's single-sequence shape
+        # (``cur.setinputsizes([size_a, size_b])``) AND SA's connector-
+        # reference variadic shape
+        # (``cur.setinputsizes(size_a, size_b)``,
+        # see sqlalchemy.connectors.asyncio:
+        # ``def setinputsizes(self, *inputsizes)``). Without the
+        # variadic accept-arm a SA-internal call passing positional
+        # sizes would raise ``TypeError`` on the unexpected count;
+        # without the single-sequence arm a PEP 249 caller would still
+        # work today (the body is a no-op) but would silently drop
+        # the type information if the body ever stops being a no-op.
+        # _ = args  # body is a no-op; sizes/inputsizes are inspected
+        # downstream only if a future implementation honours the hint.
+        del args
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
 

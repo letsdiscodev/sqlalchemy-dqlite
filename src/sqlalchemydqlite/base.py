@@ -1255,6 +1255,19 @@ class DqliteDialect(SQLiteDialect):
             # Transport-class direct hits.
             if isinstance(cause, (_client_exc.DqliteConnectionError, _client_exc.ClusterError)):
                 return True
+            # OS-level transport faults sitting deeper in the cause
+            # chain — wrapped inside a custom retry/middleware layer
+            # that catches OSError and re-raises a non-OSError, or the
+            # dbapi's own ``OperationalError("Failed to connect:
+            # ...") from os_err`` shape. The bare-``e`` arm at the
+            # entry of ``is_disconnect`` only catches the direct case;
+            # the walk must classify each node by type for symmetry
+            # with the DqliteConnectionError / ClusterError direct
+            # hit above. Without this, a wrapper-layer OSError silently
+            # leaves the slot in the pool and chronically re-fails on
+            # every checkout.
+            if isinstance(cause, OSError):
+                return True
             # Closed-handle InterfaceError surface. Match against
             # ``raw_message`` (un-truncated server text) when present,
             # falling back to ``str(cause)``. Without raw_message

@@ -12,10 +12,74 @@ import sqlalchemydqlite.base
 import sqlalchemydqlite.requirements
 
 
-def test_package_all_is_minimal() -> None:
-    # ``__version__`` is a PEP 396 public attribute, re-exported via
-    # ``__all__`` for parity with the other dqlite packages.
-    assert set(sqlalchemydqlite.__all__) == {"DqliteDialect", "__version__"}
+def test_package_all_pins_required_minimum() -> None:
+    """``__all__`` must contain ``DqliteDialect`` and ``__version__`` at a
+    minimum (PEP 396 public attribute, kept for parity with the other
+    dqlite packages).
+
+    Additional symbols are re-exported for SA-dialect-package convention
+    parity (every SA-shipped dialect's ``__init__.py`` re-exports the
+    type names plus ``Insert``/``insert`` plus a ``dialect`` alias). The
+    pinning here is a "must-contain" guard rather than a strict equality
+    so a future addition does not require updating this test in lockstep
+    — but a private-helper leak still trips
+    ``test_star_import_base_does_not_leak_private`` below.
+    """
+    assert {"DqliteDialect", "__version__"}.issubset(set(sqlalchemydqlite.__all__))
+
+
+def test_package_all_reexports_sqlite_types() -> None:
+    """SA convention (5/5 shipped dialect packages): re-export the
+    standard type names from package root so users following the
+    cookbook with ``from sqlalchemydqlite import VARCHAR`` succeed.
+
+    See ``.venv/.../sqlite/__init__.py:14-29`` for the reference set.
+    """
+    expected_types = {
+        "BLOB",
+        "BOOLEAN",
+        "CHAR",
+        "DATE",
+        "DATETIME",
+        "DECIMAL",
+        "FLOAT",
+        "INTEGER",
+        "JSON",
+        "NUMERIC",
+        "REAL",
+        "SMALLINT",
+        "TEXT",
+        "TIME",
+        "TIMESTAMP",
+        "VARCHAR",
+    }
+    assert expected_types.issubset(set(sqlalchemydqlite.__all__))
+    for name in expected_types:
+        assert hasattr(sqlalchemydqlite, name), f"sqlalchemydqlite.{name} missing"
+
+
+def test_package_reexports_insert_dml() -> None:
+    """SA convention: re-export ``Insert`` / ``insert`` so the ON
+    CONFLICT DML constructor is reachable from the package root, same
+    way ``sqlalchemy.dialects.sqlite`` re-exports it from
+    ``sqlalchemy.dialects.sqlite.dml``."""
+    from sqlalchemy.dialects.sqlite import Insert as SQLiteInsert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    from sqlalchemydqlite import Insert, insert
+
+    # Reference equality preserves single source of truth.
+    assert Insert is SQLiteInsert
+    assert insert is sqlite_insert
+
+
+def test_package_dialect_alias_points_at_dqlite_dialect() -> None:
+    """SA convention: ``<pkg>.dialect`` is the canonical sync default
+    class. Pysqlite at ``.venv/.../sqlite/__init__.py:34`` does
+    ``base.dialect = dialect = pysqlite.dialect``."""
+    from sqlalchemydqlite import DqliteDialect, dialect
+
+    assert dialect is DqliteDialect
 
 
 def test_base_all_is_minimal() -> None:

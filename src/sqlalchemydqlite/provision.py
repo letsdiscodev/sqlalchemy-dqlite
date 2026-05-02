@@ -57,6 +57,7 @@ from sqlalchemy.testing.provision import (
     run_reap_dbs,
     stop_test_class_outside_fixtures,
     temp_table_keyword_args,
+    upsert,
 )
 
 # mypy: ignore-errors
@@ -290,3 +291,36 @@ def _dqlite_temp_table_keyword_args(cfg: Any, eng: Any) -> dict[str, Any]:
     use this hook to choose the correct DDL prefix.
     """
     return {"prefixes": ["TEMPORARY"]}
+
+
+@upsert.for_db("dqlite")
+def _dqlite_upsert(
+    cfg: Any,
+    table: Any,
+    returning: Any,
+    *,
+    set_lambda: Any = None,
+    sort_by_parameter_order: bool = False,
+    index_elements: Any = None,
+) -> Any:
+    """Build a dialect-specific upsert statement for SA's testing harness.
+
+    dqlite IS SQLite at the SQL surface — INSERT … ON CONFLICT … DO
+    UPDATE / DO NOTHING, plus RETURNING, are inherited from the
+    SQLiteCompiler. Reuse pysqlite's ``insert`` constructor verbatim
+    rather than wrapping a backend-specific shim.
+
+    The body mirrors ``sqlalchemy/dialects/sqlite/provision.py:_upsert``
+    so behaviour stays in lockstep if SA refactors the hook contract.
+    Registration pairs with the public re-export of ``Insert`` / ``insert``
+    from ``sqlalchemydqlite.__init__``.
+    """
+    from sqlalchemy.dialects.sqlite import insert
+
+    stmt = insert(table)
+    if set_lambda is not None:
+        stmt = stmt.on_conflict_do_update(set_=set_lambda(stmt.excluded))
+    else:
+        stmt = stmt.on_conflict_do_nothing()
+    stmt = stmt.returning(*returning, sort_by_parameter_order=sort_by_parameter_order)
+    return stmt

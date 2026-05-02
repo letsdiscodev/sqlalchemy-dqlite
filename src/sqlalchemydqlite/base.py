@@ -7,6 +7,7 @@ import types
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any, Final
 
+from sqlalchemy import pool
 from sqlalchemy import types as sqltypes
 from sqlalchemy.dialects.sqlite.base import SQLiteDialect
 from sqlalchemy.engine import URL
@@ -530,6 +531,30 @@ class DqliteDialect(SQLiteDialect):
     """
 
     name = "dqlite"
+
+    # Pin the default isolation level at class level so the contract is
+    # evident statically and so test harnesses that build a dialect
+    # without an engine (skipping ``DefaultDialect.initialize()``) still
+    # see the right value. ``get_isolation_level`` always returns
+    # ``"SERIALIZABLE"`` (dqlite is single-leader Raft so every
+    # transaction is serialised at the cluster level), so the
+    # ``initialize()`` path would set this slot to the same value
+    # — the explicit pin is defensive drift defence.
+    default_isolation_level = "SERIALIZABLE"
+
+    @classmethod
+    def get_pool_class(cls, url: URL) -> type[pool.Pool]:
+        # dqlite is a remote dbapi: every connection is an independent
+        # socket and must NOT share threads. ``QueuePool`` is the
+        # ``DefaultDialect`` default — pin explicitly so a future
+        # change to the SA default cannot silently flip dqlite to a
+        # pool class with different concurrency semantics
+        # (``SingletonThreadPool`` would multiplex one socket across
+        # threads, breaking the dbapi's threadsafety=1 contract). The
+        # async sibling at ``aio.py`` follows the same explicit-pin
+        # discipline with ``AsyncAdaptedQueuePool``.
+        return pool.QueuePool
+
     # ``driver`` is the dbapi-module-name convention (matches SA's
     # pysqlite reference: ``driver = "pysqlite"`` for the
     # ``sqlite3``-aliased-as-``pysqlite`` module). The async

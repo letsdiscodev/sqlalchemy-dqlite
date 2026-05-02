@@ -545,6 +545,20 @@ class AsyncAdaptedConnection(AdaptedConnection):
         )
 
     def cursor(self) -> AsyncAdaptedCursor:
+        # Closed-state guard: ``close()`` replaces ``self._connection``
+        # with ``weakref.proxy(...)``. Returning a fresh
+        # ``AsyncAdaptedCursor`` over a proxy that may have been GC'd
+        # would defer the diagnostic to the first ``execute()``, which
+        # then surfaces either ``InterfaceError("Connection is closed
+        # ...")`` (proxied alive-but-closed) or — worse —
+        # ``ReferenceError`` (proxied GC'd) that is NOT a
+        # ``dbapi.Error`` subclass and escapes SA's
+        # ``_handle_dbapi_exception`` classifier. Detect the post-close
+        # state via the proxy type check and raise ``InterfaceError``
+        # up front, matching the dbapi-layer ``AsyncConnection.cursor``
+        # discipline.
+        if isinstance(self._connection, weakref.ProxyTypes):
+            raise InterfaceError(f"Connection is closed (id={id(self)})")
         return AsyncAdaptedCursor(self)
 
     def execute(

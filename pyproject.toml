@@ -57,6 +57,12 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# Exclude the SA compliance suite from the default pytest run.
+# tests/compliance/ loads SA's pytest plugin via its conftest, which
+# replaces pytest's normal collection model and requires CLI options
+# (--dburi etc.) the project-wide test runner does not pass. Run the
+# suite explicitly with ``pytest tests/compliance/``.
+addopts = ["--ignore=tests/compliance"]
 
 [tool.mypy]
 strict = true

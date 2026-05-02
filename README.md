@@ -123,7 +123,10 @@ cluster version before relying on the post-fix semantics.
 
 ## Development
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for setup and contribution guidelines.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for setup, contribution guidelines,
+and the SQLAlchemy compliance test-suite documentation (how to run it
+locally, why it's not part of the default `pytest` invocation, and
+why ~700 of its tests are correctly skipped).
 
 ## License
 

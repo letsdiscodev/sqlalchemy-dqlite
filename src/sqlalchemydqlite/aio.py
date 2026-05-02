@@ -554,6 +554,24 @@ class AsyncAdaptedConnection(AdaptedConnection):
     # slots tuple is correct.
     __slots__ = ()
 
+    # SA convention (asyncpg.py:714, aiosqlite.py:257,
+    # connectors/asyncio.py:338): expose ``await_`` as a staticmethod on
+    # the connection class. External instrumentation (Sentry / Datadog
+    # async-driver wrappers, SQLModel, sqlalchemy-utils) introspects
+    # ``dbapi_connection.await_`` to coalesce sync/async hops without
+    # re-running greenlet detection. The staticmethod surface is also
+    # the documented hook for a hypothetical ``AsyncAdaptFallback_*``
+    # variant: flip one line to ``staticmethod(await_fallback)`` and
+    # propagate.
+    #
+    # Internal call sites in this module continue to call ``await_only``
+    # directly from module scope — keeping the existing test fixtures
+    # that ``monkeypatch.setattr(aio_module, "await_only", ...)`` for
+    # behavioural stubs working unchanged. The staticmethod is purely a
+    # documented public surface for third-party callers and SA's own
+    # extension points.
+    await_ = staticmethod(await_only)
+
     def __init__(self, connection: "AsyncConnection") -> None:
         # ``_connection`` is the concrete ``dqlitedbapi.aio.AsyncConnection``
         # this adapter wraps; SQLAlchemy's parent ``AdaptedConnection``

@@ -79,12 +79,16 @@ class TestDqliteDialect:
         assert DqliteDialect.non_native_boolean_check_constraint is False
         assert "non_native_boolean_check_constraint" in DqliteDialect.__dict__
 
-    def test_update_returning_multifrom_pinned_locally(self) -> None:
+    def test_update_returning_multifrom_inherited_true(self) -> None:
         # dqlite's SQLite is >= 3.35, which supports multi-FROM RETURNING.
-        # Pin locally for the same upstream-drift reason as the three
-        # RETURNING flags above.
+        # Inherited from ``SQLiteDialect`` (class body, not version
+        # gate); the trio above (insert/update/delete_returning) is
+        # version-gated in ``SQLiteDialect.__init__`` and re-pinned
+        # there, but multifrom is not part of that gate. Pinning
+        # locally would defend against a class-body change in
+        # ``SQLiteDialect`` itself — narrower than the trio's drift
+        # surface and not previously load-bearing.
         assert DqliteDialect.update_returning_multifrom is True
-        assert "update_returning_multifrom" in DqliteDialect.__dict__
 
     def test_executemany_returning_flags_pinned_locally(self) -> None:
         # dqlitedbapi's executemany accumulates per-parameter-set
@@ -114,43 +118,46 @@ class TestDqliteDialect:
             "insert_null_pk_still_autoincrements",
         ],
     )
-    def test_insert_path_flags_pinned_locally(self, flag: str) -> None:
-        """SQLAlchemy's SQLiteDialect sets these four insert-path flags
-        explicitly. The dqlite dialect inherits them silently otherwise.
-        Pin locally so upstream version-gated changes cannot alter
-        insert codegen or rowid behaviour for dqlite.
+    def test_insert_path_flags_true(self, flag: str) -> None:
+        """The four insert-path flags read True on the dialect.
+
+        ``use_insertmanyvalues`` and ``insert_null_pk_still_autoincrements``
+        are pinned locally as drift defence against a hypothetical
+        ``DefaultDialect`` default change. ``supports_default_metavalue``
+        is now inherited from ``SQLiteDialect``'s class body.
+        ``supports_default_values`` has both a class-attr pin (pre-init
+        baseline) and an ``__init__`` re-pin against the parent's
+        version-gated reset.
         """
         assert getattr(DqliteDialect, flag) is True
-        assert flag in DqliteDialect.__dict__
 
-    def test_default_metavalue_token_pinned_locally(self) -> None:
+    def test_default_metavalue_token_inherited_null(self) -> None:
         """``default_metavalue_token`` is the SQL token emitted on an
         autoincrement-rowid PK column for ``insertmanyvalues``. The
-        DefaultDialect uses ``"DEFAULT"`` (rejected by SQLite); the
-        SQLite parent overrides to ``"NULL"``. Pin locally as
-        drift defence — a parent override drop would crash on
-        every autoincrement insertmanyvalues compile."""
+        ``DefaultDialect`` uses ``"DEFAULT"`` (rejected by SQLite); the
+        ``SQLiteDialect`` parent overrides to ``"NULL"``. Inherited
+        through the pysqlite parent — no local pin needed. The
+        previous version of this test asserted ``__dict__`` membership
+        as drift defence against a ``DefaultDialect`` flip; under the
+        pysqlite parent the SQLite-level override is stable.
+        """
         assert DqliteDialect.default_metavalue_token == "NULL"
-        assert "default_metavalue_token" in DqliteDialect.__dict__
 
-    def test_tuple_in_values_pinned_locally(self) -> None:
+    def test_tuple_in_values_inherited_true(self) -> None:
         """``tuple_in_values`` drives row-value ``IN`` clause
-        rendering. SQLite supports the syntax; pin locally so a
-        version-gated regression cannot silently break compile
-        output."""
+        rendering. SQLite supports the syntax; the parent
+        ``SQLiteDialect`` sets True in its class body. Inherited;
+        no local pin needed."""
         assert DqliteDialect.tuple_in_values is True
-        assert "tuple_in_values" in DqliteDialect.__dict__
 
-    def test_alter_and_empty_insert_pinned_false_locally(self) -> None:
-        """``supports_alter`` and ``supports_empty_insert`` are non-
-        default overrides on the SQLite parent: SQLite's ALTER TABLE
-        is limited and ``INSERT () VALUES ()`` is a syntax error.
-        Pin locally so a parent override drop surfaces immediately
-        at our test boundary."""
+    def test_alter_and_empty_insert_inherited_false(self) -> None:
+        """``supports_alter`` and ``supports_empty_insert`` are
+        non-default overrides on the SQLite parent: SQLite's
+        ``ALTER TABLE`` is limited and ``INSERT () VALUES ()`` is a
+        syntax error. Inherited from ``SQLiteDialect``'s class body
+        through the pysqlite parent."""
         assert DqliteDialect.supports_alter is False
         assert DqliteDialect.supports_empty_insert is False
-        assert "supports_alter" in DqliteDialect.__dict__
-        assert "supports_empty_insert" in DqliteDialect.__dict__
 
     def test_supports_server_side_cursors_pinned_false_on_aio(self) -> None:
         """dqlite has no server-side cursor notion; pin locally on the
@@ -172,14 +179,22 @@ class TestDqliteDialect:
         assert DqliteDialect.supports_server_side_cursors is False
         assert "supports_server_side_cursors" in DqliteDialect.__dict__
 
-    def test_returns_native_bytes_pinned_locally(self) -> None:
-        """dqlitedbapi returns native Python ``bytes`` for BLOB columns;
-        pin True locally so ``LargeBinary.result_processor`` skips the
-        redundant ``bytes(value)`` wrap on every BLOB cell, and so a
-        future DefaultDialect default flip cannot silently add overhead.
+    def test_returns_native_bytes_inherited_true(self) -> None:
+        """Pin ``returns_native_bytes is True`` so SA's
+        ``LargeBinary.result_processor`` skips the redundant
+        ``bytes(value)`` wrap on every BLOB cell.
+
+        Inherited from ``SQLiteDialect_pysqlite``, which sets True
+        explicitly in its class body. The previous version of this
+        test asserted ``__dict__`` membership against a feared
+        ``DefaultDialect`` default flip; under the pysqlite parent
+        that drift surface no longer exists (pysqlite's value sits
+        between us and ``DefaultDialect``, and SA would not flip
+        pysqlite's value to False without a major performance
+        regression for every pysqlite user). Drop the
+        ``__dict__`` assertion; pin only the effective value.
         """
         assert DqliteDialect.returns_native_bytes is True
-        assert "returns_native_bytes" in DqliteDialect.__dict__
 
     def test_dialect_description(self) -> None:
         # Pin the derived dialect_description so SQLAlchemy upgrades cannot

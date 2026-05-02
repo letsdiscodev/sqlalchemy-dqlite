@@ -9,7 +9,7 @@ from typing import Any, Final
 
 from sqlalchemy import pool
 from sqlalchemy import types as sqltypes
-from sqlalchemy.dialects.sqlite.base import SQLiteDialect
+from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
 from sqlalchemy.engine import URL
 from sqlalchemy.engine.interfaces import DBAPIConnection, IsolationLevel
 from sqlalchemy.exc import ArgumentError
@@ -524,10 +524,35 @@ class _DqliteTime(sqltypes.Time):
         return process
 
 
-class DqliteDialect(SQLiteDialect):
+class DqliteDialect(SQLiteDialect_pysqlite):
     """SQLAlchemy dialect for dqlite.
 
-    Inherits from SQLite dialect since dqlite is compatible with SQLite.
+    Inherits from ``SQLiteDialect_pysqlite`` — the canonical SA SQLite
+    dialect parent that aiosqlite and pysqlcipher also build on. This
+    surface picks up pysqlite's defaults (``default_paramstyle="qmark"``,
+    ``returns_native_bytes=True``, ``description_encoding=None``,
+    pysqlite-flavoured ``colspecs``) for free; the dqlite-specific
+    deltas remain as explicit overrides below.
+
+    Notable deliberate divergences from the parent (each documented at
+    the override site):
+
+    * ``import_dbapi`` returns ``dqlitedbapi`` instead of stdlib
+      ``sqlite3``.
+    * ``create_connect_args`` parses our ``dqlite://host:port/db?...``
+      URL form rather than pysqlite's file-path / ``?uri=`` form.
+    * ``set_isolation_level`` rejects ``AUTOCOMMIT`` (every dqlite
+      statement goes through Raft consensus; per-statement autocommit
+      is not a meaningful surface).
+    * ``detect_autocommit_setting`` always returns False (same
+      reason).
+    * ``on_connect`` is a no-op — pysqlite registers ``regexp`` and
+      ``floor`` UDFs via ``Connection.create_function``, which
+      dqlitedbapi raises ``NotSupportedError`` on (the dqlite server
+      has no user-defined-function primitive).
+    * ``is_disconnect`` is a broad classifier walking exception
+      cause chains; pysqlite's narrow substring check covers only
+      the in-process sqlite3 case.
     """
 
     name = "dqlite"
@@ -577,8 +602,12 @@ class DqliteDialect(SQLiteDialect):
     # the async-side parity argument.
     driver = "dqlitedbapi"
 
-    # dqlite uses qmark parameter style
-    paramstyle = "qmark"
+    # ``paramstyle`` (qmark) inherited transitively: ``dqlitedbapi.paramstyle``
+    # is "qmark", which SA's ``DefaultDialect.__init__`` reads via
+    # ``self.dbapi.paramstyle`` and assigns to the dialect instance
+    # before falling back to ``default_paramstyle``.
+    # ``SQLiteDialect_pysqlite.default_paramstyle = "qmark"`` is the
+    # secondary defence. No class-level override needed.
 
     # Enable SQLAlchemy statement caching.
     #
@@ -591,11 +620,21 @@ class DqliteDialect(SQLiteDialect):
     # documented at ``aio.py``'s ``DqliteDialect_aio``.
     supports_statement_cache = True
 
-    # dqlitedbapi returns native Python ``bytes`` for BLOB columns (the
-    # wire codec emits ``bytes`` for ``ValueType.BLOB`` on the result
-    # path). Pin True locally so ``LargeBinary.result_processor`` can
-    # skip the redundant ``bytes(value)`` wrap on every BLOB cell.
-    returns_native_bytes = True
+    # ``returns_native_bytes = True`` inherited from
+    # ``SQLiteDialect_pysqlite`` (set explicitly in pysqlite's class
+    # body). The original local pin (added when the parent was the
+    # abstract ``SQLiteDialect``) cited a future ``DefaultDialect``
+    # default flip as the drift surface — that surface no longer
+    # exists: pysqlite's explicit True sits between us and
+    # ``DefaultDialect``, and SA would not flip pysqlite's value to
+    # False without a major performance regression for every pysqlite
+    # user.
+    #
+    # dqlitedbapi returns native Python ``bytes`` for BLOB columns
+    # (the wire codec emits ``bytes`` for ``ValueType.BLOB`` on the
+    # result path), matching pysqlite's contract;
+    # ``LargeBinary.result_processor`` skips the redundant
+    # ``bytes(value)`` wrap on every BLOB cell.
 
     # dqlitedbapi cursors are buffered with continuation streaming
     # (frames fully consumed client-side); they do not implement
@@ -641,7 +680,13 @@ class DqliteDialect(SQLiteDialect):
     insert_returning = True
     update_returning = True
     delete_returning = True
-    update_returning_multifrom = True
+    # ``update_returning_multifrom = True`` inherited from
+    # ``SQLiteDialect`` (set in its class body, not its version gate).
+    # The original local pin cited the RETURNING re-pin pattern for
+    # drift defence, but the parent's version gate at
+    # ``SQLiteDialect.__init__`` only resets the trio above —
+    # multifrom is not in it. With the pysqlite parent, the inherited
+    # True is stable.
 
     # Executemany-RETURNING flags. dqlitedbapi's executemany accumulates
     # per-parameter-set RETURNING rows via its _ExecuteManyAccumulator
@@ -679,59 +724,54 @@ class DqliteDialect(SQLiteDialect):
     supports_sane_multi_rowcount = True
     supports_sane_rowcount_returning = False
 
-    # Insert-path flags inherited from SQLiteDialect. SQLAlchemy's
-    # insertmanyvalues codegen, DEFAULT VALUES form, and rowid handling
-    # all key on these. Pin locally for the same "against upstream
-    # drift" reason as the RETURNING trio above — a version-gated
-    # change in a future SQLAlchemy release would silently alter
-    # dqlite's insert behaviour otherwise.
+    # Insert-path flags. SQLAlchemy's insertmanyvalues codegen,
+    # DEFAULT VALUES form, and rowid handling all key on these.
+    #
+    # ``use_insertmanyvalues`` and ``insert_null_pk_still_autoincrements``
+    # are pinned locally for drift defence: ``DefaultDialect`` defaults
+    # could theoretically flip in a future SA release.
+    # ``supports_default_values`` is also kept here even though
+    # ``SQLiteDialect.__init__`` resets it via a version gate
+    # (``self.dbapi.sqlite_version_info >= (3, 3, 8)``); the class-attr
+    # pin sets the pre-``__init__`` baseline correctly so a hypothetical
+    # bare-instantiated dialect (no ``__init__`` run) still reports True.
     use_insertmanyvalues = True
-    supports_default_metavalue = True
-    # Co-pin with ``supports_default_metavalue`` above. The SQLite
-    # parent overrides the DefaultDialect's ``"DEFAULT"`` token to
-    # ``"NULL"`` because SQLite's grammar accepts ``VALUES (NULL)``
-    # at the autoincrement-rowid PK column but rejects
-    # ``VALUES (DEFAULT)``. A regression that drops the parent's
-    # override would silently emit ``VALUES (DEFAULT)`` and crash
-    # at compile-emit time on every ``insertmanyvalues``
-    # autoincrement code path. Pin locally for the same drift-
-    # defence reason as the surrounding flags.
-    default_metavalue_token = "NULL"
     supports_default_values = True
     insert_null_pk_still_autoincrements = True
-    # ``tuple_in_values`` drives row-value ``IN`` clause rendering —
-    # ``WHERE (a, b) IN ((?, ?), (?, ?))``. SQLite supports this
-    # syntax; the parent inherits the DefaultDialect's ``True``
-    # value. Pin locally as drift defence so a future SA release
-    # that conditionally disables the syntax for SQLite (e.g. a
-    # version-gated regression) does not silently break compile
-    # output for our dialect.
-    tuple_in_values = True
-    # ``supports_alter`` and ``supports_empty_insert`` are non-
-    # default overrides on the SQLite parent: SQLite's ``ALTER
-    # TABLE`` is limited (no DROP CONSTRAINT / DROP COLUMN
-    # historically), and ``INSERT () VALUES ()`` is a syntax
-    # error. Pin locally so a parent override drop would surface
-    # immediately at our test boundary instead of as an opaque
-    # syntax error at runtime.
-    supports_alter = False
-    supports_empty_insert = False
+    # NOTE: ``supports_default_metavalue = True``,
+    # ``default_metavalue_token = "NULL"``, ``tuple_in_values = True``,
+    # ``update_returning_multifrom = True``, ``supports_alter = False``,
+    # and ``supports_empty_insert = False`` are inherited verbatim from
+    # the parent (``SQLiteDialect_pysqlite`` → ``SQLiteDialect``, which
+    # sets each in its class body). The original local pins were added
+    # under the abstract ``SQLiteDialect`` parent and cited drift
+    # surfaces (``DefaultDialect`` flip, hypothetical "version-gated
+    # regression") that no longer apply: the parent's class-body value
+    # is now the source of truth. Removed here; the matching tests in
+    # ``tests/test_dialect.py`` were updated to assert the inherited
+    # value without ``__class__.__dict__`` membership.
 
-    # Override the SQLite dialect's string-based DATE/DATETIME processors:
-    # dqlitedbapi returns datetime objects (PEP 249), not ISO strings.
+    # Override pysqlite's date/time processors with dqlite-specific
+    # ones. ``SQLiteDialect_pysqlite.colspecs`` maps ``Date`` and
+    # ``TIMESTAMP`` to ``_SQLite_pysqliteDate`` / ``_SQLite_pysqliteTimeStamp``,
+    # which expect stdlib sqlite3 to have already decoded TEXT cells
+    # via ``detect_types=PARSE_DECLTYPES``. dqlitedbapi has no such
+    # auto-decode hook on the wire — TEXT cells reach the result-
+    # processor as plain strings. Our processors handle the wire
+    # shape directly (``str.fromisoformat`` for the string path,
+    # passthrough for the ``datetime`` path). ``Time`` uses our
+    # processor too because pysqlite has no ``Time`` colspec at all.
+    # ``TIMESTAMP`` is mapped explicitly even though it would
+    # transitively reach our ``DateTime`` processor via MRO — pinning
+    # the entry guards against a future SA change to ``sqltypes.TIMESTAMP``'s
+    # MRO that would otherwise re-bind to pysqlite's
+    # ``_SQLite_pysqliteTimeStamp`` and raise ``TypeError`` on every
+    # already-decoded ``datetime`` cell.
     colspecs = {
-        **SQLiteDialect.colspecs,
+        **SQLiteDialect_pysqlite.colspecs,
         sqltypes.DateTime: _DqliteDateTime,
         sqltypes.Date: _DqliteDate,
         sqltypes.Time: _DqliteTime,
-        # TIMESTAMP currently inherits the DateTime processor via the
-        # MRO walk (TIMESTAMP is a sqltypes.DateTime subclass), but
-        # parity with ``SQLiteDialect_pysqlite.colspecs`` is to map
-        # it explicitly so a future change to TIMESTAMP's MRO can't
-        # silently regress the binding to the upstream pysqlite
-        # processor (which calls ``str_to_datetime`` on cells dqlite
-        # already decodes to ``datetime.datetime``, raising
-        # ``TypeError``).
         sqltypes.TIMESTAMP: _DqliteDateTime,
     }
 
@@ -1131,6 +1171,26 @@ class DqliteDialect(SQLiteDialect):
             f"{level!r} is not supported."
         )
 
+    def on_connect(self) -> Callable[[DBAPIConnection], None]:
+        """Override pysqlite's ``on_connect`` to a no-op.
+
+        ``SQLiteDialect_pysqlite.on_connect`` returns a callable that
+        registers ``regexp`` and ``floor`` user-defined functions via
+        ``Connection.create_function``. dqlitedbapi's
+        ``Connection.create_function`` raises ``NotSupportedError``
+        because the dqlite server has no UDF primitive — every checkout
+        would fail at the pysqlite-inherited ``on_connect`` callback.
+
+        Return a no-op callable so SA's connect-event chain has the
+        right shape but doesn't touch the connection. (Returning
+        ``None`` would also work at the SA runtime layer, but the
+        parent class's return annotation pins ``Callable[..., None]``
+        and the compliance suite tests cover the calling shape; keep
+        the parent's annotation.) If a future dqlite version gains a
+        UDF primitive, this is the hook to register replacements at.
+        """
+        return lambda _conn: None
+
     def detect_autocommit_setting(self, dbapi_conn: DBAPIConnection) -> bool:
         """The SA dialect always brackets statements in BEGIN / COMMIT.
 
@@ -1444,7 +1504,18 @@ class DqliteDialect(SQLiteDialect):
                 for pattern in self._dqlite_disconnect_messages:
                     if pattern in msg_lower:
                         return True
-        return super().is_disconnect(e, connection, cursor)
+        # Do NOT delegate to ``super().is_disconnect()``. The parent
+        # ``SQLiteDialect_pysqlite.is_disconnect`` checks
+        # ``isinstance(e, self.dbapi.ProgrammingError) and "Cannot
+        # operate on a closed database." in str(e)`` — that's the
+        # in-process sqlite3 surface only, and is already subsumed by
+        # our broader classifier above. Worse: the super call
+        # dereferences ``self.dbapi`` which is ``None`` until SA's
+        # ``initialize()`` runs, so test-time invocations on a bare
+        # dialect (``DqliteDialect().is_disconnect(...)``) crash with
+        # ``AttributeError: 'NoneType' object has no attribute
+        # 'ProgrammingError'``.
+        return False
 
     # Two-phase commit is not supported by dqlite (no XA transaction
     # coordinator on the server). ``requirements.py`` already declares
@@ -1576,21 +1647,12 @@ class DqliteDialect(SQLiteDialect):
                     exc_info=True,
                 )
 
-    def _get_server_version_info(self, connection: Any) -> tuple[int, ...]:
-        """Return the server's SQLite version as a tuple.
-
-        Forwards ``dqlitedbapi.sqlite_version_info`` (a module-level
-        constant pinning the minimum supported SQLite version). Matches
-        how pysqlite implements the same override — a one-liner that
-        lets ``AttributeError`` propagate if the bound DBAPI module
-        does not expose the constant.
-
-        The earlier ``(3, 35, 0)`` fallback had the inverse failure
-        mode of the pre-fix ``(3, 0, 0)`` fallback: instead of silently
-        DISABLING RETURNING on a broken DBAPI stub, it silently ENABLED
-        RETURNING / multi-values / insertmanyvalues against a driver
-        that might not implement any of them — yielding cryptic runtime
-        failures far from the real cause. Dropping the fallback so the
-        config error surfaces at dialect-init time.
-        """
-        return tuple(self.loaded_dbapi.sqlite_version_info)
+    # ``_get_server_version_info`` is inherited from
+    # ``SQLiteDialect_pysqlite``. Its one-line implementation
+    # (``return self.dbapi.sqlite_version_info``) reads the module-
+    # level constant pinned by ``dqlitedbapi`` and lets
+    # ``AttributeError`` propagate if a broken DBAPI stub omits the
+    # constant — exactly the contract our previous local override
+    # encoded. The behaviour is verified by ``TestGetServerVersionInfo``
+    # below (no live wire round-trip, value forwards from the dbapi
+    # module, attribute-error propagation on stub modules).

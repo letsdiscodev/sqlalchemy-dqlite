@@ -492,18 +492,21 @@ class AsyncAdaptedCursor:
         self.close()
 
     def __reduce__(self) -> NoReturn:
-        # Wraps a live ``AsyncCursor`` (loop-bound, holds a reference
-        # to a live socket via the connection). Surface a clear
-        # driver-level TypeError naming the SA-adapter class
-        # specifically — without this, the underlying
-        # ``AsyncCursor.__reduce__`` raises a TypeError naming the
-        # dbapi class, which is a wrong-layer diagnostic for SA
-        # users.
+        # The class does NOT hold a long-lived ``AsyncCursor`` — each
+        # ``execute`` / ``executemany`` opens a fresh dbapi cursor in
+        # a finally-close block (greenlet-eager-fetch). The reject
+        # fires via the strong back-references to ``_adapt_connection``
+        # and ``_connection`` (a live ``AsyncConnection`` bound to an
+        # asyncio loop). Surface a clear driver-level TypeError
+        # naming the SA-adapter class specifically — without this,
+        # the default pickle walk eventually trips on the
+        # ``AsyncConnection``'s loop-bound state with a
+        # wrong-layer diagnostic.
         raise TypeError(
-            f"cannot pickle {type(self).__name__!r} object — wraps a "
-            f"loop-bound dbapi AsyncCursor referencing a live "
-            f"connection; reconstruct from the engine in the target "
-            f"process instead."
+            f"cannot pickle {type(self).__name__!r} object — back-"
+            f"references a loop-bound dbapi AsyncConnection holding a "
+            f"live socket and asyncio.Lock; reconstruct from the "
+            f"engine in the target process instead."
         )
 
 

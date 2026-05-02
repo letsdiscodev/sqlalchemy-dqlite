@@ -194,7 +194,16 @@ class AsyncAdaptedCursor:
         # from a previous execution.
         self.description = None
         self.rowcount = -1
-        self.lastrowid = None
+        # Do NOT clear ``lastrowid`` here. stdlib ``sqlite3.Cursor.lastrowid``
+        # and the dbapi-layer ``Cursor._execute_async`` both honour the
+        # sticky-INSERT contract: ``lastrowid`` survives a subsequent
+        # UPDATE / DELETE / DDL / SELECT on the same cursor and is
+        # cleared only on ``close()``. The async adapter opens a fresh
+        # underlying ``AsyncCursor`` per ``execute()``, so we cannot
+        # rely on the dbapi cursor's stickiness directly — instead we
+        # preserve the adapter's prior value across non-INSERT
+        # executes by writing only when the underlying cursor reports
+        # a non-None value (i.e. an INSERT/REPLACE actually ran).
         self._rows.clear()
 
         # Hoist ``self._connection.cursor()`` inside the try so a
@@ -235,9 +244,11 @@ class AsyncAdaptedCursor:
                     # the adapter, so leaving rowcount at -1 would silently
                     # collapse "N rows returned" into "not determinable".
                     self.rowcount = cursor.rowcount
-                    self.lastrowid = cursor.lastrowid
+                    if cursor.lastrowid is not None:
+                        self.lastrowid = cursor.lastrowid
                 else:
-                    self.lastrowid = cursor.lastrowid
+                    if cursor.lastrowid is not None:
+                        self.lastrowid = cursor.lastrowid
                     self.rowcount = cursor.rowcount
             except BaseException as error:
                 # Route every cursor-level error through the connection's
@@ -297,10 +308,11 @@ class AsyncAdaptedCursor:
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         # Clear state up-front so cancellation mid-call doesn't leak
-        # a previous execution's buffered rows.
+        # a previous execution's buffered rows. ``lastrowid`` is NOT
+        # cleared here (sticky-INSERT contract — see ``execute`` for
+        # rationale).
         self.description = None
         self.rowcount = -1
-        self.lastrowid = None
         self._rows.clear()
 
         # Hoist cursor() inside the try, mirroring execute() — a
@@ -331,9 +343,11 @@ class AsyncAdaptedCursor:
                     # across parameter sets and must flow through the
                     # adapter so SQLAlchemy's Result layer sees them.
                     self.rowcount = cursor.rowcount
-                    self.lastrowid = cursor.lastrowid
+                    if cursor.lastrowid is not None:
+                        self.lastrowid = cursor.lastrowid
                 else:
-                    self.lastrowid = cursor.lastrowid
+                    if cursor.lastrowid is not None:
+                        self.lastrowid = cursor.lastrowid
                     self.rowcount = cursor.rowcount
             except BaseException as error:
                 # Same routing as ``execute``: errors flow through the

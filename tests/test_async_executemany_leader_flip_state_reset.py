@@ -111,7 +111,11 @@ class TestAsyncExecutemanyLeaderFlipResetState:
         # propagates without populating description/rows.
         assert cur.description is None
         assert cur.rowcount == -1
-        assert cur.lastrowid is None
+        # ``lastrowid`` is sticky across non-INSERT executes — including
+        # failed ones — to match stdlib ``sqlite3.Cursor.lastrowid``
+        # and the dbapi-layer cursor's contract. The pre-populated
+        # value (42) survives a failing executemany.
+        assert cur.lastrowid == 42
         assert cur._rows == deque()
         # Cursor was closed in the finally block.
         underlying.close.assert_awaited_once()

@@ -80,7 +80,11 @@ def test_stale_rows_cleared_when_execute_raises(monkeypatch: pytest.MonkeyPatch)
 
     assert adapter.description is None
     assert adapter.rowcount == -1
-    assert adapter.lastrowid is None
+    # ``lastrowid`` is sticky across non-INSERT executes — including
+    # failed ones — to match stdlib ``sqlite3.Cursor.lastrowid`` and
+    # the dbapi-layer cursor's contract. The seeded value (10) survives
+    # a failing SELECT.
+    assert adapter.lastrowid == 10
     assert list(adapter._rows) == []
     assert adapter.fetchone() is None  # Not the stale (1,).
 
@@ -115,5 +119,6 @@ def test_stale_rows_cleared_when_executemany_raises(
 
     assert adapter.description is None
     assert adapter.rowcount == -1
-    assert adapter.lastrowid is None
+    # Sticky-INSERT contract — see sibling test for the rationale.
+    assert adapter.lastrowid == 99
     assert list(adapter._rows) == []

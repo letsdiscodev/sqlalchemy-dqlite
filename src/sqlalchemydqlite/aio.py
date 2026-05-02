@@ -1212,9 +1212,35 @@ class DqliteDialect_aio(DqliteDialect):
         elsewhere on dispose paths. ``terminate()`` itself runs the
         synchronous transport reap regardless of whether the suppress
         absorbs.
+
+        SA convention (asyncpg.py:937, aiosqlite.py:399, aiomysql):
+        callers can inject a custom async-connection factory via
+        ``connect_args={"async_creator_fn": my_factory}``. When
+        present, ``my_factory(*args, **kwargs)`` is invoked instead of
+        ``loaded_dbapi.connect`` and is expected to return an object
+        exposing the ``AsyncConnection`` shape (``connect``, ``cursor``,
+        ``commit``, ``rollback``, ``close`` — the surface
+        ``AsyncAdaptedConnection`` calls into). The pop must precede
+        ``_validate_connect_kwargs`` because the strict allowlist
+        would otherwise reject the hook key with ``ArgumentError``.
+
+        Note our two-step shape is structurally different from
+        asyncpg/aiosqlite: ``loaded_dbapi.connect`` is a SYNC factory
+        returning a not-yet-connected ``AsyncConnection``; the actual
+        transport open is the ``await_only(raw_conn.connect())``
+        below. A ``creator_fn`` whose return value already has an
+        open transport should expose ``connect()`` as an idempotent
+        no-op coroutine — the dbapi's own ``AsyncConnection.connect``
+        already has that property when called twice, so a creator
+        that wraps a pre-built dbapi connection works without
+        modification.
         """
+        creator_fn = cparams.pop("async_creator_fn", None)
         self._validate_connect_kwargs(cparams)
-        raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
+        if creator_fn is not None:
+            raw_conn = creator_fn(*cargs, **cparams)
+        else:
+            raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
         try:
             await_only(raw_conn.connect())
         except BaseException:

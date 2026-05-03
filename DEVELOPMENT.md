@@ -56,7 +56,7 @@ This package wires the suite under `tests/compliance/`. Running it:
 
 ```bash
 # Start the cluster (any reachable dqlite cluster works; the suite
-# defaults to localhost:19001 via setup.cfg's [db] section).
+# defaults to localhost:9001 via setup.cfg's [db] section).
 .venv/bin/pytest tests/compliance/
 ```
 

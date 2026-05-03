@@ -26,8 +26,18 @@ class Requirements(SuiteRequirements):
 
     @property
     def datetime_literals(self) -> compound:
-        """dqlite/SQLite doesn't have native datetime literals."""
-        return exclusions.closed()
+        """SA's SQLite ``_DateTimeMixin.literal_processor`` emits
+        ISO8601 string literals (e.g. ``'2012-10-15 12:57:18'``).
+        dqlite stores them as TEXT and decodes via the same ISO8601
+        path used for parameterised binds — no extra failure surface.
+
+        The previous closure rationale ("SQLite doesn't have native
+        datetime literals") conflated "no native datetime-typed
+        literal syntax" with "the dialect can't render a literal at
+        all". SA's literal_processor side-steps that exactly by
+        rendering as a string. Verified against the live cluster
+        for ``DateTime``, ``Date``, and ``Time``."""
+        return exclusions.open()
 
     @property
     def time_microseconds(self) -> compound:
@@ -39,8 +49,30 @@ class Requirements(SuiteRequirements):
 
     @property
     def datetime_historic(self) -> compound:
-        """SQLite date range limitation."""
-        return exclusions.closed()
+        """SA's default SQLite DATETIME storage format is TEXT/ISO8601
+        (``%Y-%m-%d %H:%M:%S.%f``), which has no lower bound. Verified
+        against the live cluster: ``datetime(1850, 11, 10, 11, 52, 35)``
+        round-trips losslessly.
+
+        The base ``SuiteRequirements`` default (``closed()``) is
+        conservative for backends that store datetimes as int ticks
+        (Unix-time integer with a 1970 floor); SQLite text storage
+        doesn't share that limit. The previous closure rationale
+        ("SQLite date range limitation") was wrong — it described a
+        constraint that doesn't apply to SA's default SQLite storage
+        format."""
+        return exclusions.open()
+
+    @property
+    def date_historic(self) -> compound:
+        """Same rationale as :attr:`datetime_historic` — SA's SQLite
+        DATE storage is TEXT/ISO8601, no lower bound. Verified
+        against the live cluster: ``date(1727, 6, 11)`` round-trips
+        losslessly. SA's base ``SuiteRequirements`` default is
+        ``closed()`` (conservative for int-tick storage backends);
+        opening here is the symmetric fix to the
+        ``datetime_historic`` opening above."""
+        return exclusions.open()
 
     @property
     def unicode_ddl(self) -> compound:
@@ -75,20 +107,21 @@ class Requirements(SuiteRequirements):
 
     @property
     def temp_table_reflection(self) -> compound:
-        """SQLite supports temp table reflection in principle. The
-        compliance suite's ``ComponentReflectionTest::test_get_multi_*``
-        tests fail today because the dialect's ``get_multi_*``
-        reflection methods do not filter ``sqlite_temp_master`` rows
-        from ``ObjectScope.DEFAULT`` queries — a temp table created by
-        the suite's ``define_temp_tables`` shows up in the default-
-        schema reflection result.
-
-        Closed pending a dialect-level fix that delegates to SA's
-        pysqlite reflection (which handles ``sqlite_master`` vs
-        ``sqlite_temp_master`` correctly). Tracked as a follow-up;
-        the wiring and per-session-token infrastructure landed first
-        so the regression surface is visible."""
-        return exclusions.closed()
+        """SA's ``_default_multi_reflect`` (engine/default.py) routes
+        ``ObjectScope.DEFAULT`` through ``get_table_names``
+        (``sqlite_master``) and ``ObjectScope.TEMPORARY`` through
+        ``get_temp_table_names`` (``sqlite_temp_master``), keeping
+        the two scopes segregated. The pysqlite reflection methods
+        we inherit from ``SQLiteDialect_pysqlite`` implement both
+        correctly and dqlite serves both relations identically to
+        SQLite (verified: ``sqlite_temp_master`` and
+        ``PRAGMA temp.table_info`` work end-to-end against the
+        cluster). The full ``ComponentReflectionTest`` battery —
+        single-table temp reflection plus the temp-scope
+        ``test_get_multi_*`` parametrize variants — passes when
+        this is opened together with ``temp_table_names`` and
+        ``has_temp_table`` (see overrides below)."""
+        return exclusions.open()
 
     # --- Baseline declarations mirroring SQLite behavior ------------
     # These don't change the effective default (SuiteRequirements already
@@ -159,6 +192,25 @@ class Requirements(SuiteRequirements):
     @property
     def temporary_tables(self) -> compound:
         """CREATE TEMPORARY TABLE support (same as SQLite)."""
+        return exclusions.open()
+
+    @property
+    def temp_table_names(self) -> compound:
+        """SQLite (and dqlite) supports listing temporary table
+        names via ``sqlite_temp_master``. SA's base default is
+        ``closed()``; opening here is required so the suite's
+        ``test_get_multi_*`` tests under ``ObjectScope.TEMPORARY``
+        receive the temp-table dimension in their expected
+        results (see ``test_reflection.py::_resolve_names``)."""
+        return exclusions.open()
+
+    @property
+    def has_temp_table(self) -> compound:
+        """SQLite (and dqlite) supports checking a single temp
+        table via ``PRAGMA temp.table_info(...)``. SA's base
+        default is ``closed()``; we have the capability so we
+        open it for parity with the rest of the temp-table
+        reflection contract."""
         return exclusions.open()
 
     @property

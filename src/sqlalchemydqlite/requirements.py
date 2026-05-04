@@ -75,6 +75,31 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
+    def datetime_timezone(self) -> compound:
+        """Target dialect supports timezone-aware ``datetime`` values.
+
+        ``_DqliteDateTime.result_processor`` honours the type's
+        ``timezone`` flag and re-attaches UTC for naive cells / converts
+        through UTC for non-UTC inputs (see ``base.py``). ISO8601 TEXT
+        storage round-trips the offset.
+
+        SA's ``SuiteRequirements`` default is ``closed()``; opening
+        here exercises the compliance suite's tz battery (e.g.
+        ``DateTimeTZTest``) against the dialect's tz round-trip
+        instead of skipping silently."""
+        return exclusions.open()
+
+    @property
+    def time_timezone(self) -> compound:
+        """Target dialect supports timezone-aware ``time`` values.
+
+        Symmetric with :attr:`datetime_timezone` — ``_DqliteTime``
+        handles tz-aware times via the same ISO8601 path. SA's base
+        default is ``closed()``; opening here unlocks the compliance
+        suite's ``TimeTZTest`` cases."""
+        return exclusions.open()
+
+    @property
     def unicode_ddl(self) -> compound:
         """SQLite supports unicode in DDL."""
         return exclusions.open()

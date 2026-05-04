@@ -702,6 +702,21 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # explicit pin on ``DqliteDialect_aio`` (aio.py).
     supports_server_side_cursors = False
 
+    # SA's pool gates its forced-disposal path on ``has_terminate``
+    # (see ``pool/base.py`` docs for ``_ConnectionRecord.invalidate``
+    # and ``DefaultDialect.do_terminate`` line 717). The inherited
+    # default is ``False`` (do_terminate falls back to do_close),
+    # which would route engine.dispose's forced reclaim through
+    # ``Connection.close()`` — bounded by ``self._timeout`` (default
+    # 10 s, gated on a parked wire read). Under partition + SIGTERM
+    # that 10 s blocks operator shutdown SLAs.
+    #
+    # Pin True locally so SA's terminate path lands on
+    # :meth:`do_terminate` below, which calls the dbapi's bounded
+    # ``force_close_transport`` (gated on ``close_timeout``, default
+    # 0.5 s). The async sibling at ``aio.py`` carries the same pin.
+    has_terminate = True
+
     # dqlite's wire protocol has a first-class BOOLEAN tag
     # (``ValueType.BOOLEAN = 11``); the server returns native Python
     # booleans for columns tagged BOOLEAN and dqlitedbapi passes them
@@ -1652,6 +1667,34 @@ class DqliteDialect(SQLiteDialect_pysqlite):
 
     def do_recover_twophase(self, connection: Any) -> list[Any]:
         raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+
+    def do_terminate(self, dbapi_connection: Any) -> None:
+        """Force-close the connection without awaiting in-flight ops.
+
+        SA's pool calls this for forced reclaim during
+        ``engine.dispose()`` under failure or shutdown. ``has_terminate
+        = True`` (above) promises SA that the path is bounded — unlike
+        :meth:`do_close`, which awaits ``Connection._close_async`` for
+        up to ``self._timeout`` (default 10 s, gated on a parked wire
+        read).
+
+        Routes through the dbapi's :meth:`Connection.force_close_transport`,
+        which schedules ``writer.close()`` on the loop thread and
+        bounds the thread join with ``close_timeout`` (default 0.5 s).
+        Mirrors the async sibling at ``aio.py``.
+
+        ``has_terminate=True`` promises a non-raising path; suppress
+        any tail exception so SA's pool finalize cannot crash on a
+        partial-state connection (matches the async sibling's
+        suppression discipline).
+        """
+        try:
+            dbapi_connection.force_close_transport()
+        except Exception:  # noqa: BLE001 - terminate must not raise
+            logger.debug(
+                "do_terminate: force_close_transport raised; proceeding",
+                exc_info=True,
+            )
 
     def do_ping(self, dbapi_connection: Any) -> bool:
         """Check if the connection is still alive.

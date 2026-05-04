@@ -1668,9 +1668,20 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         recoverable. Treat as ping-failure so the pool can try a
         different node.
         """
-        cursor = dbapi_connection.cursor()
+        # ``cursor()`` itself can raise on a slot that was reset between
+        # checkin and checkout: ``OSError`` (live socket-RST / ECONNRESET)
+        # and ``InterfaceError`` ("Connection is closed") are the
+        # observable shapes. Both must classify as ping-fail rather
+        # than propagating past ``_do_ping_w_event``'s
+        # ``loaded_dbapi.Error`` filter — ``OSError`` is NOT a
+        # ``dbapi.Error`` subclass and would surface to the SA caller
+        # uncaught. Hoisting the call inside the outer try routes both
+        # through the same disconnect-classification arm as
+        # ``cursor.execute(...)`` failures.
+        cursor: Any = None
         try:
             try:
+                cursor = dbapi_connection.cursor()
                 cursor.execute("SELECT 1")
                 return True
             except (
@@ -1725,23 +1736,27 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             # (TypeError, AttributeError, ValueError, …) must still
             # propagate so refactors can't silently break the probe.
             # DEBUG-log the suppressed cause so operators can tell
-            # close-swallow from close-success in logs.
-            try:
-                cursor.close()
-            except (
-                # See the outer ``except`` rationale — same umbrella so
-                # ``cursor.close()`` failures from CORRUPT/FORMAT/NOTADB
-                # are also debug-logged rather than crashing the ping.
-                _dbapi_exc.DatabaseError,
-                _dbapi_exc.InterfaceError,
-                _client_exc.DqliteConnectionError,
-                OSError,
-            ) as exc:
-                logger.debug(
-                    "do_ping: cursor.close failed (%s); proceeding",
-                    type(exc).__name__,
-                    exc_info=True,
-                )
+            # close-swallow from close-success in logs. ``cursor`` is
+            # ``None`` when ``cursor()`` itself raised — skip the close
+            # in that arm.
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except (
+                    # See the outer ``except`` rationale — same umbrella
+                    # so ``cursor.close()`` failures from
+                    # CORRUPT/FORMAT/NOTADB are also debug-logged rather
+                    # than crashing the ping.
+                    _dbapi_exc.DatabaseError,
+                    _dbapi_exc.InterfaceError,
+                    _client_exc.DqliteConnectionError,
+                    OSError,
+                ) as exc:
+                    logger.debug(
+                        "do_ping: cursor.close failed (%s); proceeding",
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
 
     # ``_get_server_version_info`` is inherited from
     # ``SQLiteDialect_pysqlite``. Its one-line implementation

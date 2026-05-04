@@ -92,3 +92,21 @@ async def test_do_ping_returns_false_on_operational_error() -> None:
 
     result = await greenlet_spawn(dialect.do_ping, dbapi_connection)
     assert result is False
+
+
+async def test_do_ping_returns_false_on_oserror_from_cursor_call() -> None:
+    """Drift defence: a live socket-RST during ``cursor()`` itself
+    (raised from the inner sync ``cursor()`` call inside
+    ``_async_ping``) must classify as ping-fail. The wrapper's
+    ``OSError`` arm absorbs it without leaking past
+    ``_do_ping_w_event``'s ``loaded_dbapi.Error`` filter."""
+    dialect = DqliteDialect_aio()
+
+    inner_conn = MagicMock()
+    inner_conn.cursor = MagicMock(side_effect=OSError("ECONNRESET"))
+
+    dbapi_connection = MagicMock()
+    dbapi_connection._connection = inner_conn
+
+    result = await greenlet_spawn(dialect.do_ping, dbapi_connection)
+    assert result is False

@@ -775,9 +775,10 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # (which is gated on ``DatabaseError``) and the broken
             # slot survives. Treat as a transport-class disconnect
             # so the pool invalidates and the next checkout gets a
-            # fresh connection. Symmetric with the
-            # ``"Event loop is closed"`` substring already in the
-            # base.py ``_dqlite_disconnect_messages`` tuple.
+            # fresh connection. The remapped wording ``"event loop
+            # closed"`` is the substring matched by
+            # ``_dqlite_disconnect_messages`` in base.py; any change
+            # to that wording must keep the substring in sync.
             if "Event loop is closed" in msg:
                 raise OperationalError(f"event loop closed: {msg}", code=None) from error
         raise error

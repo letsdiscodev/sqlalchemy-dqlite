@@ -1368,6 +1368,12 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # one entry.
     _dqlite_disconnect_messages = (
         "connection closed",
+        # Async dialect's ``_handle_exception`` remap of
+        # ``RuntimeError("Event loop is closed")`` (see
+        # ``aio.py``'s remap site). The fault means the asyncio
+        # machinery is dead — the slot is permanently unusable
+        # and the pool must invalidate.
+        "event loop closed",
         "timed out",
         "failed to connect",
         "not connected",

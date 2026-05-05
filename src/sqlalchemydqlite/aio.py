@@ -222,25 +222,39 @@ class AsyncAdaptedCursor:
                     await_only(cursor.execute(operation))
 
                 if cursor.description:
-                    # Fetch first, assign atomically. If ``fetchall`` raises
-                    # (CancelledError from an outer timeout, server fault
-                    # mid-stream, etc.), ``self.description`` must not be left
-                    # set while ``self._rows`` is still empty — SQLAlchemy's
-                    # Result layer treats (description, empty rows) as an
+                    # Atomic-on-success: capture EVERYTHING into locals
+                    # first, run the destructive ``drain_rows`` last,
+                    # then assign all public fields together. If
+                    # ``drain_rows`` raises (e.g. CancelledError from an
+                    # outer timeout, server fault mid-stream), the
+                    # adapter stays at the no-result baseline rather
+                    # than leaving ``description`` populated with empty
+                    # rows — which SA's Result layer would treat as an
                     # empty result set, indistinguishable from "execute
                     # succeeded but fetched no rows".
-                    fetched = deque(await_only(cursor.fetchall()))
-                    self.description = cursor.description
-                    self._rows = fetched
-                    # Mirror the DML branch: rowcount / lastrowid are set by
-                    # the underlying cursor on the RETURNING path too
-                    # (rowcount = len(rows); lastrowid from the last
-                    # INSERT). SQLAlchemy's Result layer reads both through
-                    # the adapter, so leaving rowcount at -1 would silently
-                    # collapse "N rows returned" into "not determinable".
-                    self.rowcount = cursor.rowcount
-                    if cursor.lastrowid is not None:
-                        self.lastrowid = cursor.lastrowid
+                    #
+                    # ``drain_rows`` (sync, ownership-transfer): hand
+                    # the dbapi cursor's row buffer to the adapter
+                    # without an intermediate ``fetchall()`` copy. Cuts
+                    # peak memory in half for INSERT...RETURNING
+                    # insertmanyvalues at high row counts (100k+) where
+                    # the cursor's list AND the adapter's deque would
+                    # otherwise both be alive until the cursor is
+                    # closed in the finally.
+                    description = cursor.description
+                    rowcount = cursor.rowcount
+                    lastrowid = cursor.lastrowid
+                    drained = deque(cursor.drain_rows())
+                    self.description = description
+                    self._rows = drained
+                    # Mirror the DML branch: rowcount / lastrowid are set
+                    # by the underlying cursor on the RETURNING path too.
+                    # SA's Result layer reads both through the adapter,
+                    # so leaving rowcount at -1 would silently collapse
+                    # "N rows returned" into "not determinable".
+                    self.rowcount = rowcount
+                    if lastrowid is not None:
+                        self.lastrowid = lastrowid
                 else:
                     if cursor.lastrowid is not None:
                         self.lastrowid = cursor.lastrowid
@@ -326,19 +340,24 @@ class AsyncAdaptedCursor:
                 # when SQLAlchemy's insertmanyvalues + RETURNING path is
                 # driven through the async engine.
                 if cursor.description:
-                    # Same fetch-first-then-assign pattern as ``execute``:
-                    # a raise from ``fetchall`` must not leave description
-                    # populated with empty rows.
-                    fetched = deque(await_only(cursor.fetchall()))
-                    self.description = cursor.description
-                    self._rows = fetched
+                    # Same drain-rows ownership-transfer pattern as
+                    # ``execute`` — atomic-on-success: capture metadata
+                    # AND drain into locals first, then commit. A
+                    # raise from ``drain_rows`` leaves the adapter at
+                    # the no-result baseline, NOT half-populated.
+                    description = cursor.description
+                    rowcount = cursor.rowcount
+                    lastrowid = cursor.lastrowid
+                    drained = deque(cursor.drain_rows())
+                    self.description = description
+                    self._rows = drained
                     # Mirror execute()'s RETURNING path: rowcount /
                     # lastrowid are accumulated by the underlying cursor
                     # across parameter sets and must flow through the
                     # adapter so SQLAlchemy's Result layer sees them.
-                    self.rowcount = cursor.rowcount
-                    if cursor.lastrowid is not None:
-                        self.lastrowid = cursor.lastrowid
+                    self.rowcount = rowcount
+                    if lastrowid is not None:
+                        self.lastrowid = lastrowid
                 else:
                     if cursor.lastrowid is not None:
                         self.lastrowid = cursor.lastrowid

@@ -114,7 +114,11 @@ class TestAsyncAdaptedCursorRowsCleared:
         ]
         mock_inner.description = description
         mock_inner.executemany.return_value = None
-        mock_inner.fetchall.return_value = returned_rows
+        # The adapter consumes via ``drain_rows`` (sync, ownership-
+        # transfer) instead of ``fetchall`` to avoid an intermediate
+        # copy. ``drain_rows`` is the SA-adapter contract; ``fetchall``
+        # is the user-facing fetch.
+        mock_inner.drain_rows.return_value = returned_rows
         mock_inner.close.return_value = None
         # Underlying AsyncCursor sets rowcount = len(rows) for the
         # RETURNING path; the adapter must mirror it so
@@ -153,7 +157,9 @@ class TestAsyncAdaptedCursorRowsCleared:
         ]
         mock_inner.description = description
         mock_inner.execute.return_value = None
-        mock_inner.fetchall.return_value = returned_rows
+        # Adapter consumes via drain_rows (ownership-transfer); see
+        # the executemany sibling test for the rationale.
+        mock_inner.drain_rows.return_value = returned_rows
         mock_inner.close.return_value = None
         mock_inner.rowcount = 1
         mock_inner.lastrowid = 7
@@ -585,15 +591,17 @@ class TestAsyncAdaptedCursorDescriptionConsistency:
         mock_inner.description = (("id", 1, None, None, None, None, None),)
         mock_inner.execute.return_value = None
         mock_inner.close.return_value = None
-        # ``fetchall`` raises before returning — the adapter must not
+        # ``drain_rows`` raises before returning — the adapter must not
         # commit ``description`` nor leave ``_rows`` in a half-assigned
-        # state.
-        mock_inner.fetchall.side_effect = RuntimeError("synthetic fetchall failure")
+        # state. The test originally asserted on ``fetchall`` because the
+        # adapter used to call that; we now drive the ownership-transfer
+        # path via ``drain_rows`` so the failure-injection moves with it.
+        mock_inner.drain_rows.side_effect = RuntimeError("synthetic drain_rows failure")
         cursor._connection.cursor.return_value = mock_inner
 
         with (
             patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync),
-            pytest.raises(RuntimeError, match="synthetic fetchall failure"),
+            pytest.raises(RuntimeError, match="synthetic drain_rows failure"),
         ):
             cursor.execute("SELECT id FROM t")
 

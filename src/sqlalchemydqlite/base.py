@@ -19,6 +19,7 @@ import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqlitewire import LEADER_ERROR_CODES, SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
 from dqlitewire.constants import DQLITE_PROTO
+from dqlitewire.messages.responses import _sanitize_server_text
 
 # InterfaceError codes that originate server-side and may carry a
 # transport-style message that the substring scanner should classify
@@ -102,11 +103,34 @@ def _truncate_for_log(value: str) -> str:
     """Return ``value`` truncated to ``_LOG_TRUNCATE_MAX_CHARS`` chars
     with a marker noting how many chars were dropped, suitable for
     embedding into a ``logger.warning(..., %r, ...)`` format. Pure;
-    no-op when ``value`` is already within the cap."""
+    no-op when ``value`` is already within the cap.
+
+    Truncation only — does NOT sanitize control / bidi / invisible
+    characters. Use :func:`_safe_for_log` at sites where the input
+    is server-controlled (row payloads, error messages echoed back).
+    """
     if len(value) <= _LOG_TRUNCATE_MAX_CHARS:
         return value
     overflow = len(value) - _LOG_TRUNCATE_MAX_CHARS
     return f"{value[:_LOG_TRUNCATE_MAX_CHARS]}... [truncated, {overflow} chars]"
+
+
+def _safe_for_log(value: str) -> str:
+    """Sanitize control / bidi / invisible characters AND truncate
+    for log embedding. Use at any site interpolating a server-
+    controlled string (row TEXT cells, server-emitted error
+    messages) into a log line.
+
+    ``%r`` (Python repr) escapes ``\\n`` / ``\\r`` / ``\\t`` but does
+    NOT escape U+2028 / U+2029 / RTL-override / ZWSP — journald
+    treats U+2028 as a record separator, so a row payload
+    containing it lands in the log as a separate record (log-
+    injection vector). Composing with the wire-side
+    ``_sanitize_server_text`` (which strips C0/C1, U+2028/U+2029,
+    full bidi block, ZW chars, BOM) closes that gap before
+    truncation.
+    """
+    return _truncate_for_log(_sanitize_server_text(value))
 
 
 __all__ = ["DqliteDialect"]
@@ -325,14 +349,14 @@ class _DqliteDateTime(sqltypes.DateTime):
                         logger.warning(
                             "DateTime processor received unparseable ISO8601 string %r: %s "
                             "(further unparseable rows in this processor demoted to DEBUG)",
-                            _truncate_for_log(value),
-                            _truncate_for_log(str(e)),
+                            _safe_for_log(value),
+                            _safe_for_log(str(e)),
                         )
                     else:
                         logger.debug(
                             "DateTime processor received unparseable ISO8601 string %r: %s",
-                            _truncate_for_log(value),
-                            _truncate_for_log(str(e)),
+                            _safe_for_log(value),
+                            _safe_for_log(str(e)),
                         )
                     return value
             if isinstance(value, datetime.datetime):
@@ -461,14 +485,14 @@ class _DqliteDate(sqltypes.Date):
                         logger.warning(
                             "Date processor received unparseable ISO8601 string %r: %s "
                             "(further unparseable rows in this processor demoted to DEBUG)",
-                            _truncate_for_log(value),
-                            _truncate_for_log(str(e)),
+                            _safe_for_log(value),
+                            _safe_for_log(str(e)),
                         )
                     else:
                         logger.debug(
                             "Date processor received unparseable ISO8601 string %r: %s",
-                            _truncate_for_log(value),
-                            _truncate_for_log(str(e)),
+                            _safe_for_log(value),
+                            _safe_for_log(str(e)),
                         )
                     return value
             return value
@@ -562,14 +586,14 @@ class _DqliteTime(sqltypes.Time):
                         logger.warning(
                             "Time processor received unparseable ISO8601 string %r: %s "
                             "(further unparseable rows in this processor demoted to DEBUG)",
-                            _truncate_for_log(value),
-                            _truncate_for_log(str(e)),
+                            _safe_for_log(value),
+                            _safe_for_log(str(e)),
                         )
                     else:
                         logger.debug(
                             "Time processor received unparseable ISO8601 string %r: %s",
-                            _truncate_for_log(value),
-                            _truncate_for_log(str(e)),
+                            _safe_for_log(value),
+                            _safe_for_log(str(e)),
                         )
                     return value
             return value

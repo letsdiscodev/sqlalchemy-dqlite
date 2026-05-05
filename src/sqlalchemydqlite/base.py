@@ -731,6 +731,25 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # (``supports_native_boolean = False``), we don't need SQLAlchemy
     # to emit a ``CHECK (col IN (0, 1))`` constraint — the wire
     # contract enforces the 0/1 invariant.
+    #
+    # **Round-trip identity asymmetry — documented contract**:
+    # The server sets the wire BOOLEAN tag based on the *declared
+    # column type*, NOT the bind-time inference. A row inserted into a
+    # column declared INTEGER (not BOOLEAN) — even when the bind value
+    # was Python ``bool`` — comes back as an int (1 / 0) on readback,
+    # NOT ``bool``. Application code that does ``if row.flag is True:``
+    # against a BOOLEAN-typed column on the bind side and an INTEGER
+    # column on the storage side will silently fail because the
+    # readback is ``1``, not ``True`` (``==`` works; ``is True`` does
+    # not). This asymmetry mirrors stdlib ``sqlite3`` behaviour for
+    # SQLite-native INTEGER columns and is preserved here rather than
+    # masked by a result_processor that coerces ``int → bool`` on
+    # ``Boolean``-typed SA columns: the SA side declares the column
+    # type and the user owns the contract.
+    #
+    # If round-trip ``bool`` identity matters, declare the SA column
+    # ``Column(Boolean)`` (which materialises as a BOOLEAN-typed wire
+    # column) and avoid raw INTEGER columns for boolean values.
     supports_native_boolean = True
     # SQLAlchemy's Boolean type compiler gates
     # ``non_native_boolean_check_constraint`` behind
@@ -1898,3 +1917,12 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # encoded. The behaviour is verified by ``TestGetServerVersionInfo``
     # below (no live wire round-trip, value forwards from the dbapi
     # module, attribute-error propagation on stub modules).
+    #
+    # **Pin contract**: ``dqlitedbapi.sqlite_version_info`` (defined
+    # in ``dqlitedbapi/_constants.py``) is the *floor* the dqlite
+    # project guarantees, NOT the version this dbapi was developed
+    # against. SA gates feature dispatch on this single number — if
+    # the cluster runs an *older* SQLite than the floor, SA dispatch
+    # produces queries the cluster rejects (RETURNING etc.).
+    # Operators must ensure their cluster's SQLite >= the floor.
+    # See ``dqlitedbapi/_constants.py`` for the full pin contract.

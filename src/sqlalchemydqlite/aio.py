@@ -694,6 +694,32 @@ class AsyncAdaptedConnection(AdaptedConnection):
             f"target process instead."
         )
 
+    @property
+    def driver_connection(self) -> Any:
+        """SA's standard hook for ``event.listens_for(engine.sync_engine,
+        "connect")`` callbacks. Inherited from ``AdaptedConnection``;
+        the parent returns ``self._connection`` directly. After
+        ``close()`` swaps ``self._connection`` for a ``weakref.proxy``,
+        a callback that touches the proxy after the inner has been GC'd
+        gets ``ReferenceError`` — outside the ``dbapi.Error`` umbrella.
+        Mirror the closed-state guard added to ``cursor()`` so the
+        post-close path raises ``InterfaceError`` cleanly."""
+        if isinstance(self._connection, weakref.ProxyTypes):
+            raise InterfaceError(f"Connection is closed (id={id(self)})")
+        return self._connection
+
+    def run_async(self, fn: Any) -> Any:
+        """SA's ``AdaptedConnection.run_async(fn)`` calls
+        ``await_only(fn(self._connection))`` directly. After close,
+        ``self._connection`` is a ``weakref.proxy`` whose attribute
+        access raises ``ReferenceError`` if the inner has been GC'd —
+        not a ``dbapi.Error`` subclass and bypasses SA's exception
+        classifier. Surface ``InterfaceError`` up front so cross-driver
+        retry middleware sees a clean ``dbapi.Error``."""
+        if isinstance(self._connection, weakref.ProxyTypes):
+            raise InterfaceError(f"Connection is closed (id={id(self)})")
+        return super().run_async(fn)
+
     def cursor(self, server_side: bool = False) -> AsyncAdaptedCursor:
         # Match the SA connector reference signature
         # (``sqlalchemy.connectors.asyncio.AsyncAdapt_dbapi_connection.cursor``)

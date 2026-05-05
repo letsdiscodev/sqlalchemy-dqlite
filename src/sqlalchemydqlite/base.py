@@ -1,5 +1,6 @@
 """Base dqlite dialect for SQLAlchemy."""
 
+import contextlib
 import datetime
 import logging
 import math
@@ -1856,6 +1857,36 @@ class DqliteDialect(SQLiteDialect_pysqlite):
 
     def do_recover_twophase(self, connection: Any) -> list[Any]:
         raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+
+    def do_close(self, dbapi_connection: Any) -> None:
+        """SA pool checkin / ``engine.dispose()`` graceful path.
+
+        The default ``do_close`` falls through to
+        ``dbapi_connection.close()`` which awaits the connection's
+        ``_close_async`` for up to ``self._timeout`` (default 10 s).
+        Under a partition where the leader is unreachable, this stalls
+        ``engine.dispose()`` for ~10 s **per pool slot** — surprising
+        and difficult to recover from.
+
+        Bound the close by the dbapi's ``close_timeout`` (default
+        0.5 s); on TimeoutError or any other failure, fall back to the
+        force-close transport path so the slot still releases. Mirrors
+        the async-sibling discipline in ``aio.py``'s
+        ``AsyncAdaptedConnection.close``.
+        """
+        close_timeout = getattr(dbapi_connection, "_close_timeout", None)
+        try:
+            if close_timeout is not None:
+                dbapi_connection.close(timeout=close_timeout)
+            else:
+                dbapi_connection.close()
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "do_close: bounded close raised; falling back to force_close_transport",
+                exc_info=True,
+            )
+            with contextlib.suppress(Exception):
+                dbapi_connection.force_close_transport()
 
     def do_terminate(self, dbapi_connection: Any) -> None:
         """Force-close the connection without awaiting in-flight ops.

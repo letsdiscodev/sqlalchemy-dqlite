@@ -103,7 +103,7 @@ class TestAsyncExecutemanyLeaderFlipResetState:
         cur._rows.extend([(1,), (2,)])
 
         with pytest.raises(DbapiOperationalError) as ei:
-            cur.executemany("INSERT INTO t (v) VALUES (:v) RETURNING id", [{"v": "a"}])
+            cur.executemany("INSERT INTO t (v) VALUES (?) RETURNING id", [("a",)])
 
         assert ei.value.code == code
         # Pin: the cursor stays at the no-result baseline. The up-front

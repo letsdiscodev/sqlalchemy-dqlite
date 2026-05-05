@@ -5,7 +5,7 @@ import logging
 import math
 import types
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 from sqlalchemy import pool, util
 from sqlalchemy import types as sqltypes
@@ -603,6 +603,13 @@ class DqliteDialect(SQLiteDialect_pysqlite):
 
     name = "dqlite"
 
+    # One-shot warning gate for ``?max_total_rows=none`` (or
+    # equivalent ``=disabled``) in the URL: emit the row-cap-disabled
+    # WARNING once per dialect class, not once per connect / once per
+    # engine. ``create_connect_args`` flips this to True after the
+    # first emit.
+    _max_total_rows_disabled_warning_emitted: ClassVar[bool] = False
+
     # Pin the default isolation level at class level so the contract is
     # evident statically and so test harnesses that build a dialect
     # without an engine (skipping ``DefaultDialect.initialize()``) still
@@ -899,6 +906,25 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         iso_level = kwargs.get("isolation_level")
         if isinstance(iso_level, str) and iso_level.upper() == "AUTOCOMMIT":
             raise ArgumentError(_AUTOCOMMIT_REJECTION_MSG)
+        # Symmetric eager rejection of ``native_datetime``. Pysqlite's
+        # parent ``SQLiteDialect`` accepts the kwarg and gates pysqlite's
+        # bespoke ``_SQLite_pysqliteTimeStamp`` / ``_SQLite_pysqliteDate``
+        # processors on it. Our colspec-based date/time path doesn't go
+        # through those processors — ``_DqliteDateTime`` / ``_DqliteDate``
+        # subclass ``sqltypes.DateTime`` / ``sqltypes.Date`` directly —
+        # so silently accepting ``native_datetime=True`` would be a
+        # contract divergence vs the documented pysqlite semantics.
+        # Reject up-front so the user sees a config-time
+        # ``ArgumentError`` pointing at the kwarg, mirroring the
+        # paramstyle / AUTOCOMMIT pattern above.
+        if "native_datetime" in kwargs:
+            raise ArgumentError(
+                "dqlite dialect does not honour ``native_datetime``: the "
+                "dqlite-specific date/time processors do not consult this "
+                "flag (pysqlite's are different processors). Pass dates as "
+                "Python ``datetime`` / ``date`` objects directly; the "
+                "wire-layer ISO8601 codec round-trips them losslessly."
+            )
         super().__init__(**kwargs)
         # ``SQLiteDialect.__init__`` writes *instance* attributes based
         # on ``self.dbapi.sqlite_version_info`` and ``util.pypy``:
@@ -1012,7 +1038,15 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             lambda s: _parse_url_bool("trust_server_heartbeat", s),
             None,
         ),
-        "close_timeout": (float, lambda v: math.isfinite(v) and v > 0),
+        # close_timeout floor: 0.01 s. The dispose-time writer-close
+        # is scheduled via ``call_soon_threadsafe`` and joined with a
+        # bounded thread.join — a value below 0.01 s gives the loop
+        # too few ticks to flush FIN, leaving connections lingering
+        # in TIME_WAIT. The validator rejects obviously-useless
+        # values up-front so an operator pinning ``?close_timeout=
+        # 0.0001`` sees a config-time ArgumentError, not a silent
+        # near-zero wait that still appears to "work".
+        "close_timeout": (float, lambda v: math.isfinite(v) and v >= 0.01),
     }
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:
@@ -1142,6 +1176,31 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 raise ArgumentError(f"URL query {key}={raw_str!r} is out of range")
             kwargs[key] = value
 
+        # Operator-UX warning: the URL token ``?max_total_rows=none``
+        # silently disables the row-count cap that protects clients
+        # from a malicious server returning a multi-GB result-set.
+        # An operator templating connection URLs from layered config
+        # could accidentally stamp ``none`` into ``max_total_rows``
+        # without realising they've disabled the defence. Emit a
+        # one-shot WARNING per dialect instance at engine creation.
+        # This is documented behaviour, not a bug — a logger.warning
+        # makes the disabled state observable in operator logs
+        # without changing semantics or breaking existing usage.
+        if (
+            "max_total_rows" in kwargs
+            and kwargs["max_total_rows"] is None
+            and not self._max_total_rows_disabled_warning_emitted
+        ):
+            type(self)._max_total_rows_disabled_warning_emitted = True
+            logger.warning(
+                "dqlite: ``max_total_rows`` cap disabled via URL "
+                "(``?max_total_rows=none`` or ``=disabled`` token). The "
+                "client will accept arbitrarily-large result-sets from the "
+                "server; a malicious or misconfigured peer can exhaust "
+                "client memory. Set an explicit positive int unless you "
+                "have a specific need for unbounded results."
+            )
+
         return [], kwargs
 
     def _validate_connect_kwargs(self, kwargs: dict[str, Any]) -> None:
@@ -1173,8 +1232,28 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         with the same diagnostic class the URL path emits, instead of
         deferring to ``dqlitedbapi.connect``'s ``NotSupportedError``
         at first checkout.
+
+        SA convention parity (asyncpg.py:937, aiosqlite.py:399,
+        aiomysql): the async sibling pops ``async_creator_fn`` from
+        ``cparams`` BEFORE the allowlist runs. Mirror that on the
+        sync side via ``creator_fn`` so a user with a custom sync
+        dbapi shim can inject one — the kwarg is popped before
+        ``_validate_connect_kwargs`` because the strict allowlist
+        would otherwise reject the hook key with ArgumentError.
+
+        Unlike the async path's two-step (factory → connect) shape,
+        the sync dbapi factory ``loaded_dbapi.connect`` returns an
+        already-usable Connection (not a connect-pending object), so
+        we trust the creator's return value verbatim — no follow-up
+        ``connect()`` call. A creator returning a not-yet-connected
+        Connection must arrange its own connect prior to return; the
+        sync surface has no idempotency contract because there is no
+        eager-connect step here.
         """
+        creator_fn = cparams.pop("creator_fn", None)
         self._validate_connect_kwargs(cparams)
+        if creator_fn is not None:
+            return creator_fn(*cargs, **cparams)
         return self.loaded_dbapi.connect(*cargs, **cparams)
 
     # Drift defence: pin the isolation-level lookup to match the
@@ -1414,6 +1493,15 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # match the substring scan and the cross-loop fault would
         # survive in the SA pool slot.
         "different event loop",
+        # ``RuntimeError("This event loop is already running")``
+        # surfaces from ``await_only`` inside a context that already
+        # has a running loop on the same thread (asyncio rejects
+        # nested loop entry). The async adapter's ``_handle_exception``
+        # remaps to ``OperationalError("event loop already running:
+        # ...")``; the substring ``"loop is already running"``
+        # matches the remapped wording without overlapping the other
+        # loop-class entries.
+        "loop is already running",
     )
 
     def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:

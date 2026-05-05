@@ -258,7 +258,17 @@ def _dqlite_run_reap_dbs(url: str | sa_url.URL, idents: list[str]) -> None:
     parsed = sa_url.make_url(url) if isinstance(url, str) else url
     log.info("dqlite reap_dbs: %d follower(s) at %s", len(idents), parsed)
     for ident in idents:
-        follower_url = _format_url(parsed, None, ident)
+        # Force the sync drivername regardless of the input URL's
+        # ``+driver`` suffix. ``_drop_user_tables`` uses sync
+        # ``eng.connect()`` — if the input was ``dqlite+aio://``,
+        # the unforced ``_format_url(parsed, None, ident)`` would
+        # carry the ``+aio`` suffix and ``create_engine`` would
+        # route to the async dialect that requires
+        # ``create_async_engine``. The sync rewrite via the
+        # ``"dqlitedbapi"`` driver token resolves to the bare
+        # ``"dqlite"`` drivername (``_format_url`` line 128 maps
+        # both ``"dqlite"`` and ``"dqlitedbapi"`` to the bare form).
+        follower_url = _format_url(parsed, "dqlitedbapi", ident)
         try:
             eng = create_engine(follower_url)
             try:

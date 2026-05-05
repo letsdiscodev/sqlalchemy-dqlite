@@ -6,7 +6,7 @@ import logging
 import types
 import weakref
 from collections import deque
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from sqlalchemy import pool
@@ -167,18 +167,18 @@ class AsyncAdaptedCursor:
     def execute(
         self,
         operation: str,
-        parameters: Sequence[Any] | Mapping[str, Any] | None = None,
+        parameters: Sequence[Any] | None = None,
     ) -> None:
         """Execute a single statement.
 
-        ``parameters`` is typed as ``Sequence | Mapping | None`` to
-        match the PEP 249 DB-API envelope that SQLAlchemy expects, but
-        at runtime the underlying driver is ``paramstyle="qmark"`` and
-        rejects mappings with ``ProgrammingError``. SA's own compiler
-        always hands us a sequence, so the wider hint is documentary:
-        it reflects the envelope the framework layers expect, not
-        driver capability. Passing a ``dict`` directly will surface as
-        ``ProgrammingError`` at the DBAPI cursor layer.
+        ``parameters`` is narrowed to ``Sequence | None`` because the
+        underlying dbapi is ``paramstyle="qmark"`` and rejects mappings
+        at runtime with ``ProgrammingError``. SA's own compiler always
+        hands a sequence to qmark dialects — the wider PEP 249 envelope
+        is unreachable through this driver, so the static type matches
+        the runtime contract. Mapping passes here would have raised at
+        the DBAPI cursor layer regardless; the narrower hint surfaces
+        the rejection at typecheck time instead of the first execute.
         """
         # Mirror the closed-cursor guard the other methods on this
         # class apply (fetch* / setinputsizes / scroll / etc.). Without
@@ -217,12 +217,7 @@ class AsyncAdaptedCursor:
             try:
                 cursor = self._connection.cursor()
                 if parameters is not None:
-                    # SA's envelope passes ``Sequence | Mapping`` here; the
-                    # underlying qmark-paramstyle dbapi rejects mappings at
-                    # runtime with a clear DataError. Match the typing
-                    # widening upstream by ignoring the assignment-time
-                    # narrowness gap.
-                    await_only(cursor.execute(operation, parameters))  # type: ignore[arg-type]
+                    await_only(cursor.execute(operation, parameters))
                 else:
                     await_only(cursor.execute(operation))
 
@@ -295,13 +290,14 @@ class AsyncAdaptedCursor:
     def executemany(
         self,
         operation: str,
-        seq_of_parameters: Iterable[Sequence[Any] | Mapping[str, Any]],
+        seq_of_parameters: Iterable[Sequence[Any]],
     ) -> None:
         """Execute many statements.
 
-        As with ``execute``, mapping parameters are rejected by the
-        underlying qmark-paramstyle driver at runtime. The wider hint
-        matches SA's envelope; see ``execute`` for the rationale.
+        As with ``execute``, ``parameters`` is narrowed to ``Sequence``
+        per the qmark-only dbapi contract; mappings are rejected at the
+        DBAPI cursor layer at runtime, and SA's compiler always hands
+        a sequence to qmark dialects.
         """
         # Mirror the closed-cursor guard the other methods on this
         # class apply; see ``execute`` for the rationale.
@@ -322,9 +318,7 @@ class AsyncAdaptedCursor:
         try:
             try:
                 cursor = self._connection.cursor()
-                # See execute() — mappings are rejected at runtime by the
-                # qmark dbapi; match the SA-envelope widening here too.
-                await_only(cursor.executemany(operation, seq_of_parameters))  # type: ignore[arg-type]
+                await_only(cursor.executemany(operation, seq_of_parameters))
                 # Mirror execute()'s post-call pattern: if the statement had
                 # a RETURNING clause, the underlying cursor accumulates rows
                 # across parameter sets and sets a description. Skipping the
@@ -435,7 +429,20 @@ class AsyncAdaptedCursor:
 
         PEP 249 optional extension mirroring Cursor.connection /
         AsyncCursor.connection. Read-only.
+
+        On a closed cursor raise ``InterfaceError`` rather than
+        returning the post-close ``weakref.proxy(...)``: a stale
+        consumer reading ``cur.connection`` after close on an
+        already-GC'd parent would otherwise see a bare
+        ``ReferenceError`` (proxied target collected) which escapes
+        the ``dbapi.Error`` hierarchy and SA's
+        ``_handle_dbapi_exception`` classifier. The ``_closed`` flag
+        is the truth here — NOT
+        ``isinstance(self._adapt_connection, weakref.ProxyTypes)``
+        which can be True on a still-alive proxy.
         """
+        if self._closed:
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
         return self._adapt_connection
 
     # PEP 249 optional extensions. The non-adapter cursors raise
@@ -645,7 +652,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
     def execute(
         self,
         operation: str,
-        parameters: Sequence[Any] | Mapping[str, Any] | None = None,
+        parameters: Sequence[Any] | None = None,
     ) -> AsyncAdaptedCursor:
         """SA-reference parity: open a cursor, run ``execute``, return
         the cursor. SA's reference ``connectors/asyncio.py`` exposes
@@ -799,6 +806,18 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # to that wording must keep the substring in sync.
             if "Event loop is closed" in msg:
                 raise OperationalError(f"event loop closed: {msg}", code=None) from error
+            # ``RuntimeError("This event loop is already running")``
+            # surfaces when third-party glue calls ``await_only`` from
+            # a context that already has a running loop on the same
+            # thread (asyncio rejects nested loop entry). Without
+            # remap, the bare RuntimeError leaks past SA's
+            # ``is_disconnect`` classifier (gated on DatabaseError)
+            # and the pool retains the broken slot. Treat as a
+            # transport-class disconnect so the slot invalidates.
+            # Substring is added to ``_dqlite_disconnect_messages`` in
+            # base.py for symmetric classification.
+            if "loop is already running" in msg:
+                raise OperationalError(f"event loop already running: {msg}", code=None) from error
         raise error
 
     def commit(self) -> None:

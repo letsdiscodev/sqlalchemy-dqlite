@@ -544,6 +544,24 @@ class AsyncAdaptedConnection(AdaptedConnection):
     ``self._connection.cursor()`` call. Mirrors SA's reference
     ``AsyncAdapt_aiosqlite_connection`` which also does not track
     adapter cursors.
+
+    No ``_execute_mutex``: SA's reference
+    ``AsyncAdapt_dbapi_connection`` (sqlalchemy/connectors/asyncio.py)
+    declares ``__slots__ = ("dbapi", "_execute_mutex")`` and wraps
+    every per-cursor execute in ``async with
+    self._adapt_connection._execute_mutex:``. That mutex exists to
+    protect a *long-lived adapter cursor*: the reference connector
+    keeps a single dbapi cursor open across calls and the mutex
+    serialises greenlets racing on its mutable state.
+
+    This adapter doesn't keep a long-lived cursor — every adapter
+    execute opens and closes a fresh dbapi cursor inside a finally —
+    AND the underlying ``dqlitedbapi.aio.AsyncConnection.op_lock``
+    already serialises commit / execute / rollback at the connection
+    layer (see ``dqlitedbapi/aio/connection.py`` ``_op_lock``). The
+    mutex would be redundant. If a future change introduces server-
+    side cursors / long-lived adapter cursor state, re-introduce
+    ``_execute_mutex`` at that point.
     """
 
     # Parent ``sqlalchemy.engine.interfaces.AdaptedConnection`` declares

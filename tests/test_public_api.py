@@ -83,7 +83,11 @@ def test_package_dialect_alias_points_at_dqlite_dialect() -> None:
 
 
 def test_base_all_is_minimal() -> None:
-    assert set(sqlalchemydqlite.base.__all__) == {"DqliteDialect"}
+    """``base.__all__`` carries the dialect entry point AND the
+    public compiler subclass-extension hook (consumers may extend
+    ``DqliteCompiler`` to add custom ``visit_*`` methods, mirroring
+    SA's pysqlite-exposed ``SQLiteCompiler``)."""
+    assert set(sqlalchemydqlite.base.__all__) == {"DqliteCompiler", "DqliteDialect"}
 
 
 def test_requirements_all_is_minimal() -> None:

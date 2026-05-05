@@ -133,7 +133,7 @@ def _safe_for_log(value: str) -> str:
     return _truncate_for_log(_sanitize_server_text(value))
 
 
-__all__ = ["DqliteDialect"]
+__all__ = ["DqliteCompiler", "DqliteDialect"]
 
 _TRUE_TOKENS: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_TOKENS: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})

@@ -7,7 +7,7 @@ import types
 import weakref
 from collections import deque
 from collections.abc import Iterable, Iterator, Sequence
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, Self
 
 from sqlalchemy import pool
 from sqlalchemy.engine import URL, AdaptedConnection
@@ -549,11 +549,12 @@ class AsyncAdaptedCursor:
             raise StopIteration
         return row
 
-    def __enter__(self) -> "AsyncAdaptedCursor":
+    def __enter__(self) -> Self:
         # SA's reference connector cursor and aiosqlite cursor both
         # support the context-manager protocol so callers can
         # ``with conn.execute(...) as cur:``. The body simply yields
-        # ``self``; ``__exit__`` closes the cursor.
+        # ``self``; ``__exit__`` closes the cursor. Returns ``Self``
+        # (PEP 673) so subclass typing is preserved.
         return self
 
     def __exit__(

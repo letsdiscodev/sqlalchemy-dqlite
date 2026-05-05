@@ -23,7 +23,8 @@ from sqlalchemy.dialects.sqlite import (
     insert,
 )
 
-from sqlalchemydqlite.base import DqliteDialect
+from sqlalchemydqlite.aio import DqliteDialect_aio
+from sqlalchemydqlite.base import DqliteCompiler, DqliteDialect
 
 __version__: Final[str] = "0.1.3"
 
@@ -34,13 +35,17 @@ __version__: Final[str] = "0.1.3"
 # pattern so ``from sqlalchemydqlite import dialect`` resolves
 # canonically.
 dialect = DqliteDialect
+dialect_aio = DqliteDialect_aio
 
 __all__ = [  # noqa: RUF022 - grouped: dialect entry points, then SA-shared SQLite types
     # Dialect entry points
+    "DqliteCompiler",
     "DqliteDialect",
+    "DqliteDialect_aio",
     "Insert",
     "__version__",
     "dialect",
+    "dialect_aio",
     "insert",
     # SA-shared SQLite type re-exports (alphabetical within group)
     "BLOB",

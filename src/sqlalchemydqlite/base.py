@@ -19,8 +19,8 @@ from sqlalchemy.exc import ArgumentError
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqlitewire import LEADER_ERROR_CODES, SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
+from dqlitewire import sanitize_server_text as _sanitize_server_text
 from dqlitewire.constants import DQLITE_PROTO
-from dqlitewire.messages.responses import _sanitize_server_text
 
 # InterfaceError codes that originate server-side and may carry a
 # transport-style message that the substring scanner should classify

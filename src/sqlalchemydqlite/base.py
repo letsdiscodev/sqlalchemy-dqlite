@@ -56,14 +56,19 @@ _BARE_DBE_DISCONNECT_CODES: Final[frozenset[int]] = frozenset(
 # (27), and ``SQLITE_WARNING`` (28) to bare ``DatabaseError``. dqlite-
 # server doesn't currently emit any of those four codes on the wire,
 # so they are intentionally NOT included here — they are deterministic
-# non-transient diagnostics, not slot-fatal conditions. If a future
-# server release starts emitting them with a transport-class message,
-# the substring scan in ``is_disconnect`` will still classify them
-# correctly because the message wording (``"wire decode failed"``,
-# ``"event loop closed"``, etc.) is the load-bearing discriminator on
-# bare DatabaseError, NOT the code. The set remains the
-# ``CORRUPT``/``FORMAT``/``NOTADB`` triad for which "kill the slot"
-# is unambiguous regardless of the message.
+# non-transient diagnostics, not slot-fatal conditions. The substring
+# scan in ``is_disconnect``'s ``DatabaseError`` arm is gated on the
+# code being in this set (``applies_substring`` arm), so it does NOT
+# fire for the four uninclueded codes; if a future server release
+# starts emitting them with a transport-class message, classification
+# falls through to the substring arms on the wrapping
+# ``OperationalError`` / ``InterfaceError`` (the dbapi's
+# ``_call_client`` rewrap chain attaches ``raw_message`` and the wire
+# layer's ``_sanitize_server_text`` runs first). The
+# ``CORRUPT`` / ``FORMAT`` / ``NOTADB`` triad in this set is the
+# tight-loop "kill the slot" group — unambiguous regardless of the
+# message, and the only codes the server actually emits as bare
+# DatabaseError today.
 
 # Transport-class exception tuple for best-effort cleanup paths that
 # must swallow a flaky close / rollback without aborting
@@ -1734,6 +1739,19 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 return False
             # Transport-class direct hits.
             if isinstance(cause, (_client_exc.DqliteConnectionError, _client_exc.ClusterError)):
+                return True
+            # ``client.ProtocolError`` is the wire-layer desync class
+            # that the dbapi cursor wraps as ``OperationalError(code=
+            # None, message="wire decode failed: ...")`` — but the
+            # SA-async-adapter at ``aio.py`` imports client classes
+            # directly, so a third-party caller that bypasses dbapi
+            # (or middleware that catches and re-wraps) can surface a
+            # bare ``client.ProtocolError`` deeper in the cause chain.
+            # Without this arm, the bare ProtocolError walks past every
+            # type-check and the substring scan only fires on the
+            # OperationalError-wrapped form. Classify it as disconnect
+            # so the SA pool invalidates the slot.
+            if isinstance(cause, _client_exc.ProtocolError):
                 return True
             # OS-level transport faults sitting deeper in the cause
             # chain — wrapped inside a custom retry/middleware layer

@@ -303,6 +303,13 @@ class _DqliteDateTime(sqltypes.DateTime):
 
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         want_timezone = self.timezone
+        # One-shot WARNING gate per processor instance. A SELECT
+        # against a corrupted column would otherwise emit one WARNING
+        # per row (up to ``max_total_rows``), drowning operator log
+        # pipelines. Mirrors the ``_max_total_rows_disabled_warning_emitted``
+        # one-shot pattern at base.py:1224. Subsequent bad rows
+        # in the same processor instance demote to DEBUG.
+        warned: list[bool] = [False]
 
         def process(value: Any) -> Any:
             if value is None:
@@ -313,11 +320,20 @@ class _DqliteDateTime(sqltypes.DateTime):
                 try:
                     value = datetime.datetime.fromisoformat(value)
                 except ValueError as e:
-                    logger.warning(
-                        "DateTime processor received unparseable ISO8601 string %r: %s",
-                        _truncate_for_log(value),
-                        _truncate_for_log(str(e)),
-                    )
+                    if not warned[0]:
+                        warned[0] = True
+                        logger.warning(
+                            "DateTime processor received unparseable ISO8601 string %r: %s "
+                            "(further unparseable rows in this processor demoted to DEBUG)",
+                            _truncate_for_log(value),
+                            _truncate_for_log(str(e)),
+                        )
+                    else:
+                        logger.debug(
+                            "DateTime processor received unparseable ISO8601 string %r: %s",
+                            _truncate_for_log(value),
+                            _truncate_for_log(str(e)),
+                        )
                     return value
             if isinstance(value, datetime.datetime):
                 if want_timezone:
@@ -414,6 +430,9 @@ class _DqliteDate(sqltypes.Date):
         return process
 
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
+        # One-shot WARNING gate; see _DqliteDateTime.result_processor.
+        warned: list[bool] = [False]
+
         def process(value: Any) -> Any:
             if value is None:
                 return None
@@ -437,11 +456,20 @@ class _DqliteDate(sqltypes.Date):
                 try:
                     return datetime.date.fromisoformat(value)
                 except ValueError as e:
-                    logger.warning(
-                        "Date processor received unparseable ISO8601 string %r: %s",
-                        _truncate_for_log(value),
-                        _truncate_for_log(str(e)),
-                    )
+                    if not warned[0]:
+                        warned[0] = True
+                        logger.warning(
+                            "Date processor received unparseable ISO8601 string %r: %s "
+                            "(further unparseable rows in this processor demoted to DEBUG)",
+                            _truncate_for_log(value),
+                            _truncate_for_log(str(e)),
+                        )
+                    else:
+                        logger.debug(
+                            "Date processor received unparseable ISO8601 string %r: %s",
+                            _truncate_for_log(value),
+                            _truncate_for_log(str(e)),
+                        )
                     return value
             return value
 
@@ -475,6 +503,8 @@ class _DqliteTime(sqltypes.Time):
 
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         want_timezone = self.timezone
+        # One-shot WARNING gate; see _DqliteDateTime.result_processor.
+        warned: list[bool] = [False]
 
         def process(value: Any) -> Any:
             if value is None:
@@ -527,11 +557,20 @@ class _DqliteTime(sqltypes.Time):
                 try:
                     return datetime.time.fromisoformat(value)
                 except ValueError as e:
-                    logger.warning(
-                        "Time processor received unparseable ISO8601 string %r: %s",
-                        _truncate_for_log(value),
-                        _truncate_for_log(str(e)),
-                    )
+                    if not warned[0]:
+                        warned[0] = True
+                        logger.warning(
+                            "Time processor received unparseable ISO8601 string %r: %s "
+                            "(further unparseable rows in this processor demoted to DEBUG)",
+                            _truncate_for_log(value),
+                            _truncate_for_log(str(e)),
+                        )
+                    else:
+                        logger.debug(
+                            "Time processor received unparseable ISO8601 string %r: %s",
+                            _truncate_for_log(value),
+                            _truncate_for_log(str(e)),
+                        )
                     return value
             return value
 

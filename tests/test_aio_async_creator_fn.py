@@ -102,6 +102,57 @@ async def test_connect_without_creator_uses_default_loaded_dbapi() -> None:
     assert fake.connected is True
 
 
+async def test_async_creator_fn_idempotent_connect_safe_to_double_call() -> None:
+    """Pin the documented contract: a creator returning an already-
+    connected dbapi-shaped object whose ``connect()`` is idempotent
+    must NOT double-open the transport.
+
+    The dialect always awaits ``raw_conn.connect()`` after the
+    creator runs; the contract is that creator-returned objects
+    expose an idempotent ``connect()``. The dbapi's own
+    ``AsyncConnection.connect`` already has that property — so a
+    creator that wraps a pre-built dbapi connection works without
+    modification.
+
+    Without this pin, a refactor that drops the second ``connect()``
+    call (matching SA's aiosqlite shape) would silently break
+    creators returning unopened conns; or a refactor that adds
+    re-open semantics to dbapi.connect would silently break
+    pre-opened-creator users.
+    """
+    dialect = DqliteDialect_aio()
+    dialect.loaded_dbapi = MagicMock()
+
+    connect_calls = [0]
+
+    class IdempotentFakeConn(_FakeConn):
+        async def connect(self) -> None:
+            connect_calls[0] += 1
+            if connect_calls[0] == 1:
+                self.connected = True
+            # Subsequent calls: no-op (idempotent contract).
+
+    fake = IdempotentFakeConn()
+    # Pre-connect to simulate a creator that opens before returning.
+    await fake.connect()
+    assert connect_calls[0] == 1
+    assert fake.connected is True
+
+    await greenlet_spawn(
+        dialect.connect,
+        "1.2.3.4:9000",
+        database="mydb",
+        async_creator_fn=lambda *a, **kw: fake,
+    )
+
+    # Two ``connect()`` invocations total — pre-call by the test
+    # plus the dialect's unconditional re-call. The fake observed
+    # both as benign no-ops because its own ``connect`` is
+    # idempotent — the contract spelled out in the dialect docstring.
+    assert connect_calls[0] == 2
+    assert fake.connected is True
+
+
 def test_connect_unknown_kwarg_still_raises_argumenterror() -> None:
     """Defence-in-depth: the allowlist still rejects truly unknown
     kwargs even with the new pop in place. ``_validate_connect_kwargs``

@@ -1321,6 +1321,31 @@ class DqliteDialect_aio(DqliteDialect):
         already has that property when called twice, so a creator
         that wraps a pre-built dbapi connection works without
         modification.
+
+        **Contract for third-party ``async_creator_fn``** (BREAKAGE
+        WARNING): the returned object's ``connect()`` is invoked
+        unconditionally below — once by us, possibly already by the
+        creator. Any of these shapes are safe:
+
+        - The creator returns a NOT-YET-CONNECTED dbapi
+          ``AsyncConnection``. We open the transport for it. ✓
+        - The creator returns an ALREADY-CONNECTED dbapi
+          ``AsyncConnection``. ``AsyncConnection.connect`` checks
+          ``self._async_conn is not None`` and returns the existing
+          inner conn — idempotent no-op. ✓
+        - The creator returns a CUSTOM async-connection-shaped
+          object whose ``connect()`` is NOT idempotent: this WILL
+          double-connect (open twice / fail). The creator-provided
+          ``connect()`` must be coroutine-shaped AND idempotent —
+          either by short-circuiting on a "already connected"
+          flag or by being a no-op coroutine when called against
+          a live transport.
+
+        We do NOT skip the ``raw_conn.connect()`` when the creator
+        is provided (matching SA's ``aiosqlite.py:399`` shape would
+        risk leaving a creator-returned-unopened conn without a
+        transport). Custom creators must satisfy the idempotency
+        contract above.
         """
         creator_fn = cparams.pop("async_creator_fn", None)
         self._validate_connect_kwargs(cparams)

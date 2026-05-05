@@ -88,7 +88,7 @@ logger = logging.getLogger(__name__)
 
 # Cap server-controlled TEXT cells before they enter %r-formatted log
 # lines on the result_processor parse-failure path. The wire layer caps
-# each TEXT cell at _MAX_TEXT_VALUE_SIZE = 16 MiB; %r roughly doubles
+# each TEXT cell at _MAX_TEXT_VALUE_SIZE = 64 MiB; %r roughly doubles
 # the size with quoting/escapes, multiplied across each row of a result
 # set. Without truncation, a malicious or compromised server returning
 # oversized TEXT for a column the dialect maps to DateTime / Date /

@@ -74,9 +74,11 @@ from sqlalchemy.testing.provision import (
 # every URL rewrite within a single pytest session.
 _SESSION_TOKEN = f"sa_{os.getpid()}_{time.monotonic_ns()}"
 
-# The SA testing API documents ``log`` as the canonical place provision
-# helpers chatter to. Mirror the pysqlite hook style.
-log = logging.getLogger("sqlalchemydqlite.provision")
+# The SA testing API documents ``log`` / ``logger`` as the canonical
+# place provision helpers chatter to. Use ``__name__`` (matching the
+# rest of the package) so vendored / namespace-relocated installs see
+# their actual module path in log records, not a hardcoded string.
+logger = logging.getLogger(__name__)
 
 
 # Drivers we register under the ``dqlite`` backend.
@@ -128,21 +130,36 @@ def _format_url(url: sa_url.URL, driver: str | None, ident: str | None) -> sa_ur
     new_drivername = "dqlite" if driver in ("dqlite", "dqlitedbapi") else f"dqlite+{driver}"
 
     database = url.database or "default"
-    # Always suffix with a session-unique token so each pytest run
-    # uses a fresh database name on the cluster. dqlite has no
-    # ``DROP DATABASE`` primitive — without per-session uniqueness,
-    # cross-run state (tables from prior runs of this suite or of
-    # the project's other integration tests) bleeds into reflection
-    # tests that enumerate "all tables in the schema".
-    suffix = _SESSION_TOKEN
-    if ident:
-        # Append the follower ident on top so xdist workers within a
-        # single session each get their own namespace. Avoid
-        # ``@`` / path-separators / control chars so the resulting
-        # name parses cleanly across the dbapi/URL/wire layers.
-        ident_clean = ident.replace("/", "_").replace("@", "_")
-        suffix = f"{suffix}_{ident_clean}"
-    database = f"{database}_{suffix}"
+    # Suffix with a session-unique token so each pytest run uses a
+    # fresh database name on the cluster. dqlite has no ``DROP
+    # DATABASE`` primitive — without per-session uniqueness, cross-run
+    # state (tables from prior runs of this suite or of the project's
+    # other integration tests) bleeds into reflection tests that
+    # enumerate "all tables in the schema".
+    #
+    # SA's bootstrap calls ``_format_url`` twice along the same chain
+    # (``generate_driver_url`` first with ``ident=None``, then
+    # ``follower_url_from_main`` with the worker ident); without the
+    # already-suffixed guard below, the session token gets appended
+    # twice, producing ``db_sa_<pid>_<ts>_sa_<pid>_<ts>_gw0``. Detect
+    # the prior suffix and only append the missing pieces.
+    if _SESSION_TOKEN in database:
+        # Prior pass already attached the session token. Append the
+        # follower ident only.
+        if ident:
+            ident_clean = ident.replace("/", "_").replace("@", "_")
+            ident_suffix = f"_{ident_clean}"
+            if not database.endswith(ident_suffix):
+                database = f"{database}{ident_suffix}"
+    else:
+        suffix = _SESSION_TOKEN
+        if ident:
+            # Avoid ``@`` / path-separators / control chars so the
+            # resulting name parses cleanly across the dbapi/URL/wire
+            # layers.
+            ident_clean = ident.replace("/", "_").replace("@", "_")
+            suffix = f"{suffix}_{ident_clean}"
+        database = f"{database}_{suffix}"
 
     return url.set(drivername=new_drivername, database=database)
 
@@ -192,7 +209,7 @@ def _dqlite_create_db(cfg: Any, eng: Any, ident: str) -> None:
     ``follower_url_from_main``) auto-creates the database on the
     cluster. Nothing to provision up front.
     """
-    log.info("dqlite create_db: no-op for ident=%r", ident)
+    logger.info("dqlite create_db: no-op for ident=%r", ident)
 
 
 def _drop_user_tables(eng: Any) -> None:
@@ -215,10 +232,10 @@ def _drop_user_tables(eng: Any) -> None:
                 try:
                     conn.exec_driver_sql(f'DROP TABLE IF EXISTS "{name}"')
                 except Exception as e:
-                    log.debug("drop_user_tables: %s on DROP TABLE %s", e, name)
+                    logger.debug("drop_user_tables: %s on DROP TABLE %s", e, name)
             conn.commit()
     except Exception as e:
-        log.debug("drop_user_tables: %s during connect/exec", e)
+        logger.debug("drop_user_tables: %s during connect/exec", e)
 
 
 @drop_db.for_db("dqlite")
@@ -230,7 +247,7 @@ def _dqlite_drop_db(cfg: Any, eng: Any, ident: str) -> None:
     so the database is logically empty — the next test run that picks
     the same name sees a clean schema.
     """
-    log.info("dqlite drop_db: dropping user tables for ident=%r", ident)
+    logger.info("dqlite drop_db: dropping user tables for ident=%r", ident)
     _drop_user_tables(eng)
 
 
@@ -256,7 +273,7 @@ def _dqlite_run_reap_dbs(url: str | sa_url.URL, idents: list[str]) -> None:
     from sqlalchemy import create_engine
 
     parsed = sa_url.make_url(url) if isinstance(url, str) else url
-    log.info("dqlite reap_dbs: %d follower(s) at %s", len(idents), parsed)
+    logger.info("dqlite reap_dbs: %d follower(s) at %s", len(idents), parsed)
     for ident in idents:
         # Force the sync drivername regardless of the input URL's
         # ``+driver`` suffix. ``_drop_user_tables`` uses sync
@@ -276,7 +293,7 @@ def _dqlite_run_reap_dbs(url: str | sa_url.URL, idents: list[str]) -> None:
             finally:
                 eng.dispose()
         except Exception as e:
-            log.debug("reap_dbs ident=%s: %s", ident, e)
+            logger.debug("reap_dbs ident=%s: %s", ident, e)
 
 
 @stop_test_class_outside_fixtures.for_db("dqlite")

@@ -167,6 +167,24 @@ def test_format_url_appends_session_token_even_when_ident_is_none() -> None:
     assert out.database.startswith("mydb_sa_")  # session-token prefix from provision.py
 
 
+def test_format_url_does_not_double_append_session_token_in_chained_calls() -> None:
+    """SA's bootstrap calls ``_format_url`` twice along the same chain
+    (``generate_driver_url`` first with ``ident=None``, then
+    ``follower_url_from_main`` with the worker ident). The session
+    token must appear at most once in the final database name; only
+    the follower ident is appended on the second pass."""
+    from sqlalchemydqlite.provision import _SESSION_TOKEN
+
+    base = make_url("dqlite://h:9001/db")
+    step1 = _format_url(base, "dqlitedbapi", None)
+    step2 = _format_url(step1, None, "gw0")
+    assert step2.database is not None
+    # Session token appears exactly once.
+    assert step2.database.count(_SESSION_TOKEN) == 1
+    # Follower ident is appended at the end.
+    assert step2.database.endswith("_gw0")
+
+
 # ---------------------------------------------------------------
 # 4. do_begin keeps client-layer _in_transaction in sync
 # ---------------------------------------------------------------

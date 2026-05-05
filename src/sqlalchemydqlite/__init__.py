@@ -1,5 +1,7 @@
 """SQLAlchemy 2.0 dialect for dqlite."""
 
+from typing import Final
+
 from sqlalchemy.dialects.sqlite import (
     BLOB,
     BOOLEAN,
@@ -23,7 +25,7 @@ from sqlalchemy.dialects.sqlite import (
 
 from sqlalchemydqlite.base import DqliteDialect
 
-__version__ = "0.1.3"
+__version__: Final[str] = "0.1.3"
 
 # SA convention (every shipped dialect package — sqlite, mysql, mssql,
 # oracle, postgresql): expose ``<package>.dialect`` pointing at the

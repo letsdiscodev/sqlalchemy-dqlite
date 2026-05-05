@@ -40,8 +40,6 @@ the test fixture's docker-compose. So:
   driver string.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import time

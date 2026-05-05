@@ -49,6 +49,19 @@ _SERVER_INTERFACEERROR_DISCONNECT_CODES: Final[frozenset[int]] = frozenset({DQLI
 _BARE_DBE_DISCONNECT_CODES: Final[frozenset[int]] = frozenset(
     {SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB}
 )
+# **Forward-compat note**: dqlitedbapi's ``_CODE_TO_EXCEPTION`` also
+# routes ``SQLITE_NOLFS`` (22), ``SQLITE_AUTH`` (23), ``SQLITE_NOTICE``
+# (27), and ``SQLITE_WARNING`` (28) to bare ``DatabaseError``. dqlite-
+# server doesn't currently emit any of those four codes on the wire,
+# so they are intentionally NOT included here — they are deterministic
+# non-transient diagnostics, not slot-fatal conditions. If a future
+# server release starts emitting them with a transport-class message,
+# the substring scan in ``is_disconnect`` will still classify them
+# correctly because the message wording (``"wire decode failed"``,
+# ``"event loop closed"``, etc.) is the load-bearing discriminator on
+# bare DatabaseError, NOT the code. The set remains the
+# ``CORRUPT``/``FORMAT``/``NOTADB`` triad for which "kill the slot"
+# is unambiguous regardless of the message.
 
 # Transport-class exception tuple for best-effort cleanup paths that
 # must swallow a flaky close / rollback without aborting
@@ -1252,13 +1265,19 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         deferring to ``dqlitedbapi.connect``'s ``NotSupportedError``
         at first checkout.
 
-        SA convention parity (asyncpg.py:937, aiosqlite.py:399,
-        aiomysql): the async sibling pops ``async_creator_fn`` from
-        ``cparams`` BEFORE the allowlist runs. Mirror that on the
-        sync side via ``creator_fn`` so a user with a custom sync
-        dbapi shim can inject one — the kwarg is popped before
-        ``_validate_connect_kwargs`` because the strict allowlist
-        would otherwise reject the hook key with ArgumentError.
+        Sync ``creator_fn`` is a **dqlite-private hook** with no
+        cross-dialect SA parity. The async sibling
+        (``DqliteDialect_aio.connect``) pops ``async_creator_fn``
+        which IS the SA-canonical name shared with asyncpg
+        (``asyncpg.py:937``) and aiosqlite (``aiosqlite.py:399``).
+        The sync side has no equivalent SA-canonical kwarg —
+        SA's standard mechanism for injecting a sync custom-factory
+        is ``create_engine(creator=...)`` which routes through the
+        pool layer and never touches ``dialect.connect()``. The
+        ``creator_fn`` kwarg here is offered for symmetry but
+        operators should prefer SA's ``creator=`` whenever possible.
+        The pop precedes ``_validate_connect_kwargs`` because the
+        strict allowlist would otherwise reject the hook key.
 
         Unlike the async path's two-step (factory → connect) shape,
         the sync dbapi factory ``loaded_dbapi.connect`` returns an

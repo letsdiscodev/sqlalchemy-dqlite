@@ -63,6 +63,26 @@ class AsyncAdaptedCursor:
        native async code; the greenlet-eager-fetch pattern is a
        deliberate part of how SA's async engine works, not a
        per-dialect choice.
+
+    **Divergence from SA reference connector**: SA's
+    ``AsyncAdapt_dbapi_cursor``
+    (``sqlalchemy/connectors/asyncio.py:166-186``) exposes
+    ``description`` / ``rowcount`` / ``lastrowid`` as ``@property``
+    that delegate to the underlying long-lived dbapi cursor. This
+    adapter stores them as plain attributes (in ``__slots__``)
+    because each ``execute()`` / ``executemany()`` opens and closes
+    a fresh ``dqlitedbapi.aio.AsyncCursor`` inside a finally block —
+    there is no live underlying cursor to delegate to after the call
+    returns. Plain attributes carry the metadata through to the next
+    execute. Consequence: SA's reference ``_async_soft_close()``
+    memoizes ``description`` into ``_soft_closed_memoized`` for
+    post-soft-close reads via the property layer; this adapter's
+    ``_async_soft_close()`` is a no-op because the underlying cursor
+    is already closed. If a future SA release adds new behaviour
+    that hooks the property descriptor (e.g. a soft-close memoization
+    layer above ``@property``), this adapter must be reshaped to
+    keep the underlying cursor alive across the execute boundary,
+    then converted to ``@property`` delegation.
     """
 
     # Declare instance layout — matches the slot discipline SA's own
@@ -469,11 +489,26 @@ class AsyncAdaptedCursor:
     # consumer catching NotSupportedError behaves consistently whether it
     # is handed an AsyncCursor or a greenlet-wrapped AsyncAdaptedCursor.
     #
-    # `rownumber` is deliberately NOT implemented: the adapter buffers
-    # rows into a deque that is popped left on consumption, so a truthful
-    # counter would need parallel state increments in fetchone /
-    # fetchmany / fetchall / __next__. Consumers who need rownumber
-    # should use AsyncCursor directly.
+    # ``rownumber`` is intentionally not implemented as a counter:
+    # the adapter buffers rows into a deque that is popped left on
+    # consumption, so a truthful counter would need parallel state
+    # increments in fetchone / fetchmany / fetchall / __next__.
+    # Consumers who need rownumber should use AsyncCursor directly.
+    # We expose a NotSupportedError stub property here (rather than
+    # leaving the attr absent) so a consumer hard-``getattr``-ing
+    # ``cursor.rownumber`` gets a dbapi.Error rather than the bare
+    # ``AttributeError`` that would otherwise escape ``except
+    # dbapi.Error:``. Mirrors the sibling nextset / scroll / callproc
+    # raise discipline.
+    @property
+    def rownumber(self) -> int:
+        if self._closed:
+            raise InterfaceError(f"cursor is closed (id={id(self)})")
+        raise NotSupportedError(
+            "rownumber is not supported on the SA-adapted async cursor; "
+            "use dqlitedbapi.aio.AsyncCursor directly if you need it."
+        )
+
     def callproc(self, procname: str, parameters: Sequence[Any] | None = None) -> NoReturn:
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
@@ -594,9 +629,16 @@ class AsyncAdaptedConnection(AdaptedConnection):
     # ``__slots__ = ("_connection",)``; without our own slots declaration
     # each instance gets a ``__dict__`` and defeats the parent's memory
     # optimization (SA's own ``AsyncAdapt_aiosqlite_connection`` follows
-    # the same pattern). We add no new instance attributes, so an empty
-    # slots tuple is correct.
-    __slots__ = ()
+    # the same pattern). Add ``dbapi`` to ``__slots__`` to mirror SA's
+    # reference ``AsyncAdapt_dbapi_connection``
+    # (``sqlalchemy/connectors/asyncio.py:340-347``) which declares
+    # ``__slots__ = ("dbapi", "_execute_mutex")`` and stores the dbapi
+    # module reference there. Third-party SA-async instrumentation
+    # (Sentry / Datadog wrappers, SQLModel, sqlalchemy-utils)
+    # introspects ``dbapi_connection.dbapi`` to reach exception classes
+    # for type-tagged remap; without the attribute, that introspection
+    # falls back to ``AttributeError`` paths.
+    __slots__ = ("dbapi",)
 
     # SA convention (asyncpg.py:714, aiosqlite.py:257,
     # connectors/asyncio.py:338): expose ``await_`` as a staticmethod on
@@ -616,13 +658,26 @@ class AsyncAdaptedConnection(AdaptedConnection):
     # extension points.
     await_ = staticmethod(await_only)
 
-    def __init__(self, connection: "AsyncConnection") -> None:
+    def __init__(
+        self,
+        connection: "AsyncConnection",
+        *,
+        dbapi: Any = None,
+    ) -> None:
         # ``_connection`` is the concrete ``dqlitedbapi.aio.AsyncConnection``
         # this adapter wraps; SQLAlchemy's parent ``AdaptedConnection``
         # declares the attribute with a wider Protocol type, so we keep
         # the store on ``Any`` and rely on the annotation here to document
         # the intended input shape.
         self._connection: Any = connection
+        # ``dbapi`` mirrors SA's reference connector — third-party
+        # instrumentation hard-``getattr``-s ``dbapi_connection.dbapi``
+        # to reach the dbapi module's exception classes. Keyword-only
+        # so the existing single-positional construction
+        # (``AsyncAdaptedConnection(raw_conn)``) keeps working without
+        # touching every call site; default ``None`` is acceptable
+        # because dqlite's own code does not read this attribute.
+        self.dbapi = dbapi
 
     def __reduce__(self) -> NoReturn:
         # Wraps a live ``AsyncConnection`` (loop-bound, holds a live
@@ -770,6 +825,25 @@ class AsyncAdaptedConnection(AdaptedConnection):
         extension point in SA's reference dialect. Centralises the
         remap of driver-layer quirks so commit/rollback/execute /
         executemany do not each re-implement the same translation.
+
+        **Type signature divergence from SA reference**: this hook
+        accepts ``BaseException``, while SA's reference connector
+        (``connectors/asyncio.py:365``) and aiosqlite's adapter
+        (``dialects/sqlite/aiosqlite.py:333``) type the parameter as
+        ``Exception``. The wider ``BaseException`` type is deliberate:
+        the cursor-level catch sites in this adapter
+        (``execute`` / ``executemany`` at ``except BaseException as
+        error``) route every cursor-level error through this hook so
+        the surrounding ``finally`` always runs (closing the freshly-
+        opened underlying cursor). The ``isinstance(error,
+        (RuntimeError, ProgrammingError))`` short-circuit at the top
+        of this body skips KeyboardInterrupt / SystemExit /
+        CancelledError, falling through to ``raise error`` —
+        preserving propagation for callers. Narrowing to
+        ``Exception`` would require reshaping the cursor-level
+        catches AND prove load-bearing-equivalence for cancel-during-
+        execute paths; the wider type holds the diagnostic-leak
+        prevention contract.
 
         Concrete remaps:
 
@@ -1395,9 +1469,9 @@ class DqliteDialect_aio(DqliteDialect):
             await_only(raw_conn.connect())
         except BaseException:
             with contextlib.suppress(Exception, asyncio.CancelledError):
-                AsyncAdaptedConnection(raw_conn).terminate()
+                AsyncAdaptedConnection(raw_conn, dbapi=self.loaded_dbapi).terminate()
             raise
-        return AsyncAdaptedConnection(raw_conn)
+        return AsyncAdaptedConnection(raw_conn, dbapi=self.loaded_dbapi)
 
     def get_driver_connection(self, connection: Any) -> Any:
         """Return the underlying driver-level connection."""

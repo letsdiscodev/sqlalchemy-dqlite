@@ -33,12 +33,14 @@ __version__ = "0.1.3"
 # canonically.
 dialect = DqliteDialect
 
-__all__ = [
+__all__ = [  # noqa: RUF022 - grouped: dialect entry points, then SA-shared SQLite types
+    # Dialect entry points
     "DqliteDialect",
     "Insert",
     "__version__",
     "dialect",
     "insert",
+    # SA-shared SQLite type re-exports (alphabetical within group)
     "BLOB",
     "BOOLEAN",
     "CHAR",

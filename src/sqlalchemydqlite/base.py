@@ -685,11 +685,10 @@ class DqliteDialect(SQLiteDialect_pysqlite):
 
     name = "dqlite"
 
-    # One-shot warning gate for ``?max_total_rows=none`` (or
-    # equivalent ``=disabled``) in the URL: emit the row-cap-disabled
-    # WARNING once per dialect class, not once per connect / once per
-    # engine. ``create_connect_args`` flips this to True after the
-    # first emit.
+    # One-shot warning gate for ``?max_total_rows=none`` in the URL:
+    # emit the row-cap-disabled WARNING once per dialect class, not
+    # once per connect / once per engine. ``create_connect_args``
+    # flips this to True after the first emit.
     _max_total_rows_disabled_warning_emitted: ClassVar[bool] = False
 
     # Pin the default isolation level at class level so the contract is
@@ -1295,11 +1294,11 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             type(self)._max_total_rows_disabled_warning_emitted = True
             logger.warning(
                 "dqlite: ``max_total_rows`` cap disabled via URL "
-                "(``?max_total_rows=none`` or ``=disabled`` token). The "
-                "client will accept arbitrarily-large result-sets from the "
-                "server; a malicious or misconfigured peer can exhaust "
-                "client memory. Set an explicit positive int unless you "
-                "have a specific need for unbounded results."
+                "(``?max_total_rows=none``). The client will accept "
+                "arbitrarily-large result-sets from the server; a "
+                "malicious or misconfigured peer can exhaust client "
+                "memory. Set an explicit positive int unless you have "
+                "a specific need for unbounded results."
             )
 
         return [], kwargs

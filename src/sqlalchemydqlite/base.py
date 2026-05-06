@@ -1879,31 +1879,35 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     def do_close(self, dbapi_connection: Any) -> None:
         """SA pool checkin / ``engine.dispose()`` graceful path.
 
-        The default ``do_close`` falls through to
-        ``dbapi_connection.close()`` which awaits the connection's
-        ``_close_async`` for up to ``self._timeout`` (default 10 s).
-        Under a partition where the leader is unreachable, this stalls
-        ``engine.dispose()`` for ~10 s **per pool slot** — surprising
-        and difficult to recover from.
+        Calls the dbapi's ``Connection.close()`` directly — no kwargs.
+        The dbapi's ``close()`` runs the loop-thread shutdown bounded
+        by the connection's ``_timeout`` (the operation lock acquire)
+        plus a 5 s hard-coded thread-join window. The
+        ``_close_timeout`` URL knob applies only to the fallback
+        ``force_close_transport()`` path on this leg.
 
-        Bound the close by the dbapi's ``close_timeout`` (default
-        0.5 s); on TimeoutError or any other failure, fall back to the
-        force-close transport path so the slot still releases. Mirrors
-        the async-sibling discipline in ``aio.py``'s
+        On a transport-class close failure (``OperationalError``,
+        ``InterfaceError``, ``DqliteConnectionError``, ``OSError`` —
+        which covers ``TimeoutError`` / ``ConnectionResetError``),
+        fall back to ``force_close_transport()`` so the slot still
+        releases — the graceful path tried, the operator gets a DEBUG
+        log line, and the pool stays drainable. Programmer bugs
+        (``AttributeError``, ``TypeError`` from a refactor) propagate
+        through the narrowed except so they are not silently
+        swallowed into the fallback.
+
+        Mirrors the async-sibling discipline in ``aio.py``'s
         ``AsyncAdaptedConnection.close``.
         """
-        close_timeout = getattr(dbapi_connection, "_close_timeout", None)
         try:
-            if close_timeout is not None:
-                dbapi_connection.close(timeout=close_timeout)
-            else:
-                dbapi_connection.close()
-        except Exception:  # noqa: BLE001
+            dbapi_connection.close()
+        except _TRANSPORT_CLASS_EXCEPTIONS:
             logger.debug(
-                "do_close: bounded close raised; falling back to force_close_transport",
+                "do_close: graceful close raised transport-class error; "
+                "falling back to force_close_transport",
                 exc_info=True,
             )
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(*_TRANSPORT_CLASS_EXCEPTIONS):
                 dbapi_connection.force_close_transport()
 
     def do_terminate(self, dbapi_connection: Any) -> None:

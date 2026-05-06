@@ -961,160 +961,204 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # a ``MissingGreenlet`` exception with full traceback only to be
         # caught and absorbed; the preflight avoids that throw.
         if not in_greenlet():
-            self._force_close_transport()
+            try:
+                self._force_close_transport()
+            finally:
+                self._release_inner_strong_ref()
             return
 
-        # Attempt rollback before close so a caller that exits without
-        # committing does not leave a dangling server-side transaction.
-        # The underlying async connection's rollback is a silent no-op when
-        # no transaction is active and when the connection has never been
-        # used, so the double-call is safe.
-        #
-        # Narrow the suppression to the categories a best-effort rollback
-        # can legitimately raise — connection-level / transport errors —
-        # so programming bugs (AttributeError, TypeError, bare RuntimeError,
-        # etc.) still propagate. ``ConnectionError``, ``BrokenPipeError``,
-        # and ``TimeoutError`` are all ``OSError`` subclasses (since
-        # Python 3.3+/3.10+ respectively), so a single ``OSError`` check
-        # covers every stdlib transport-error shape — matching the
-        # source-of-truth classification in ``base.py``'s
-        # ``is_disconnect``.
-        #
-        # Wrap in ``try/finally`` so close() runs regardless of how
-        # rollback() exits — narrow-caught, programming bug, or
-        # ``BaseException`` like ``CancelledError`` during pool dispose.
-        # SA's pool does not re-call close() on failure, so skipping
-        # close would leak the underlying AsyncConnection. Mirror of the
-        # inverse leak fixed in DqliteDialect_aio.connect().
+        # Outer try/finally guarantees the post-close ``weakref.proxy``
+        # swap runs on EVERY exit arm — normal return, early return
+        # from the rollback-loop-closed handler, raises from
+        # ``_handle_exception`` remap, transport-class fallthrough, and
+        # cancel re-raise. Without it, the rollback-arm
+        # ``RuntimeError("Event loop is closed")`` ``return`` (and the
+        # ``_handle_exception``-raise / cancel-raise arms) bypass the
+        # swap, leaving SA's pool diagnostic ring + pytest session-
+        # fixture cache pinning the inner ``AsyncConnection`` (and
+        # through it the client-layer state, registered
+        # ``weakref.finalize``, and frame-pinning
+        # ``_invalidation_cause``). The release discipline applies on
+        # every exit arm, success or failure — the adapter is dead
+        # post-close regardless of how it got there.
         try:
+            # Attempt rollback before close so a caller that exits
+            # without committing does not leave a dangling server-
+            # side transaction. The underlying async connection's
+            # rollback is a silent no-op when no transaction is
+            # active and when the connection has never been used, so
+            # the double-call is safe.
+            #
+            # Narrow the suppression to the categories a best-effort
+            # rollback can legitimately raise — connection-level /
+            # transport errors — so programming bugs (AttributeError,
+            # TypeError, bare RuntimeError, etc.) still propagate.
+            # ``ConnectionError``, ``BrokenPipeError``, and
+            # ``TimeoutError`` are all ``OSError`` subclasses (since
+            # Python 3.3+/3.10+ respectively), so a single ``OSError``
+            # check covers every stdlib transport-error shape —
+            # matching the source-of-truth classification in
+            # ``base.py``'s ``is_disconnect``.
+            #
+            # Inner try/finally so close() runs regardless of how
+            # rollback() exits — narrow-caught, programming bug, or
+            # ``BaseException`` like ``CancelledError`` during pool
+            # dispose. SA's pool does not re-call close() on failure,
+            # so skipping close would leak the underlying
+            # AsyncConnection. Mirror of the inverse leak fixed in
+            # DqliteDialect_aio.connect().
             try:
-                await_only(self._connection.rollback())
-            except _TRANSPORT_CLASS_EXCEPTIONS as exc:
-                # Silent suppression used to hide e.g. "leader flip
-                # mid-rollback" from operators — a DEBUG line preserves
-                # the diagnostic without masking or propagating. Include
-                # both id(self) and the peer address so a noisy pool can
-                # be correlated to specific adapter instances and nodes.
-                peer = getattr(self._connection, "address", None)
-                logger.debug(
-                    "AsyncAdaptedConnection.close (id=%s, peer=%s): "
-                    "rollback failed (%s); proceeding to close",
-                    id(self),
-                    peer,
-                    type(exc).__name__,
-                    exc_info=True,
-                )
-            except RuntimeError as exc:
-                # Route loop-mismatch RuntimeError through the same
-                # remap as commit/rollback/execute/executemany so SA's
-                # is_disconnect classifier (which is gated on
-                # DatabaseError) sees an OperationalError instead of
-                # a bare RuntimeError. Without this, cross-loop
-                # close() would propagate an un-classified RuntimeError
-                # past engine.dispose().
-                msg = str(exc)
-                if "different loop" in msg or "different event loop" in msg:
-                    self._handle_exception(exc)
-                # ``RuntimeError("Event loop is closed")`` lands here
-                # during ``engine.dispose()`` after a per-call
-                # ``asyncio.run()`` finished and tore the loop down —
-                # symmetric with the close arm below. The
-                # ``has_terminate=True`` dialect promise says
-                # close()/dispose must not propagate failures from
-                # this path; debug-log and continue to the close arm
-                # in the finally (which will itself raise the same
-                # RuntimeError but absorb it via the matching arm).
-                # The debug log preserves the traceback for triage.
-                if "Event loop is closed" in msg:
+                try:
+                    await_only(self._connection.rollback())
+                except _TRANSPORT_CLASS_EXCEPTIONS as exc:
+                    # Silent suppression used to hide e.g. "leader flip
+                    # mid-rollback" from operators — a DEBUG line
+                    # preserves the diagnostic without masking or
+                    # propagating. Include both id(self) and the peer
+                    # address so a noisy pool can be correlated to
+                    # specific adapter instances and nodes.
                     peer = getattr(self._connection, "address", None)
                     logger.debug(
                         "AsyncAdaptedConnection.close (id=%s, peer=%s): "
-                        "rollback raised RuntimeError (%s); proceeding to close",
+                        "rollback failed (%s); proceeding to close",
                         id(self),
                         peer,
                         type(exc).__name__,
                         exc_info=True,
                     )
-                    return
-                # Other RuntimeErrors (programmer bugs) propagate.
-                raise
-            # The non-greenlet path is handled by the ``in_greenlet()``
-            # preflight at the top of ``close()``; ``MissingGreenlet``
-            # cannot land here.
-            # ``CancelledError`` from the rollback await is allowed to
-            # propagate so the cancellation signal is preserved — the
-            # finally below still runs close(), and the close arm's
-            # CancelledError catch routes through the sync force-close
-            # fallback before re-raising. Suppressing here would
-            # convert a still-active cancel into a clean return,
-            # contradicting asyncio's "cancellation propagates"
-            # contract; the prior test
-            # ``test_close_runs_close_after_rollback_raise.py`` pins
-            # that contract.
+                except RuntimeError as exc:
+                    # Route loop-mismatch RuntimeError through the same
+                    # remap as commit/rollback/execute/executemany so
+                    # SA's is_disconnect classifier (which is gated on
+                    # DatabaseError) sees an OperationalError instead
+                    # of a bare RuntimeError. Without this, cross-loop
+                    # close() would propagate an un-classified
+                    # RuntimeError past engine.dispose(). The outer
+                    # try/finally still runs the proxy swap on the
+                    # raise path.
+                    msg = str(exc)
+                    if "different loop" in msg or "different event loop" in msg:
+                        self._handle_exception(exc)
+                    # ``RuntimeError("Event loop is closed")`` lands
+                    # here during ``engine.dispose()`` after a per-call
+                    # ``asyncio.run()`` finished and tore the loop down
+                    # — symmetric with the close arm below. The
+                    # ``has_terminate=True`` dialect promise says
+                    # close()/dispose must not propagate failures from
+                    # this path; debug-log and return. The outer
+                    # try/finally still runs the proxy swap on this
+                    # return path. The debug log preserves the
+                    # traceback for triage.
+                    if "Event loop is closed" in msg:
+                        peer = getattr(self._connection, "address", None)
+                        logger.debug(
+                            "AsyncAdaptedConnection.close (id=%s, peer=%s): "
+                            "rollback raised RuntimeError (%s); skipping close",
+                            id(self),
+                            peer,
+                            type(exc).__name__,
+                            exc_info=True,
+                        )
+                        return
+                    # Other RuntimeErrors (programmer bugs) propagate.
+                    raise
+                # The non-greenlet path is handled by the
+                # ``in_greenlet()`` preflight at the top of ``close()``;
+                # ``MissingGreenlet`` cannot land here.
+                # ``CancelledError`` from the rollback await is allowed
+                # to propagate so the cancellation signal is preserved
+                # — the finally below still runs close(), and the
+                # close arm's CancelledError catch routes through the
+                # sync force-close fallback before re-raising.
+                # Suppressing here would convert a still-active cancel
+                # into a clean return, contradicting asyncio's
+                # "cancellation propagates" contract; the prior test
+                # ``test_close_runs_close_after_rollback_raise.py``
+                # pins that contract.
+            finally:
+                # Narrow the close-time exception set to transport-
+                # class failures. A transient OSError /
+                # DqliteConnectionError mid-close must not escape
+                # do_close and abort engine.dispose(). Matches the
+                # rollback branch's classification. Programmer bugs
+                # (AttributeError / TypeError) still propagate.
+                try:
+                    await_only(self._connection.close())
+                except _TRANSPORT_CLASS_EXCEPTIONS as exc:
+                    peer = getattr(self._connection, "address", None)
+                    logger.debug(
+                        "AsyncAdaptedConnection.close (id=%s, peer=%s): "
+                        "close failed (%s); proceeding with teardown",
+                        id(self),
+                        peer,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                except RuntimeError as exc:
+                    # ``RuntimeError("Event loop is closed")`` /
+                    # ``RuntimeError("...attached to a different loop")``
+                    # land here during ``engine.dispose()`` after a
+                    # per-call ``asyncio.run()`` finished and tore the
+                    # loop down. The async machinery cannot run; reap
+                    # the writer synchronously so the transport
+                    # doesn't leak. ``has_terminate=True`` (the
+                    # dialect-level promise) means close()/dispose
+                    # must not propagate failures from this path; the
+                    # debug log preserves the traceback for triage.
+                    peer = getattr(self._connection, "address", None)
+                    logger.debug(
+                        "AsyncAdaptedConnection.close (id=%s, peer=%s): "
+                        "close raised RuntimeError (%s); reaped transport "
+                        "synchronously",
+                        id(self),
+                        peer,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
+                    self._force_close_transport()
+                except asyncio.CancelledError:
+                    # Cancel landing on the close await (canonical
+                    # trigger: an outer ``asyncio.timeout`` mid-
+                    # ``engine.dispose()`` under SIGTERM-with-budget).
+                    # Run the sync transport fallback so the writer
+                    # is closed even though the async machinery was
+                    # interrupted, then re-raise so the cancel still
+                    # propagates to the caller. The outer try/finally
+                    # still runs the proxy swap on the raise path.
+                    self._force_close_transport()
+                    raise
         finally:
-            # Narrow the close-time exception set to transport-class
-            # failures. A transient OSError / DqliteConnectionError
-            # mid-close must not escape do_close and abort
-            # engine.dispose(). Matches the rollback branch's
-            # classification. Programmer bugs (AttributeError /
-            # TypeError) still propagate.
-            try:
-                await_only(self._connection.close())
-            except _TRANSPORT_CLASS_EXCEPTIONS as exc:
-                peer = getattr(self._connection, "address", None)
-                logger.debug(
-                    "AsyncAdaptedConnection.close (id=%s, peer=%s): "
-                    "close failed (%s); proceeding with teardown",
-                    id(self),
-                    peer,
-                    type(exc).__name__,
-                    exc_info=True,
-                )
-            except RuntimeError as exc:
-                # ``RuntimeError("Event loop is closed")`` /
-                # ``RuntimeError("...attached to a different loop")``
-                # land here during ``engine.dispose()`` after a per-
-                # call ``asyncio.run()`` finished and tore the loop
-                # down. The async machinery cannot run; reap the
-                # writer synchronously so the transport doesn't leak.
-                # ``has_terminate=True`` (the dialect-level promise)
-                # means close()/dispose must not propagate failures
-                # from this path; the debug log preserves the
-                # traceback for triage.
-                peer = getattr(self._connection, "address", None)
-                logger.debug(
-                    "AsyncAdaptedConnection.close (id=%s, peer=%s): "
-                    "close raised RuntimeError (%s); reaped transport "
-                    "synchronously",
-                    id(self),
-                    peer,
-                    type(exc).__name__,
-                    exc_info=True,
-                )
-                self._force_close_transport()
-            except asyncio.CancelledError:
-                # Cancel landing on the close await (canonical trigger:
-                # an outer ``asyncio.timeout`` mid-``engine.dispose()``
-                # under SIGTERM-with-budget). Run the sync transport
-                # fallback so the writer is closed even though the
-                # async machinery was interrupted, then re-raise so
-                # the cancel still propagates to the caller.
-                self._force_close_transport()
-                raise
-        # Drop the strong back-reference to the inner dbapi
-        # ``AsyncConnection`` so a closed adapter retained by SA's
-        # pool diagnostics / pytest session-fixture cache does
-        # not pin the inner conn — and through it the client-
-        # layer state, registered ``weakref.finalize``, and any
-        # frame-pinning ``_invalidation_cause``. ``weakref.proxy``
-        # preserves SA's expected API surface (calls forward to
-        # the inner while it is alive) — only after the inner is
-        # genuinely GC'd does ``ReferenceError`` surface, which
-        # is benign post-close. SA's reference adapter keeps the
-        # strong ref; this is dqlite-specific lifecycle
-        # discipline matching the dbapi layer's
-        # ``AsyncConnection.close``.
-        with contextlib.suppress(TypeError):
+            # Drop the strong back-reference to the inner dbapi
+            # ``AsyncConnection`` so a closed adapter retained by SA's
+            # pool diagnostics / pytest session-fixture cache does
+            # not pin the inner conn — and through it the client-
+            # layer state, registered ``weakref.finalize``, and any
+            # frame-pinning ``_invalidation_cause``. ``weakref.proxy``
+            # preserves SA's expected API surface (calls forward to
+            # the inner while it is alive) — only after the inner is
+            # genuinely GC'd does ``ReferenceError`` surface, which
+            # is benign post-close. SA's reference adapter keeps the
+            # strong ref; this is dqlite-specific lifecycle
+            # discipline matching the dbapi layer's
+            # ``AsyncConnection.close``.
+            self._release_inner_strong_ref()
+
+    def _release_inner_strong_ref(self) -> None:
+        """Swap ``self._connection`` for a ``weakref.proxy`` of itself.
+
+        Centralised so both ``close()`` and ``terminate()`` share the
+        same release discipline; symmetric with how the dbapi layer's
+        ``AsyncConnection.close`` swaps its own loop-bound state.
+
+        Suppression covers two corner cases: ``TypeError`` for inner
+        types that don't support weakref (always supported for
+        ``AsyncConnection``; defensive for hand-rolled test doubles)
+        and ``ReferenceError`` for the rare case where this method is
+        called twice on the same adapter and the inner has already
+        been GC'd between calls (``weakref.proxy(dead_proxy)`` raises
+        ``ReferenceError``, not ``TypeError``).
+        """
+        with contextlib.suppress(TypeError, ReferenceError):
             self._connection = weakref.proxy(self._connection)
 
     def _force_close_transport(self) -> None:
@@ -1178,13 +1222,21 @@ class AsyncAdaptedConnection(AdaptedConnection):
         ``engine.dispose()`` under failure, or when a stuck rollback
         would otherwise block shutdown. Unlike ``close()`` we do NOT
         attempt rollback first: that's the whole point of terminate.
+
+        Mirrors ``close()``'s post-close ``weakref.proxy`` swap on
+        every exit arm — SA's pool invalidate path uses terminate, and
+        the same diagnostic-ring / fixture-pinning concern that
+        motivates close()'s swap applies symmetrically here.
         """
         # Preflight on ``in_greenlet()`` — see ``close()`` for
         # rationale. Non-greenlet finalize paths reap the writer
         # synchronously without paying the ``MissingGreenlet``
         # exception-allocation cost.
         if not in_greenlet():
-            self._force_close_transport()
+            try:
+                self._force_close_transport()
+            finally:
+                self._release_inner_strong_ref()
             return
 
         # ``has_terminate = True`` promises SA that this path never
@@ -1197,46 +1249,53 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # await runs through ``await_only`` from a sync greenlet
         # context where ``shield``'s loop-binding semantics don't
         # apply, and the explicit catch already covers the same case.
+        #
+        # Outer try/finally guarantees the post-close ``weakref.proxy``
+        # swap runs on every exit arm — symmetric with ``close()``.
         try:
-            await_only(self._connection.close())
-        except _TRANSPORT_CLASS_EXCEPTIONS as exc:
-            peer = getattr(self._connection, "address", None)
-            logger.debug(
-                "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "
-                "close failed (%s); teardown complete",
-                id(self),
-                peer,
-                type(exc).__name__,
-                exc_info=True,
-            )
-        except RuntimeError as exc:
-            # Defunct-loop close during ``engine.dispose()``: an
-            # ``asyncio.run()`` per-call pattern tears the loop down,
-            # then SA's pool finalizer calls ``terminate()`` and the
-            # async machinery raises ``RuntimeError("Event loop is
-            # closed")``. ``has_terminate=True`` promises SA that
-            # dispose never propagates failures from this path; reap
-            # the writer synchronously and stay quiet (DEBUG only).
-            peer = getattr(self._connection, "address", None)
-            logger.debug(
-                "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "
-                "close raised RuntimeError (%s); reaped transport "
-                "synchronously",
-                id(self),
-                peer,
-                type(exc).__name__,
-                exc_info=True,
-            )
-            self._force_close_transport()
-        except asyncio.CancelledError:
-            # See close()'s sibling catch — outer cancel during a
-            # forced reclaim must still close the writer transport
-            # synchronously before propagating, otherwise SA's
-            # ``has_terminate=True`` promise (the pool can always
-            # reclaim a slot) breaks under SIGTERM-with-budget
-            # shutdown.
-            self._force_close_transport()
-            raise
+            try:
+                await_only(self._connection.close())
+            except _TRANSPORT_CLASS_EXCEPTIONS as exc:
+                peer = getattr(self._connection, "address", None)
+                logger.debug(
+                    "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "
+                    "close failed (%s); teardown complete",
+                    id(self),
+                    peer,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+            except RuntimeError as exc:
+                # Defunct-loop close during ``engine.dispose()``: an
+                # ``asyncio.run()`` per-call pattern tears the loop
+                # down, then SA's pool finalizer calls ``terminate()``
+                # and the async machinery raises
+                # ``RuntimeError("Event loop is closed")``.
+                # ``has_terminate=True`` promises SA that dispose never
+                # propagates failures from this path; reap the writer
+                # synchronously and stay quiet (DEBUG only).
+                peer = getattr(self._connection, "address", None)
+                logger.debug(
+                    "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "
+                    "close raised RuntimeError (%s); reaped transport "
+                    "synchronously",
+                    id(self),
+                    peer,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+                self._force_close_transport()
+            except asyncio.CancelledError:
+                # See close()'s sibling catch — outer cancel during a
+                # forced reclaim must still close the writer transport
+                # synchronously before propagating, otherwise SA's
+                # ``has_terminate=True`` promise (the pool can always
+                # reclaim a slot) breaks under SIGTERM-with-budget
+                # shutdown.
+                self._force_close_transport()
+                raise
+        finally:
+            self._release_inner_strong_ref()
 
 
 class DqliteDialect_aio(DqliteDialect):

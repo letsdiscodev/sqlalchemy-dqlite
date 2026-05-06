@@ -628,7 +628,7 @@ class TestIsDisconnect:
         from dqlitewire.constants import SQLITE_IOERR_NOT_LEADER
 
         dialect = DqliteDialect()
-        inner = _client_exc.OperationalError(SQLITE_IOERR_NOT_LEADER, "not the leader")
+        inner = _client_exc.OperationalError("not the leader", SQLITE_IOERR_NOT_LEADER)
         try:
             raise dqlitedbapi.exceptions.OperationalError("wrapped") from inner
         except dqlitedbapi.exceptions.OperationalError as wrapped:

@@ -412,7 +412,7 @@ class TestIsDisconnectTypeDispatch:
 
     def test_leader_change_code_is_disconnect(self) -> None:
         dialect = DqliteDialect()
-        e = dqliteclient.exceptions.OperationalError(10250, "not leader")
+        e = dqliteclient.exceptions.OperationalError("not leader", 10250)
         assert dialect.is_disconnect(e, None, None) is True
 
     def test_unrelated_operational_error_is_not_disconnect(self) -> None:
@@ -429,7 +429,7 @@ class TestIsDisconnectTypeDispatch:
 
         dialect = DqliteDialect()
         for code in LEADER_ERROR_CODES:
-            e = dqliteclient.exceptions.OperationalError(code, "leader gone")
+            e = dqliteclient.exceptions.OperationalError("leader gone", code)
             assert dialect.is_disconnect(e, None, None) is True, (
                 f"LEADER_ERROR_CODES member {code} must be classified "
                 f"as a disconnect — is_disconnect returned False."
@@ -445,7 +445,7 @@ class TestIsDisconnectTypeDispatch:
         the fallback behaviour for any stray OperationalError that
         slips through."""
         dialect = DqliteDialect()
-        e = dqliteclient.exceptions.OperationalError(code, "application error")
+        e = dqliteclient.exceptions.OperationalError("application error", code)
         assert dialect.is_disconnect(e, None, None) is False
 
     @pytest.mark.parametrize(

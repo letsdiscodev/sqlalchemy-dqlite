@@ -88,3 +88,14 @@ def test_paramstyle_kwarg_qmark_accepted_as_noop(cls: type) -> None:
     pin) is accepted as a no-op."""
     d = cls(paramstyle="qmark")
     assert d.paramstyle == "qmark"
+
+
+@pytest.mark.parametrize("cls", [DqliteDialect, DqliteDialect_aio])
+def test_paramstyle_kwarg_none_accepted_as_sentinel(cls: type) -> None:
+    """``DefaultDialect.__init__(paramstyle=None, ...)`` is the
+    documented SA "use the dbapi default" sentinel; ``None`` resolves
+    via ``self.dbapi.paramstyle`` to ``"qmark"`` in our case. The
+    dialect must accept this legitimate sentinel rather than rejecting
+    with ArgumentError. Mirror SA's own DefaultDialect contract."""
+    d = cls(paramstyle=None)
+    assert d.paramstyle == "qmark"

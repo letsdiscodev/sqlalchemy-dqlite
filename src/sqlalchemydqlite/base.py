@@ -980,10 +980,15 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # with ``:name`` placeholders that produce cryptic
         # ProgrammingError at execute time. Reject the kwarg up-front
         # so the user sees a config-time ArgumentError.
-        if "paramstyle" in kwargs and kwargs["paramstyle"] != "qmark":
-            raise ArgumentError(
-                f"dqlite dialect requires paramstyle='qmark'; got {kwargs['paramstyle']!r}"
-            )
+        # Accept ``paramstyle=None`` as the documented SA "use the dbapi
+        # default" sentinel — ``DefaultDialect.__init__(paramstyle=None,
+        # ...)`` is the canonical signature and ``None`` resolves via
+        # ``self.dbapi.paramstyle`` to ``"qmark"`` in our case. The
+        # explicit-``"qmark"`` and ``None``-sentinel cases are the only
+        # legitimate inputs; everything else is a misconfiguration.
+        ps = kwargs.get("paramstyle")
+        if ps is not None and ps != "qmark":
+            raise ArgumentError(f"dqlite dialect requires paramstyle='qmark'; got {ps!r}")
         # Symmetric eager rejection of ``isolation_level="AUTOCOMMIT"``.
         # ``set_isolation_level`` rejects the value at SA's connect-
         # listener step (``engine/default.py::_builtin_onconnect``),

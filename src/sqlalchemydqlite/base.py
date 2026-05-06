@@ -1982,19 +1982,25 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 #     ``AsyncConnection._ensure_locks`` / ``cursor()``;
                 #     a permanent per-slot fault.
                 #   * ``InterfaceError`` — closed cursor / connection
-                #     AND server-emitted code-bearing variants
-                #     (``DQLITE_PROTO`` = 1001 protocol misuse,
-                #     ``SQLITE_MISUSE`` = 21, ``SQLITE_RANGE`` = 25;
-                #     see ``_SERVER_INTERFACEERROR_DISCONNECT_CODES``
-                #     above). For the pre-ping context, ANY
-                #     ``InterfaceError`` from ``SELECT 1`` indicates
-                #     the slot is unusable — more conservative than
-                #     ``is_disconnect``'s real-query classification,
-                #     which gates code-bearing ``InterfaceError`` out
-                #     so caller-side bind misuse propagates as a real
-                #     error. Asymmetry deliberate: pre-ping must
-                #     reject any unusable slot; real-query must let
-                #     caller-side errors surface.
+                #     AND server-emitted code-bearing variants. The
+                #     project's ``_SERVER_INTERFACEERROR_DISCONNECT_CODES``
+                #     constant explicitly EXCLUDES ``SQLITE_MISUSE`` (21)
+                #     and ``SQLITE_RANGE`` (25) — those signal client-side
+                #     programming errors (parameter index out of range,
+                #     statement reused after finalize) and should NOT
+                #     mark the slot unusable. The set is currently just
+                #     ``{1001}`` (``DQLITE_PROTO``); see the constant's
+                #     declaration block for the full exclusion rationale.
+                #     For the pre-ping context, ANY ``InterfaceError``
+                #     from ``SELECT 1`` indicates the slot is unusable —
+                #     more conservative than ``is_disconnect``'s
+                #     real-query classification, which restricts
+                #     code-bearing ``InterfaceError`` to the narrow
+                #     ``_SERVER_INTERFACEERROR_DISCONNECT_CODES`` set so
+                #     caller-side bind misuse propagates as a real error.
+                #     Asymmetry deliberate: pre-ping must reject any
+                #     unusable slot; real-query must let caller-side
+                #     errors surface.
                 _dbapi_exc.OperationalError,
                 _dbapi_exc.ProgrammingError,
                 _dbapi_exc.InterfaceError,

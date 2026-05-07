@@ -454,3 +454,31 @@ class Requirements(SuiteRequirements):
         layer honours that. Existing tests pin every branch of
         ``_check_in_use`` and the closed-state PEP 249 contracts."""
         return exclusions.open()
+
+    # SuiteRequirements properties below default to ``closed()`` upstream;
+    # opening them adds compliance-suite coverage for SQL features that
+    # SQLite (and therefore dqlite) supports natively.
+
+    @property
+    def nullsordering(self) -> compound:
+        """``ORDER BY ... NULLS FIRST/LAST``. SQLite 3.30+ supports
+        natively (dqlite-server runs SQLite 3.35)."""
+        return exclusions.open()
+
+    @property
+    def intersect(self) -> compound:
+        """``SELECT ... INTERSECT SELECT ...`` set operator. SQLite
+        3.0+ supports."""
+        return exclusions.open()
+
+    @property
+    def except_(self) -> compound:
+        """``SELECT ... EXCEPT SELECT ...`` set operator. SQLite
+        3.0+ supports."""
+        return exclusions.open()
+
+    @property
+    def index_ddl_if_exists(self) -> compound:
+        """``CREATE INDEX IF NOT EXISTS`` / ``DROP INDEX IF EXISTS``.
+        SQLite 3.3+ supports."""
+        return exclusions.open()

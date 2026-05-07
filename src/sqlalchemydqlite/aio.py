@@ -21,7 +21,7 @@ from dqlitedbapi.exceptions import (
     OperationalError,
     ProgrammingError,
 )
-from dqlitedbapi.types import _DescriptionTuple
+from dqlitedbapi.types import DescriptionTuple
 from sqlalchemydqlite.base import _TRANSPORT_CLASS_EXCEPTIONS, DqliteDialect
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 # underlying cursor returns without copying. The inner 7-tuple shape is
 # imported from the dbapi layer (single source of truth) so a future
 # column (real display_size, etc.) propagates here automatically.
-type _Description = Sequence[_DescriptionTuple] | None
+type _Description = Sequence[DescriptionTuple] | None
 
 
 class AsyncAdaptedCursor:

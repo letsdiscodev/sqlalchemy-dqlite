@@ -1412,6 +1412,19 @@ class DqliteDialect_aio(DqliteDialect):
         loop-closed) re-raise as ``OperationalError`` — the outer
         ``do_ping`` then catches that as ping-fail.
         """
+        # Closed-state guard mirroring ``AsyncAdaptedConnection.cursor``
+        # at line ~723: ``close()`` replaces ``self._connection`` with
+        # ``weakref.proxy(...)``. Reaching into ``_connection.cursor()``
+        # directly would surface ``ReferenceError`` if the proxied
+        # inner has been GC'd — not a ``dbapi.Error`` subclass and
+        # would escape the outer ``do_ping`` classifier
+        # (``OperationalError, ProgrammingError, InterfaceError,
+        # DqliteConnectionError, OSError``). Translate to
+        # ``InterfaceError`` up front so cross-driver retry middleware
+        # and SA's ``_handle_dbapi_exception`` see a clean
+        # ``dbapi.Error``.
+        if isinstance(dbapi_connection._connection, weakref.ProxyTypes):
+            raise InterfaceError(f"Connection is closed (id={id(dbapi_connection)})")
         try:
             cur = dbapi_connection._connection.cursor()
             try:

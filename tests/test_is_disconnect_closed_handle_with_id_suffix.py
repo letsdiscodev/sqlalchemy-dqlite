@@ -86,6 +86,14 @@ def test_production_raise_sites_use_canonical_suffix_shape() -> None:
     pattern = re.compile(r'f"((?:Pool|Connection|Cursor|cursor) is closed[^"]*)"')
     for match in pattern.finditer(sources):
         body = match.group(1)
-        assert "(id={id(self)})" in body, (
-            f"closed-handle raise site missing canonical ``(id={{id(self)}})`` suffix: {body!r}"
+        # ``self`` is the canonical handle inside Pool / Connection /
+        # Cursor / wrapper methods. ``DqliteDialect_aio._async_ping``
+        # is the one site that lives on the dialect (where ``self`` is
+        # the dialect, not a connection); accept ``id(dbapi_connection)``
+        # as the equivalent canonical suffix on that site so the pin
+        # stays meaningful elsewhere without forcing an awkward rename.
+        accepted = ("(id={id(self)})", "(id={id(dbapi_connection)})")
+        assert any(s in body for s in accepted), (
+            f"closed-handle raise site missing canonical ``(id={{id(self)}})`` "
+            f"or ``(id={{id(dbapi_connection)}})`` suffix: {body!r}"
         )

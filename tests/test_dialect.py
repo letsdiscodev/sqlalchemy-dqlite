@@ -45,11 +45,6 @@ class TestDqliteDialect:
         assert kwargs["address"] == "node1:9002"
         assert kwargs["database"] == "mydb"
 
-    def test_supports_sane_isolation_level(self) -> None:
-        # dqlite always enforces SERIALIZABLE; the reported level is
-        # trustworthy across transactions.
-        assert DqliteDialect.supports_sane_isolation_level is True
-
     def test_supports_native_decimal_false(self) -> None:
         # SQLite/dqlite has no native DECIMAL type.
         assert DqliteDialect.supports_native_decimal is False

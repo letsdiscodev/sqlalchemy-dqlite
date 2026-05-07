@@ -840,11 +840,6 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # SQLAlchemy release decouples the two.
     non_native_boolean_check_constraint = False
 
-    # Since isolation is always SERIALIZABLE and cannot be weakened, the
-    # reported isolation level is trustworthy across transactions. SQLAlchemy
-    # skips defensive isolation-level resets when this is True.
-    supports_sane_isolation_level = True
-
     # dqlite/SQLite have no native DECIMAL type — values are stored as TEXT
     # or REAL. Declare explicitly to document the contract (matches pysqlite
     # inherited default, pinned here against upstream drift).

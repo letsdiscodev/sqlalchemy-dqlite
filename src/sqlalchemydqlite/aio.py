@@ -677,12 +677,12 @@ class AsyncAdaptedConnection(AdaptedConnection):
         ``asyncio.CancelledError`` — i.e., the same exceptions that the
         hand-rolled :meth:`terminate` body explicitly suppresses.
 
-        wont-fix ISSUE-1311 documents why ``terminate()`` itself stays
-        hand-rolled rather than reusing SA's ``AsyncAdapt_terminate``
-        mixin (the dqlite lifecycle diverges enough that the mixin
-        would force re-implementing both ``_terminate_graceful_close``
-        and ``_terminate_force_close`` against an inert template). This
-        method exists purely so introspection-only callers see a tuple
+        ``terminate()`` itself stays hand-rolled rather than reusing
+        SA's ``AsyncAdapt_terminate`` mixin: the dqlite lifecycle
+        diverges enough that the mixin would force re-implementing
+        both ``_terminate_graceful_close`` and ``_terminate_force_close``
+        against an inert template. This method exists purely so
+        introspection-only callers see a tuple
         that matches the hand-rolled body's catch arms.
         """
         return _TRANSPORT_CLASS_EXCEPTIONS + (asyncio.CancelledError,)

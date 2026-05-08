@@ -35,9 +35,7 @@ def test_sync_stream_results_returns_all_rows(cluster_address: str) -> None:
     try:
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE IF EXISTS stream_results_pin"))
-            conn.execute(
-                text("CREATE TABLE stream_results_pin (id INTEGER PRIMARY KEY)")
-            )
+            conn.execute(text("CREATE TABLE stream_results_pin (id INTEGER PRIMARY KEY)"))
             for i in range(_ROW_COUNT):
                 conn.execute(
                     text("INSERT INTO stream_results_pin (id) VALUES (:i)"),
@@ -67,9 +65,7 @@ async def test_async_stream_results_returns_all_rows(cluster_address: str) -> No
         async with engine.begin() as conn:
             await conn.execute(text("DROP TABLE IF EXISTS stream_results_pin_async"))
             await conn.execute(
-                text(
-                    "CREATE TABLE stream_results_pin_async (id INTEGER PRIMARY KEY)"
-                )
+                text("CREATE TABLE stream_results_pin_async (id INTEGER PRIMARY KEY)")
             )
             for i in range(_ROW_COUNT):
                 await conn.execute(

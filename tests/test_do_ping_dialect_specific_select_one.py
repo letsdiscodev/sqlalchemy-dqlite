@@ -25,9 +25,7 @@ def test_sync_do_ping_dispatches_through_dialect_specific_select_one(
 ) -> None:
     dialect = DqliteDialect()
     sentinel_sql = "SELECT 1 -- ping"
-    monkeypatch.setattr(
-        DqliteDialect, "_dialect_specific_select_one", sentinel_sql, raising=False
-    )
+    monkeypatch.setattr(DqliteDialect, "_dialect_specific_select_one", sentinel_sql, raising=False)
 
     cursor = MagicMock()
     conn = MagicMock()

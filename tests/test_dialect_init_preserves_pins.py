@@ -99,3 +99,31 @@ def test_paramstyle_kwarg_none_accepted_as_sentinel(cls: type) -> None:
     with ArgumentError. Mirror SA's own DefaultDialect contract."""
     d = cls(paramstyle=None)
     assert d.paramstyle == "qmark"
+
+
+@pytest.mark.parametrize("cls", [DqliteDialect, DqliteDialect_aio])
+def test_broken_fk_pragma_quotes_pinned_false(cls: type) -> None:
+    """SA's ``SQLiteDialect.__init__`` derives this flag from
+    ``self.dbapi.sqlite_version_info < (3, 6, 14)``. The dqlitedbapi
+    pinned ``SQLITE_VERSION_INFO`` is the sole input; a future
+    regression that lowered the pinned tuple would silently flip the
+    flag True and change ``get_foreign_keys`` reflection behaviour
+    (FK-pragma quote stripping). Pin False as drift defence — if this
+    test fires, triage whether the cause is (1) SA changed the gate
+    threshold, (2) we lowered ``SQLITE_VERSION_INFO``, or (3)
+    intentional. Use ``is False`` rather than ``is not True`` so a
+    future SA flip to a third state breaks the pin loudly rather
+    than silently passing."""
+    d = cls()
+    assert d._broken_fk_pragma_quotes is False
+
+
+@pytest.mark.parametrize("cls", [DqliteDialect, DqliteDialect_aio])
+def test_broken_dotted_colnames_pinned_false(cls: type) -> None:
+    """Symmetric pin to ``_broken_fk_pragma_quotes`` — SA's
+    ``SQLiteDialect.__init__`` derives this from
+    ``sqlite_version_info < (3, 10, 0)`` and it influences UNION
+    dotted-colname stripping during result processing. Drift defence
+    same as the sibling pin above."""
+    d = cls()
+    assert d._broken_dotted_colnames is False

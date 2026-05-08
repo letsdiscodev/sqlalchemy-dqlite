@@ -1378,8 +1378,26 @@ class DqliteDialect_aio(DqliteDialect):
         which closes without the usual pre-close rollback so a stuck
         rollback on a half-dead connection cannot block
         ``engine.dispose()``.
+
+        ``has_terminate=True`` promises SA a non-raising path; suppress
+        any tail ``Exception`` so SA's pool finalize cannot crash on a
+        partial-state connection (mirrors the sync sibling's
+        suppression discipline at ``base.py``). ``asyncio.CancelledError``
+        is deliberately NOT caught — asyncio's structured-concurrency
+        contract says cancels must propagate, and an outer cancel
+        signalling "abort dispose now" must not be silently swallowed.
         """
-        dbapi_connection.terminate()
+        peer = getattr(dbapi_connection, "address", None)
+        try:
+            dbapi_connection.terminate()
+        except Exception:  # noqa: BLE001 - terminate must not raise
+            logger.debug(
+                "do_terminate: terminate raised on dispose for peer=%s id=%s; "
+                "proceeding (has_terminate=True non-raising contract)",
+                peer,
+                id(dbapi_connection),
+                exc_info=True,
+            )
 
     def do_ping(self, dbapi_connection: Any) -> bool:
         """Async-side bespoke ping.

@@ -776,7 +776,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
             else:
                 cur.execute(operation, parameters)
         except BaseException:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 cur.close()
             raise
         return cur

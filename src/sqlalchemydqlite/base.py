@@ -1312,6 +1312,16 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         otherwise reaches ``dqlitedbapi.connect`` and raises
         ``NotSupportedError`` at first checkout, far from the user's
         ``create_engine`` site.
+
+        Also runs the per-key value validator from
+        ``_URL_QUERY_ALLOWED`` for any kwarg that's also a URL-query
+        knob. ``connect_args`` values are already typed (they bypass
+        the URL string-converter step) so only the predicate runs;
+        out-of-range values raise the same ``ArgumentError`` class the
+        URL path emits at engine construction time. Without this, the
+        ``connect_args`` path silently accepts values like
+        ``close_timeout=0.0001`` that the URL path rejects on the
+        documented 0.01s floor.
         """
         unknown = set(kwargs) - self._CONNECT_KWARG_ALLOWED
         if unknown:
@@ -1322,6 +1332,14 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 f"path's allowlist applies only to ``?key=value`` URL "
                 f"parameters, not to ``connect_args=`` kwargs."
             )
+        for key, value in kwargs.items():
+            if key in self._URL_QUERY_ALLOWED:
+                _converter, validator = self._URL_QUERY_ALLOWED[key]
+                if validator is not None and not validator(value):
+                    raise ArgumentError(
+                        f"connect_args value for {key!r} = {value!r} fails "
+                        f"the validator the URL-query path enforces"
+                    )
 
     def connect(self, *cargs: Any, **cparams: Any) -> Any:
         """Create a sync dbapi connection.

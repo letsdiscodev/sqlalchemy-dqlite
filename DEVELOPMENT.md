@@ -91,8 +91,10 @@ Examples of features dqlite doesn't have (each declared
 
 - ATTACH-DATABASE schemas (`schemas`)
 - Two-phase commit (`two_phase_transactions`)
-- `CREATE SEQUENCE` (`sequences` — SQLite has no native sequences)
-- Datetime literals (`datetime_literals`)
+- `CREATE SEQUENCE` (`sequences` — SQLite has no native sequences;
+  this one is gated by the dialect-level `supports_sequences = False`
+  flag inherited from the SQLite dialect rather than an explicit
+  `closed()` in `requirements.py`)
 - Parenthesised SELECTs in UNION (`parens_in_union_*`)
 - Cross-schema FK reflection (`cross_schema_fk_reflection`)
 

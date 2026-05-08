@@ -1966,7 +1966,7 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         try:
             try:
                 cursor = dbapi_connection.cursor()
-                cursor.execute("SELECT 1")
+                cursor.execute(self._dialect_specific_select_one)
                 return True
             except (
                 # Narrow per-class catch instead of the ``DatabaseError``

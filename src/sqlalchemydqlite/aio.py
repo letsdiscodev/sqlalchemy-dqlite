@@ -1428,7 +1428,7 @@ class DqliteDialect_aio(DqliteDialect):
         try:
             cur = dbapi_connection._connection.cursor()
             try:
-                await cur.execute("SELECT 1")
+                await cur.execute(self._dialect_specific_select_one)
                 await cur.fetchone()
             finally:
                 with contextlib.suppress(Exception):

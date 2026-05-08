@@ -109,7 +109,7 @@ class AsyncAdaptedCursor:
         self.rowcount: int = -1
         self.lastrowid: int | None = None
         self._arraysize: int = 1
-        self._rows: deque[Any] = deque()
+        self._rows: deque[tuple[Any, ...]] = deque()
         # PEP 249: after ``close()`` the cursor is unusable. Track the
         # flag so setinputsizes / setoutputsize can honour the contract
         # — the underlying AsyncCursor already raises InterfaceError
@@ -405,18 +405,20 @@ class AsyncAdaptedCursor:
                         exc_info=True,
                     )
 
-    def fetchone(self) -> Any | None:
-        # Narrow from ``Any`` so callers understand None is a legitimate
-        # return on exhaustion (PEP 249 contract, mirroring the
-        # dqlitedbapi sync / async cursors that already type this as
-        # ``tuple[Any, ...] | None``). Runtime behaviour unchanged.
+    def fetchone(self) -> tuple[Any, ...] | None:
+        # Narrow to the actual row shape. ``Any | None`` collapses to
+        # ``Any`` under mypy's gradual typing, defeating the previous
+        # narrowing attempt; ``tuple[Any, ...] | None`` matches what
+        # the underlying dqlitedbapi sync / async cursors return and
+        # makes the None-on-exhaustion PEP 249 contract type-checkable.
+        # Runtime behaviour unchanged.
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         if self._rows:
             return self._rows.popleft()
         return None
 
-    def fetchmany(self, size: int | None = None) -> Sequence[Any]:
+    def fetchmany(self, size: int | None = None) -> Sequence[tuple[Any, ...]]:
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         if size is None:
@@ -425,7 +427,7 @@ class AsyncAdaptedCursor:
             raise ProgrammingError(f"fetchmany size must be non-negative, got {size}")
         return [self._rows.popleft() for _ in range(min(size, len(self._rows)))]
 
-    def fetchall(self) -> Sequence[Any]:
+    def fetchall(self) -> Sequence[tuple[Any, ...]]:
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         retval = list(self._rows)

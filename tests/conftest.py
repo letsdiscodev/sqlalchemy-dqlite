@@ -2,9 +2,32 @@
 
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_resolve_leader_cache() -> Iterator[None]:
+    """Clear the process-wide ``_RESOLVE_LEADER_CACHE`` between tests.
+
+    SA tests reach into ``dqlitedbapi.connect`` (transitively via
+    ``create_engine``) which populates the same module-global cache
+    that the dbapi-side autouse fixture already clears
+    (``python-dqlite-dbapi/tests/conftest.py:10-22``). Without an
+    equivalent fixture here, two SA tests that target the same
+    ``(address, governors)`` tuple via different ``ClusterClient``
+    mocks would share a stale cached instance from the earlier test's
+    patch context — the same flake vector the dbapi fixture was added
+    to prevent.
+    """
+    from dqlitedbapi import connection as _conn_mod
+
+    _conn_mod._RESOLVE_LEADER_CACHE.clear()
+    yield
+    _conn_mod._RESOLVE_LEADER_CACHE.clear()
+
 
 # Add python-dqlite-dev's testlib to sys.path so tests (in particular
 # the leader-flip integration suite) can import shared utilities from

@@ -1929,11 +1929,16 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         partial-state connection (matches the async sibling's
         suppression discipline).
         """
+        peer = getattr(dbapi_connection, "address", None)
         try:
             dbapi_connection.force_close_transport()
         except Exception:  # noqa: BLE001 - terminate must not raise
             logger.debug(
-                "do_terminate: force_close_transport raised; proceeding",
+                "do_terminate: force_close_transport raised on dispose for "
+                "peer=%s id=%s; proceeding (has_terminate=True non-raising "
+                "contract)",
+                peer,
+                id(dbapi_connection),
                 exc_info=True,
             )
 

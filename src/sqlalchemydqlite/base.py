@@ -1124,19 +1124,46 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         }
     )
 
+    # Per-key (converter, validator) tuples. The URL-query path runs
+    # converter (str → typed value) then validator (typed → in-range
+    # bool); the ``connect_args=`` path skips the converter (callers
+    # already pass typed values) and runs only the validator. Because
+    # the validator is the single source of truth on the connect_args
+    # path, every key MUST carry a non-None validator that fully
+    # describes the in-range shape — otherwise connect_args silently
+    # bypasses the bound (the converter's range check never runs).
+    #
+    # The ``not isinstance(v, bool)`` guards exist because ``bool`` is
+    # a subclass of ``int`` in Python: ``True > 0`` is True, so a
+    # naive ``isinstance(v, int) and 0 < v <= cap`` predicate accepts
+    # ``True`` as the integer 1. The URL path can never carry a bool
+    # (always converts a string via the named token set), so the
+    # bool-rejection is a connect_args-only tightening.
     _URL_QUERY_ALLOWED: dict[str, tuple[Callable[[str], Any], Callable[[Any], bool] | None]] = {
-        "timeout": (float, lambda v: math.isfinite(v) and v > 0),
+        "timeout": (
+            float,
+            lambda v: (
+                not isinstance(v, bool)
+                and isinstance(v, int | float)
+                and math.isfinite(v)
+                and v > 0
+            ),
+        ),
         "max_total_rows": (
             lambda s: _parse_url_int_or_none("max_total_rows", s, upper=2**31 - 1),
-            None,
+            lambda v: (
+                v is None or (isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 2**31 - 1)
+            ),
         ),
         "max_continuation_frames": (
             lambda s: _parse_url_int_or_none("max_continuation_frames", s, upper=1_000_000),
-            None,
+            lambda v: (
+                v is None or (isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 1_000_000)
+            ),
         ),
         "trust_server_heartbeat": (
             lambda s: _parse_url_bool("trust_server_heartbeat", s),
-            None,
+            lambda v: isinstance(v, bool),
         ),
         # close_timeout floor: 0.01 s. The dispose-time writer-close
         # is scheduled via ``call_soon_threadsafe`` and joined with a
@@ -1146,7 +1173,15 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # values up-front so an operator pinning ``?close_timeout=
         # 0.0001`` sees a config-time ArgumentError, not a silent
         # near-zero wait that still appears to "work".
-        "close_timeout": (float, lambda v: math.isfinite(v) and v >= 0.01),
+        "close_timeout": (
+            float,
+            lambda v: (
+                not isinstance(v, bool)
+                and isinstance(v, int | float)
+                and math.isfinite(v)
+                and v >= 0.01
+            ),
+        ),
     }
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:

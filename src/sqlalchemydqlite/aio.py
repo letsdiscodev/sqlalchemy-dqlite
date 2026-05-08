@@ -659,6 +659,32 @@ class AsyncAdaptedConnection(AdaptedConnection):
     # extension points.
     await_ = staticmethod(await_only)
 
+    @staticmethod
+    def _terminate_handled_exceptions() -> tuple[type[BaseException], ...]:
+        """Introspection parity with SA's reference at
+        ``sqlalchemy/connectors/asyncio.py:417-421``. Third-party SA
+        async tooling (Sentry async-pool wrapper, sqlalchemy-utils
+        diagnostics) introspects this hook on the connection adapter;
+        every other async SA dialect (aiosqlite / asyncpg / aiomysql)
+        exposes it, and ``AttributeError`` on dqlite would force those
+        tools onto a less-informative fallback path.
+
+        Returns the union of the project-wide transport-class catch
+        tuple (``OperationalError`` / ``InterfaceError`` /
+        ``DqliteConnectionError`` / ``OSError``) plus
+        ``asyncio.CancelledError`` — i.e., the same exceptions that the
+        hand-rolled :meth:`terminate` body explicitly suppresses.
+
+        wont-fix ISSUE-1311 documents why ``terminate()`` itself stays
+        hand-rolled rather than reusing SA's ``AsyncAdapt_terminate``
+        mixin (the dqlite lifecycle diverges enough that the mixin
+        would force re-implementing both ``_terminate_graceful_close``
+        and ``_terminate_force_close`` against an inert template). This
+        method exists purely so introspection-only callers see a tuple
+        that matches the hand-rolled body's catch arms.
+        """
+        return _TRANSPORT_CLASS_EXCEPTIONS + (asyncio.CancelledError,)
+
     def __init__(
         self,
         connection: "AsyncConnection",

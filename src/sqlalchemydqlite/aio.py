@@ -1586,15 +1586,25 @@ class DqliteDialect_aio(DqliteDialect):
         """
         creator_fn = cparams.pop("async_creator_fn", None)
         self._validate_connect_kwargs(cparams)
-        if creator_fn is not None:
-            raw_conn = creator_fn(*cargs, **cparams)
-        else:
-            raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
+        # Cover the construction itself with the same try frame so a
+        # ``BaseException`` (KeyboardInterrupt / SystemExit) delivered
+        # between the assignment to ``raw_conn`` and the ``try:`` cannot
+        # leak the freshly-built ``AsyncConnection`` (registered locks,
+        # ``weakref.finalize`` ResourceWarning surface) without orderly
+        # cleanup. Mirrors the project-wide
+        # construct-inside-the-try-frame discipline applied to other
+        # eager-allocation paths (cluster / pool comprehensions).
+        raw_conn: Any = None
         try:
+            if creator_fn is not None:
+                raw_conn = creator_fn(*cargs, **cparams)
+            else:
+                raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
             await_only(raw_conn.connect())
         except BaseException:
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                AsyncAdaptedConnection(raw_conn, dbapi=self.loaded_dbapi).terminate()
+            if raw_conn is not None:
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    AsyncAdaptedConnection(raw_conn, dbapi=self.loaded_dbapi).terminate()
             raise
         return AsyncAdaptedConnection(raw_conn, dbapi=self.loaded_dbapi)
 

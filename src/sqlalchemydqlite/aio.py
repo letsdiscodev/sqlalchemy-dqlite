@@ -561,7 +561,7 @@ class AsyncAdaptedCursor:
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: object | None,
+        exc_tb: types.TracebackType | None,
     ) -> None:
         # PEP 343 ``__exit__`` signature. The body always closes and
         # never suppresses, so ``-> None`` is the correct return; a

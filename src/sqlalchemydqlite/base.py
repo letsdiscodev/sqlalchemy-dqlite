@@ -1830,6 +1830,17 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 message = raw.lower()
                 if "connection is closed" in message or "cursor is closed" in message:
                     return True
+                # The dbapi raises ``InterfaceError("Connection
+                # invalidated (id=...); reconnect before retrying
+                # commit / rollback. ...")`` with ``code=None`` from
+                # its pre-lock guard when ``_protocol`` is None
+                # (i.e., a sibling task has invalidated the inner
+                # transport). The "connection invalidated" lexeme is
+                # the dbapi's contract; match it here so the SA pool
+                # reclaims the slot rather than handing the dead
+                # inner connection back on the next checkout.
+                if "connection invalidated" in message:
+                    return True
             # Leader-change code on either OperationalError shape —
             # checked before the substring scan so a coded leader-flip
             # is not gated out by the OE-arm code-is-None restriction

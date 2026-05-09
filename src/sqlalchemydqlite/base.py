@@ -1835,11 +1835,15 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 # commit / rollback. ...")`` with ``code=None`` from
                 # its pre-lock guard when ``_protocol`` is None
                 # (i.e., a sibling task has invalidated the inner
-                # transport). The "connection invalidated" lexeme is
-                # the dbapi's contract; match it here so the SA pool
-                # reclaims the slot rather than handing the dead
-                # inner connection back on the next checkout.
-                if "connection invalidated" in message:
+                # transport). Match the full ``connection invalidated
+                # (id=`` lexeme — the parenthesis is the dbapi's
+                # contract at every raise site (verified across
+                # ``aio/connection.py`` ``_check_loop_binding`` /
+                # ``_check_in_use`` / ``_check_writer_alive``) — so a
+                # user-raised ``InterfaceError("Connection invalidated
+                # by trigger BEFORE INSERT")`` (no ``(id=``) does NOT
+                # trip disconnect classification.
+                if "connection invalidated (id=" in message:
                     return True
             # Leader-change code on either OperationalError shape —
             # checked before the substring scan so a coded leader-flip

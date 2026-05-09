@@ -216,6 +216,21 @@ class TestCreateConnectArgsURLQuery:
         with pytest.raises(ArgumentError, match="close_timeout"):
             dialect.create_connect_args(url)
 
+    def test_close_timeout_below_floor_carries_fin_flush_rationale(self) -> None:
+        """SA-URL operators pinning ``?close_timeout=0.0001`` see the
+        same FIN-flush / TIME_WAIT operator-facing rationale as direct
+        DqliteConnection / ConnectionPool callers and the dbapi-layer
+        ``connect_args=`` path. The URL validator delegates to the
+        client-layer ``validate_timeout`` so the rationale is single-
+        sourced; if a future revert decoupled the validator and let
+        SA emit the bare ``"out of range"`` shape, this test fails."""
+        dialect = DqliteDialect()
+        url = make_url("dqlite://host:19001/db?close_timeout=0.0001")
+        with pytest.raises(ArgumentError) as exc:
+            dialect.create_connect_args(url)
+        assert "FIN flushes" in str(exc.value)
+        assert "close_timeout" in str(exc.value)
+
 
 class TestURLQueryRangeValidation:
     @pytest.mark.parametrize(

@@ -23,6 +23,20 @@ def test_connect_args_close_timeout_below_floor_raises() -> None:
         dialect._validate_connect_kwargs({"close_timeout": 0.0001})
 
 
+def test_connect_args_close_timeout_below_floor_carries_fin_flush_rationale() -> None:
+    """The diagnostic carries the FIN-flush / TIME_WAIT explanation —
+    same operator-facing surface as the dbapi-layer wrap and the
+    direct ``DqliteConnection`` / ``ConnectionPool`` callers."""
+    dialect = DqliteDialect()
+    with pytest.raises(ArgumentError) as exc:
+        dialect._validate_connect_kwargs({"close_timeout": 0.0001})
+    assert "FIN flushes" in str(exc.value), (
+        "close_timeout floor diagnostic must include the FIN-flush "
+        "rationale so SA-URL operators understand the reason for "
+        "the 0.01s floor; same surface as the dbapi-layer wrap."
+    )
+
+
 def test_connect_args_close_timeout_at_floor_accepted() -> None:
     dialect = DqliteDialect()
     dialect._validate_connect_kwargs({"close_timeout": 0.01})

@@ -18,9 +18,38 @@ from sqlalchemy.exc import ArgumentError
 
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
+from dqliteclient import CLOSE_TIMEOUT_FLOOR_RATIONALE, validate_timeout
 from dqlitewire import LEADER_ERROR_CODES, SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
 from dqlitewire import sanitize_server_text as _sanitize_server_text
 from dqlitewire.constants import DQLITE_PROTO
+
+
+def _validate_close_timeout_url(value: float) -> bool:
+    """URL-time `close_timeout` validator.
+
+    Delegates to the client-layer `validate_timeout` so the
+    FIN-flush / TIME_WAIT rationale appended by the floor-rejection
+    diagnostic reaches the operator who pinned `?close_timeout=...`
+    in the SA connection URL — same operator-facing surface as
+    direct `DqliteConnection` / `ConnectionPool` callers and the
+    dbapi-layer `connect_args=` path.
+
+    Returns `True` on success (truthy so the URL dispatcher accepts
+    the value). Translates `ValueError` / `TypeError` from the
+    client validator to `ArgumentError` so the SA URL-parse contract
+    (URL-time errors surface as `ArgumentError`) is preserved.
+    """
+    try:
+        validate_timeout(
+            value,
+            name="close_timeout",
+            min_value=0.01,
+            min_value_rationale=CLOSE_TIMEOUT_FLOOR_RATIONALE,
+        )
+    except (TypeError, ValueError) as e:
+        raise ArgumentError(str(e)) from e
+    return True
+
 
 # InterfaceError codes that originate server-side and may carry a
 # transport-style message that the substring scanner should classify
@@ -1169,19 +1198,17 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # is scheduled via ``call_soon_threadsafe`` and joined with a
         # bounded thread.join — a value below 0.01 s gives the loop
         # too few ticks to flush FIN, leaving connections lingering
-        # in TIME_WAIT. The validator rejects obviously-useless
-        # values up-front so an operator pinning ``?close_timeout=
-        # 0.0001`` sees a config-time ArgumentError, not a silent
-        # near-zero wait that still appears to "work".
-        "close_timeout": (
-            float,
-            lambda v: (
-                not isinstance(v, bool)
-                and isinstance(v, int | float)
-                and math.isfinite(v)
-                and v >= 0.01
-            ),
-        ),
+        # in TIME_WAIT. Delegate to the client layer's
+        # ``validate_timeout`` so the FIN-flush rationale text reaches
+        # the operator pinning ``?close_timeout=0.0001`` in the
+        # connection URL — same diagnostic surface as the direct
+        # ``DqliteConnection`` / ``ConnectionPool`` callers and the
+        # dbapi-layer ``connect_args=`` path. The wrap returns ``True``
+        # on success and translates the client-layer ``ValueError`` /
+        # ``TypeError`` to ``ArgumentError`` so the SA URL-parse
+        # contract (URL-time errors surface as ``ArgumentError``) is
+        # preserved.
+        "close_timeout": (float, _validate_close_timeout_url),
     }
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:

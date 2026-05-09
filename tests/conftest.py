@@ -29,6 +29,29 @@ def _clear_resolve_leader_cache() -> Iterator[None]:
     _conn_mod._RESOLVE_LEADER_CACHE.clear()
 
 
+@pytest.fixture(autouse=True)
+def _restore_adapters() -> Iterator[None]:
+    """Snapshot and restore the process-wide ``_ADAPTERS`` registry
+    between tests.
+
+    Mirrors the dbapi-side autouse fixture
+    (``python-dqlite-dbapi/tests/conftest.py``). SA tests today don't
+    routinely mutate the registry, but a future SA test that registers
+    a custom adapter via ``dqlitedbapi.register_adapter(...)`` would
+    leak the registration into the next SA test. Snapshotting here is
+    cheap (a dict copy) and brings the SA suite to parity with the
+    dbapi suite's leak-hygiene discipline.
+    """
+    from dqlitedbapi.types import _ADAPTERS
+
+    snapshot = dict(_ADAPTERS)
+    try:
+        yield
+    finally:
+        _ADAPTERS.clear()
+        _ADAPTERS.update(snapshot)
+
+
 # Add python-dqlite-dev's testlib to sys.path so tests (in particular
 # the leader-flip integration suite) can import shared utilities from
 # ``dqlitetestlib``. ``python-dqlite-dev`` is expected as a sibling of

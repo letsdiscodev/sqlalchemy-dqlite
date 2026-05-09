@@ -1838,16 +1838,16 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 # transport). Match the full ``connection invalidated
                 # (id=`` lexeme — the parenthesis is the dbapi's
                 # contract at every raise site that surfaces the
-                # cancel-after-invalidate signal (the four pre-lock /
-                # in-lock guards in ``dqlitedbapi.aio.connection`` and
-                # ``dqlitedbapi.connection`` ``commit`` / ``rollback``
-                # paths). The companion source-grep test
-                # ``test_is_disconnect_closed_handle_with_id_suffix.py``
-                # walks the dbapi modules and asserts the lexeme
-                # discipline — so a user-raised
-                # ``InterfaceError("Connection invalidated by trigger
-                # BEFORE INSERT")`` (no ``(id=``) does NOT trip
-                # disconnect classification.
+                # cancel-after-invalidate signal: the four pre-lock /
+                # in-lock guards in ``dqlitedbapi.aio.connection``
+                # ``commit`` / ``rollback`` plus the two pre-lock
+                # guards in ``dqlitedbapi.connection`` ``commit`` /
+                # ``rollback`` (six total). The recognition + false-
+                # positive guard live in
+                # ``test_is_disconnect_recognises_connection_invalidated_interfaceerror.py``;
+                # so a user-raised ``InterfaceError("Connection
+                # invalidated by trigger BEFORE INSERT")`` (no
+                # ``(id=``) does NOT trip disconnect classification.
                 if "connection invalidated (id=" in message:
                     return True
             # Leader-change code on either OperationalError shape —

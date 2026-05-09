@@ -1837,12 +1837,17 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 # (i.e., a sibling task has invalidated the inner
                 # transport). Match the full ``connection invalidated
                 # (id=`` lexeme — the parenthesis is the dbapi's
-                # contract at every raise site (verified across
-                # ``aio/connection.py`` ``_check_loop_binding`` /
-                # ``_check_in_use`` / ``_check_writer_alive``) — so a
-                # user-raised ``InterfaceError("Connection invalidated
-                # by trigger BEFORE INSERT")`` (no ``(id=``) does NOT
-                # trip disconnect classification.
+                # contract at every raise site that surfaces the
+                # cancel-after-invalidate signal (the four pre-lock /
+                # in-lock guards in ``dqlitedbapi.aio.connection`` and
+                # ``dqlitedbapi.connection`` ``commit`` / ``rollback``
+                # paths). The companion source-grep test
+                # ``test_is_disconnect_closed_handle_with_id_suffix.py``
+                # walks the dbapi modules and asserts the lexeme
+                # discipline — so a user-raised
+                # ``InterfaceError("Connection invalidated by trigger
+                # BEFORE INSERT")`` (no ``(id=``) does NOT trip
+                # disconnect classification.
                 if "connection invalidated (id=" in message:
                     return True
             # Leader-change code on either OperationalError shape —

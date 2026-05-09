@@ -108,11 +108,13 @@ version = "0.1.4"
 source = { editable = "../python-dqlite-dbapi" }
 dependencies = [
     { name = "dqlite-client" },
+    { name = "dqlite-wire" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "dqlite-client", editable = "../python-dqlite-client" },
+    { name = "dqlite-wire", editable = "../python-dqlite-wire" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },

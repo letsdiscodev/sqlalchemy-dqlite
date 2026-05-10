@@ -2025,9 +2025,13 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         Mirrors the async sibling at ``aio.py``.
 
         ``has_terminate=True`` promises a non-raising path; suppress
-        any tail exception so SA's pool finalize cannot crash on a
+        any tail ``Exception`` so SA's pool finalize cannot crash on a
         partial-state connection (matches the async sibling's
-        suppression discipline).
+        suppression discipline at ``aio.py``). ``KeyboardInterrupt``
+        and ``SystemExit`` (and any other ``BaseException``) are
+        deliberately NOT caught — they signal cooperative interpreter
+        shutdown and a forced finalize must not mask them, mirroring
+        the async sibling's stance on ``CancelledError``.
         """
         peer = getattr(dbapi_connection, "address", None)
         try:

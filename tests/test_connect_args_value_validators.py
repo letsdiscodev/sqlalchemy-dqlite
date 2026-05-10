@@ -72,6 +72,57 @@ def test_connect_args_unknown_key_still_raises() -> None:
         dialect._validate_connect_kwargs({"not_a_known_key": 1})
 
 
+# --- isolation_level=AUTOCOMMIT diagnostic parity ------------------
+# The engine-level rejection at base.py:1035-1037 surfaces the
+# dedicated _AUTOCOMMIT_REJECTION_MSG when create_engine(...,
+# isolation_level="AUTOCOMMIT") is used. The connect_args= overlay path
+# previously fell through to the generic "Unknown dqlite connect kwarg"
+# message — same root cause, less helpful diagnostic. Pin parity so
+# both paths surface the dedicated message.
+
+
+def test_connect_args_isolation_level_autocommit_dedicated_message() -> None:
+    from sqlalchemydqlite.base import _AUTOCOMMIT_REJECTION_MSG
+
+    dialect = DqliteDialect()
+    with pytest.raises(ArgumentError) as exc:
+        dialect._validate_connect_kwargs({"isolation_level": "AUTOCOMMIT"})
+    assert _AUTOCOMMIT_REJECTION_MSG in str(exc.value)
+
+
+def test_connect_args_isolation_level_autocommit_case_insensitive() -> None:
+    """Engine-level uses ``iso_level.upper() == "AUTOCOMMIT"``; the
+    connect_args path must mirror the same case-insensitive compare."""
+    from sqlalchemydqlite.base import _AUTOCOMMIT_REJECTION_MSG
+
+    dialect = DqliteDialect()
+    for spelling in ("autocommit", "AutoCommit", "AUTOCOMMIT"):
+        with pytest.raises(ArgumentError) as exc:
+            dialect._validate_connect_kwargs({"isolation_level": spelling})
+        assert _AUTOCOMMIT_REJECTION_MSG in str(exc.value), (
+            f"connect_args isolation_level={spelling!r} must surface "
+            f"the dedicated AUTOCOMMIT diagnostic, matching engine-level."
+        )
+
+
+def test_connect_args_isolation_level_other_value_falls_through_to_generic() -> None:
+    """Only AUTOCOMMIT is special-cased; other ``isolation_level``
+    values are still unknown kwargs and fall through to the generic
+    allowlist rejection. Don't widen the allowlist."""
+    dialect = DqliteDialect()
+    with pytest.raises(ArgumentError, match="Unknown"):
+        dialect._validate_connect_kwargs({"isolation_level": "SERIALIZABLE"})
+
+
+def test_connect_args_isolation_level_none_falls_through_to_generic() -> None:
+    """Engine-level guard requires ``isinstance(iso_level, str)``;
+    mirror that — ``None`` is not a string, so no special case fires
+    and the generic allowlist rejection runs."""
+    dialect = DqliteDialect()
+    with pytest.raises(ArgumentError, match="Unknown"):
+        dialect._validate_connect_kwargs({"isolation_level": None})
+
+
 # --- Issue: connect_args bypass for converter-side bounds -----------
 # Three URL-query keys carried bounds inside the converter only
 # (validator=None) and were silently bypassing connect_args validation.

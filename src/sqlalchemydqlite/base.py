@@ -1385,6 +1385,19 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         ``close_timeout=0.0001`` that the URL path rejects on the
         documented 0.01s floor.
         """
+        # Surface the dedicated AUTOCOMMIT rejection on the
+        # connect_args path, matching the engine-level rejection at
+        # __init__ (line 1035-1037) that fires for
+        # ``create_engine(..., isolation_level="AUTOCOMMIT")``. Without
+        # this special-case, the rejection still happens via the
+        # allowlist below, but with a generic "Unknown dqlite connect
+        # kwarg" message that gives operators no hint that the
+        # rejection is by-design rather than a typo. Mirror the
+        # engine-level guard's case-insensitive uppercase compare and
+        # ``isinstance(..., str)`` shape exactly.
+        iso_level = kwargs.get("isolation_level")
+        if isinstance(iso_level, str) and iso_level.upper() == "AUTOCOMMIT":
+            raise ArgumentError(_AUTOCOMMIT_REJECTION_MSG)
         unknown = set(kwargs) - self._CONNECT_KWARG_ALLOWED
         if unknown:
             raise ArgumentError(

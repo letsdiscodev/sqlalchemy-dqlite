@@ -443,14 +443,30 @@ class TestAioAdapterReturnAnnotations:
             "executemany(seq_of_parameters) must not be typed as bare Any"
         )
 
-    def test_iter_returns_iterator(self) -> None:
+    def test_iter_returns_self(self) -> None:
+        """``__iter__`` returns ``Self`` (PEP 673) so subclass typing
+        is preserved through ``iter(cursor)``. Mirrors the dbapi sibling
+        cursors (``Cursor.__iter__`` and ``AsyncCursor.__aiter__``).
+        Accept either the resolved ``Self`` object or the stringified
+        form."""
         import inspect
 
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
         sig = inspect.signature(AsyncAdaptedCursor.__iter__)
-        # Accept either the Iterator annotation object or the stringified form.
-        assert "Iterator" in str(sig.return_annotation)
+        assert "Self" in str(sig.return_annotation)
+
+    def test_next_returns_row_tuple(self) -> None:
+        """``__next__`` returns ``tuple[Any, ...]`` to match the
+        cursor's documented row type (``fetchone()`` returns
+        ``tuple[Any, ...] | None``). Pin against silent widening back
+        to bare ``Any``."""
+        import inspect
+
+        from sqlalchemydqlite.aio import AsyncAdaptedCursor
+
+        sig = inspect.signature(AsyncAdaptedCursor.__next__)
+        assert "tuple" in str(sig.return_annotation)
 
 
 class TestAioAdapterCursorFetchMethods:

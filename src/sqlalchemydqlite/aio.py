@@ -6,7 +6,7 @@ import logging
 import types
 import weakref
 from collections import deque
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn, Self
 
 from sqlalchemy import pool
@@ -533,7 +533,7 @@ class AsyncAdaptedCursor:
             raise ProgrammingError(f"scroll mode must be 'relative' or 'absolute', got {mode!r}")
         raise NotSupportedError("dqlite cursors are not scrollable")
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Self:
         # Return self so ``iter(cursor) is cursor`` — PEP 234 iterator
         # protocol. The previous generator body (``while self._rows:
         # yield self._rows.popleft()``) produced a fresh generator each
@@ -542,10 +542,11 @@ class AsyncAdaptedCursor:
         # through ``fetchone``. ``__next__`` now drives iteration for
         # both ``for row in cursor`` and ``next(cursor)``; the sibling
         # cursors ``dqlitedbapi.Cursor`` and ``AsyncCursor`` already
-        # follow this pattern.
+        # follow this pattern. Returning ``Self`` (PEP 673) preserves
+        # subclass typing through ``iter(cursor)``.
         return self
 
-    def __next__(self) -> Any:
+    def __next__(self) -> tuple[Any, ...]:
         row = self.fetchone()
         if row is None:
             raise StopIteration

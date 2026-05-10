@@ -1663,22 +1663,19 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # The literal substring ``"wire decode failed"`` is the
         # canonical prefix emitted by ``dqliteclient/protocol.py``.
         "wire decode failed",
-        # ``await_only`` raises ``RuntimeError("<Future ... attached
-        # to a different loop>")`` when an ``AsyncConnection`` is
-        # reused across event loops. The async adapter's
-        # ``_handle_exception`` remaps that to ``OperationalError``
-        # with the substring preserved so this branch can classify it.
-        "different loop",
-        # ``dqlitedbapi.AsyncConnection`` raises ``ProgrammingError``
-        # with the wording ``"...different event loop"`` (note the
-        # ``"event "`` between ``"different"`` and ``"loop"``, so this
-        # is a DISTINCT substring from ``"different loop"`` above —
-        # not a superstring). The async adapter's ``_handle_exception``
-        # remaps that to ``OperationalError`` with the wording
-        # preserved; without this entry the remapped error would not
-        # match the substring scan and the cross-loop fault would
-        # survive in the SA pool slot.
-        "different event loop",
+        # Cross-loop misuse: every path that produces a code=None
+        # OperationalError mentioning a loop mismatch routes through
+        # ``aio._handle_exception``, which remaps the original
+        # ``RuntimeError("<Future ... attached to a different loop>")``
+        # / ``ProgrammingError("...different event loop")`` to
+        # ``OperationalError(f"event-loop mismatch: {msg}",
+        # code=None)``. The canonical prefix is the durable
+        # signal — the bare ``"different loop"`` /
+        # ``"different event loop"`` substrings the remap reads off
+        # the original error are not load-bearing here, and matching
+        # them directly would false-positive against a benign user
+        # trigger message that happens to mention the same phrase.
+        "event-loop mismatch:",
         # ``RuntimeError("This event loop is already running")``
         # surfaces from ``await_only`` inside a context that already
         # has a running loop on the same thread (asyncio rejects
@@ -1718,9 +1715,9 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         For loop-mismatch ProgrammingError on a real-query path, the
         async adapter's ``_handle_exception`` remaps the exception to
         ``OperationalError("event-loop mismatch: ...")`` so the
-        ``"different loop"`` substring branch picks it up. Without
-        that remap the slot would survive a cross-loop fault and the
-        next checkout would hit it again.
+        ``"event-loop mismatch:"`` substring branch picks it up.
+        Without that remap the slot would survive a cross-loop fault
+        and the next checkout would hit it again.
         """
         # Walk the full ``__cause__`` / ``__context__`` chain. The
         # dbapi's ``_call_client`` handler wraps

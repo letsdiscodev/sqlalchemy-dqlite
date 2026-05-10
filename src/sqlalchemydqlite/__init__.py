@@ -26,7 +26,7 @@ from sqlalchemy.dialects.sqlite import (
 from sqlalchemydqlite.aio import DqliteDialect_aio
 from sqlalchemydqlite.base import DqliteCompiler, DqliteDialect
 
-__version__: Final[str] = "0.1.4"
+__version__: Final[str] = "0.1.5"
 
 # SA convention (every shipped dialect package — sqlite, mysql, mssql,
 # oracle, postgresql): expose ``<package>.dialect`` pointing at the

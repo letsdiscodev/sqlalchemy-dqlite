@@ -82,7 +82,7 @@ wheels = [
 
 [[package]]
 name = "dqlite-client"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "../python-dqlite-client" }
 dependencies = [
     { name = "dqlite-wire" },
@@ -104,7 +104,7 @@ provides-extras = ["dev", "yaml-store"]
 
 [[package]]
 name = "dqlite-dbapi"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "../python-dqlite-dbapi" }
 dependencies = [
     { name = "dqlite-client" },
@@ -125,7 +125,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "dqlite-wire"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "../python-dqlite-wire" }
 
 [package.metadata]
@@ -413,7 +413,7 @@ wheels = [
 
 [[package]]
 name = "sqlalchemy-dqlite"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "." }
 dependencies = [
     { name = "dqlite-client" },

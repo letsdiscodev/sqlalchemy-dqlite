@@ -99,6 +99,37 @@ _BARE_DBE_DISCONNECT_CODES: Final[frozenset[int]] = frozenset(
 # message, and the only codes the server actually emits as bare
 # DatabaseError today.
 
+# RAFT-collapse marker phrases for the narrow ``code=1`` substring
+# scan. The C dqlite ``translateRaftErrCode`` collapses
+# ``RAFT_SHUTDOWN`` / ``RAFT_CANCELED`` / ``RAFT_NOCONNECTION`` (and
+# every other non-NOTLEADER / non-LEADERSHIPLOST / non-CANTCHANGE
+# raft error) to ``SQLITE_ERROR`` (=1) on the wire, with the verbatim
+# ``raft_strerror`` message attached. Without this set, the code=1
+# gate at ``is_disconnect``'s OperationalError arm disables the
+# substring scan and these cluster-mgmt failures never classify as
+# disconnect — leaving SA's pool to keep a torn-state slot. Verified
+# against ``dqlite-upstream`` commit ``f30fc99`` (src/translate.c
+# and src/raft/err.h). The marker set is intentionally narrow:
+# - Whole canonical phrases (not single words) so a user trigger
+#   message like ``RAISE(ABORT, 'the system is shutting down')``
+#   does not false-positive against ``"server is shutting down"``.
+# - ``"i/o error"`` / ``"out of memory"`` are deliberately excluded
+#   — too generic; could match legitimate user-side I/O / memory
+#   diagnostics surfaced through unrelated code paths.
+# Future raft library updates may change wording; the test suite
+# pins each marker against a synthesised OperationalError(code=1).
+_RAFT_COLLAPSE_DISCONNECT_MARKERS: Final[tuple[str, ...]] = (
+    "server is shutting down",
+    "operation canceled",
+    "no connection to remote server",
+)
+# ``SQLITE_ERROR`` (==1) is the catch-all primary code used by the
+# C ``translateRaftErrCode`` default arm. Not exposed by
+# ``dqlitewire.constants`` (it's a generic SQLite primary not a
+# dqlite-specific extended code); pinned locally so the
+# ``is_disconnect`` gate site reads as intent rather than a literal.
+_SQLITE_ERROR_CODE: Final[int] = 1
+
 # Transport-class exception tuple for best-effort cleanup paths that
 # must swallow a flaky close / rollback without aborting
 # ``engine.dispose()``. Used by ``do_begin``'s post-BEGIN cursor
@@ -1908,7 +1939,26 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             # server message whose disconnect substring sits past the
             # truncation boundary is still classified.
             if isinstance(cause, _dbapi_exc.OperationalError):
-                applies_substring = getattr(cause, "code", None) is None
+                cause_code = getattr(cause, "code", None)
+                applies_substring = cause_code is None
+                # Narrow second channel for the ``translateRaftErrCode``
+                # default-arm collapse: cluster-mgmt RAFT errors
+                # (SHUTDOWN / CANCELED / NOCONNECTION / etc.) reach us
+                # as ``OperationalError(code=1)`` with verbatim
+                # ``raft_strerror`` text. The standard ``code is None``
+                # gate keeps these from the general substring scan;
+                # match against a tightly-bounded marker set so the
+                # cluster-state signal still classifies as disconnect
+                # without re-opening the broader substring scan to
+                # server-controlled message text. See
+                # ``_RAFT_COLLAPSE_DISCONNECT_MARKERS`` for the source
+                # of truth.
+                if not applies_substring and cause_code == _SQLITE_ERROR_CODE:
+                    text = getattr(cause, "raw_message", None) or str(cause)
+                    msg_lower = text.lower()
+                    for marker in _RAFT_COLLAPSE_DISCONNECT_MARKERS:
+                        if marker in msg_lower:
+                            return True
             elif isinstance(cause, _dbapi_exc.DatabaseError):
                 applies_substring = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
             elif isinstance(cause, _dbapi_exc.InterfaceError):

@@ -49,8 +49,50 @@ def pytest_collection_modifyitems(  # type: ignore[no-redef]
     SA's ``pytest_collection_modifyitems`` runs the requirement-based
     exclusion that turns ``Requirements.<name>.enabled == False`` into
     pytest skips. Re-bind it before our own pass so neither is dropped.
+
+    Fail-loud staleness pin: snapshot the pre-delegation nodeid set so
+    a fragment in ``_SCHEMA_USING_PARAMETRIZE_SKIPS`` that no longer
+    matches any collected SA test (because SA renamed the axes,
+    recombined the parametrize, or added a requirement gate that now
+    handles the test) raises ``pytest.UsageError`` at collection
+    time instead of silently no-op'ing. SA test IDs are a private
+    contract, so this guard catches drift on the first SA bump rather
+    than weeks later when a test we thought was skipped starts
+    running and passing for the wrong reason.
     """
+    # Empty-fragment foot-gun: ``"" in nodeid`` is always True, so a
+    # stray empty entry would mark everything skipped. Cheap eager
+    # rejection.
+    for fragment in _SCHEMA_USING_PARAMETRIZE_SKIPS:
+        if not fragment:
+            raise pytest.UsageError(
+                "Empty fragment in _SCHEMA_USING_PARAMETRIZE_SKIPS would "
+                "match every collected nodeid; refusing to run."
+            )
+
+    # Snapshot BEFORE delegation: SA's hook may deselect (remove from
+    # ``items``) requirement-gated tests, which would falsely flag our
+    # fragments as stale. The pre-snapshot is the authoritative
+    # collected set for staleness purposes.
+    pre_nodeids = [item.nodeid for item in items]
+
     _sa_modify_items(session, config, items)
+
+    matched = {fragment: False for fragment in _SCHEMA_USING_PARAMETRIZE_SKIPS}
+    for nodeid in pre_nodeids:
+        for fragment in _SCHEMA_USING_PARAMETRIZE_SKIPS:
+            if fragment in nodeid:
+                matched[fragment] = True
+
+    stale = [fragment for fragment, hit in matched.items() if not hit]
+    if stale:
+        raise pytest.UsageError(
+            f"_SCHEMA_USING_PARAMETRIZE_SKIPS fragment(s) matched no "
+            f"collected SA test: {stale!r}. Likely SA renamed or "
+            f"recombined the parametrize axes, or added a requirement "
+            f"gate that now handles the test. Update or remove the "
+            f"stale entries before running the compliance suite."
+        )
 
     skip = pytest.mark.skip(
         reason="dqlite has no ATTACH-DATABASE schema; see "

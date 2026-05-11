@@ -1,5 +1,6 @@
 """SQLAlchemy 2.0 dialect for dqlite."""
 
+import logging
 from typing import Final
 
 from sqlalchemy.dialects.sqlite import (
@@ -65,3 +66,10 @@ __all__ = [  # noqa: RUF022 - grouped: dialect entry points, then SA-shared SQLi
     "TIMESTAMP",
     "VARCHAR",
 ]
+
+# Convention from the Python logging HOWTO: attach a ``NullHandler``
+# to the library's top-level logger so applications that have not
+# configured logging don't see the ``lastResort`` stderr emission,
+# and downstream code can silence the library cleanly via
+# ``getLogger("sqlalchemydqlite").propagate = False``.
+logging.getLogger(__name__).addHandler(logging.NullHandler())

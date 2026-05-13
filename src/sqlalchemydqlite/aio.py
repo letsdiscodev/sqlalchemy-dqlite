@@ -826,16 +826,36 @@ class AsyncAdaptedConnection(AdaptedConnection):
         reference connector follows the same try/close/raise
         discipline.
         """
-        cur = self.cursor()
+        # Single-discipline error routing: open the cursor AND run
+        # the inner execute inside one try-frame so any fault —
+        # whether from ``self.cursor()`` (proxy guard, loop-bound
+        # delegate failures) or ``cur.execute()`` itself — goes
+        # through ``_handle_exception``. The cursor-level execute
+        # (``AsyncAdaptedCursor.execute``) wraps its frame the same
+        # way; without symmetric routing here, a cross-loop
+        # ``RuntimeError`` from ``cursor()`` would leak raw past
+        # SA's ``is_disconnect`` classifier when invoked via the
+        # connection-level convenience path (provision /
+        # do_terminate) while the engine-level path (Result layer)
+        # remaps it. The outer try-frame closes any cursor we
+        # opened before propagating the remapped or unmapped
+        # exception.
+        cur: AsyncAdaptedCursor | None = None
         try:
-            if parameters is None:
-                cur.execute(operation)
-            else:
-                cur.execute(operation, parameters)
+            try:
+                cur = self.cursor()
+                if parameters is None:
+                    cur.execute(operation)
+                else:
+                    cur.execute(operation, parameters)
+            except BaseException as error:
+                self._handle_exception(error)
         except BaseException:
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                cur.close()
+            if cur is not None:
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    cur.close()
             raise
+        assert cur is not None  # _handle_exception either raises or never returns
         return cur
 
     @property

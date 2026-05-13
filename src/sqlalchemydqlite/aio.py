@@ -1477,6 +1477,21 @@ class DqliteDialect_aio(DqliteDialect):
         ``_handle_exception`` so loop-state shapes (different-loop,
         loop-closed) re-raise as ``OperationalError`` — the outer
         ``do_ping`` then catches that as ping-fail.
+
+        Routing scope: only ``RuntimeError`` is remapped here.
+        Any ``dbapi.Error`` subclass that escapes the inner block
+        (notably a cross-loop ``ProgrammingError`` from
+        ``AsyncConnection._ensure_locks``, or a ``ProgrammingError``
+        from ``cursor()`` itself) is allowed to propagate to the
+        outer ``do_ping``, which catches
+        ``(OperationalError, ProgrammingError, InterfaceError,
+        DqliteConnectionError, OSError)`` and returns ``False`` so
+        the pool retires the slot. The narrow routing here is
+        deliberate — DO NOT broaden it without also reviewing
+        ``do_ping``'s outer catch list. If that list ever drops
+        ``ProgrammingError``, this ``except`` must be widened to
+        ``(RuntimeError, ProgrammingError)`` to preserve the
+        ping-failure / slot-invalidation chain.
         """
         # Closed-state guard mirroring ``AsyncAdaptedConnection.cursor``
         # at line ~723: ``close()`` replaces ``self._connection`` with

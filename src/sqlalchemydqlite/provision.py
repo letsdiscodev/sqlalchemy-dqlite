@@ -43,7 +43,7 @@ the test fixture's docker-compose. So:
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, Final
 
 # SA's compliance suite discovers the ``_dqlite_*`` functions below
 # via ``@register.init`` hook decorators, not via ``__all__``. Nothing
@@ -80,7 +80,7 @@ from sqlalchemy.testing.provision import (
 # whitespace), and sufficiently unique for parallel pytest runs that
 # share a cluster fixture. Module-level so the value is stable across
 # every URL rewrite within a single pytest session.
-_SESSION_TOKEN = f"sa_{os.getpid()}_{time.monotonic_ns()}"
+_SESSION_TOKEN: Final[str] = f"sa_{os.getpid()}_{time.monotonic_ns()}"
 
 # The SA testing API documents ``log`` / ``logger`` as the canonical
 # place provision helpers chatter to. Use ``__name__`` (matching the
@@ -111,7 +111,7 @@ logger = logging.getLogger(__name__)
 # never invokes the hook with that value at the call site, but
 # keeping it here documents the canonical sync drivername the
 # rewrite produces.
-_DRIVERNAMES = frozenset({"dqlite", "dqlitedbapi", "aio"})
+_DRIVERNAMES: Final[frozenset[str]] = frozenset({"dqlite", "dqlitedbapi", "aio"})
 
 
 def _format_url(url: sa_url.URL, driver: str | None, ident: str | None) -> sa_url.URL:

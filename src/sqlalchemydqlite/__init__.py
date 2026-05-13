@@ -38,7 +38,7 @@ __version__: Final[str] = "0.1.5"
 dialect: Final[type[DqliteDialect]] = DqliteDialect
 dialect_aio: Final[type[DqliteDialect_aio]] = DqliteDialect_aio
 
-__all__ = [  # noqa: RUF022 - grouped: dialect entry points, then SA-shared SQLite types
+__all__ = [  # grouped: dialect entry points, then SA-shared SQLite types
     # Dialect entry points
     "DqliteCompiler",
     "DqliteDialect",

@@ -954,6 +954,17 @@ class AsyncAdaptedConnection(AdaptedConnection):
         """
         if isinstance(error, (RuntimeError, ProgrammingError)):
             msg = str(error)
+            # Lower-case once at the top so substring scans below are
+            # case-insensitive, mirroring base.py's ``is_disconnect``
+            # discipline (the ``_dqlite_disconnect_messages`` tuple is
+            # stored lower-cased and the call site lower-cases the
+            # candidate text once). Without this, a Python minor that
+            # flipped the canonical wording's casing (e.g.
+            # ``Event Loop Is Closed``) would silently bypass the
+            # remap and the cross-loop fault would leak as a bare
+            # RuntimeError past SA's classifier. The original ``msg``
+            # is preserved verbatim in the remapped wording's tail.
+            msg_lower = msg.lower()
             # Both substrings are needed: ``"different loop"`` matches
             # Python's ``"attached to a different loop"`` and any
             # variant that uses the bare phrase, while
@@ -962,7 +973,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # loop"`` clause from the older arm was dropped — that
             # phrase strictly contains ``"different loop"`` so the
             # first check already matches it.
-            if "different loop" in msg or "different event loop" in msg:
+            if "different loop" in msg_lower or "different event loop" in msg_lower:
                 raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
             # ``RuntimeError("Event loop is closed")`` reaches us via
             # ``commit`` / ``rollback`` / ``execute`` / ``executemany``
@@ -977,7 +988,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # closed"`` is the substring matched by
             # ``_dqlite_disconnect_messages`` in base.py; any change
             # to that wording must keep the substring in sync.
-            if "Event loop is closed" in msg:
+            if "event loop is closed" in msg_lower:
                 raise OperationalError(f"event loop closed: {msg}", code=None) from error
             # ``RuntimeError("This event loop is already running")``
             # surfaces when third-party glue calls ``await_only`` from
@@ -989,7 +1000,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # transport-class disconnect so the slot invalidates.
             # Substring is added to ``_dqlite_disconnect_messages`` in
             # base.py for symmetric classification.
-            if "loop is already running" in msg:
+            if "loop is already running" in msg_lower:
                 raise OperationalError(f"event loop already running: {msg}", code=None) from error
         raise error
 

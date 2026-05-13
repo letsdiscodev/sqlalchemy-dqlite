@@ -84,6 +84,16 @@ class TestBareDbeDisconnectCodes:
         assert SQLITE_FORMAT in _BARE_DBE_DISCONNECT_CODES
         assert SQLITE_NOTADB in _BARE_DBE_DISCONNECT_CODES
 
+    def test_set_is_wire_layer_ssot(self) -> None:
+        """The SA set IS the wire-layer ``BARE_DATABASE_ERROR_CODES``.
+        Identity equality means the SA dialect can not silently drift
+        from the wire-layer truth: a future wire-layer addition
+        propagates here automatically. Pin the cross-package SSOT
+        relationship."""
+        from dqlitewire import BARE_DATABASE_ERROR_CODES
+
+        assert _BARE_DBE_DISCONNECT_CODES is BARE_DATABASE_ERROR_CODES
+
 
 class TestDoBeginCloseNarrowing:
     """Pin that ``do_begin``'s post-BEGIN cursor-close arm uses the

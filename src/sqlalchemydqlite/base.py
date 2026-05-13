@@ -20,12 +20,10 @@ import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqliteclient import CLOSE_TIMEOUT_FLOOR_RATIONALE, validate_timeout
 from dqlitewire import (
+    BARE_DATABASE_ERROR_CODES,
     DQLITE_PROTO,
     LEADER_ERROR_CODES,
     LEADER_LOST_DB_LOOKUP_SUBSTRING,
-    SQLITE_CORRUPT,
-    SQLITE_FORMAT,
-    SQLITE_NOTADB,
     WIRE_DECODE_FAILED_PREFIX,
 )
 from dqlitewire import SQLITE_NOTFOUND as _SQLITE_NOTFOUND
@@ -85,9 +83,7 @@ _SERVER_INTERFACEERROR_DISCONNECT_CODES: Final[frozenset[int]] = frozenset({DQLI
 # stays separate (it includes ``ProgrammingError`` for cross-loop
 # reuse, which is ping-specific and must not bleed into disconnect
 # classification on real-query paths).
-_BARE_DBE_DISCONNECT_CODES: Final[frozenset[int]] = frozenset(
-    {SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB}
-)
+_BARE_DBE_DISCONNECT_CODES: Final[frozenset[int]] = BARE_DATABASE_ERROR_CODES
 # **Forward-compat note**: dqlitedbapi's ``_CODE_TO_EXCEPTION`` also
 # routes ``SQLITE_NOLFS`` (22), ``SQLITE_AUTH`` (23), ``SQLITE_NOTICE``
 # (27), and ``SQLITE_WARNING`` (28) to bare ``DatabaseError``. dqlite-

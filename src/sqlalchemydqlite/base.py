@@ -20,6 +20,7 @@ import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqliteclient import CLOSE_TIMEOUT_FLOOR_RATIONALE, validate_timeout
 from dqlitewire import (
+    DQLITE_PROTO,
     LEADER_ERROR_CODES,
     LEADER_LOST_DB_LOOKUP_SUBSTRING,
     SQLITE_CORRUPT,
@@ -29,7 +30,6 @@ from dqlitewire import (
 )
 from dqlitewire import SQLITE_NOTFOUND as _SQLITE_NOTFOUND
 from dqlitewire import sanitize_server_text as _sanitize_server_text
-from dqlitewire.constants import DQLITE_PROTO
 
 
 def _validate_close_timeout_url(value: float) -> bool:

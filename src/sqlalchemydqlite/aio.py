@@ -127,13 +127,24 @@ class AsyncAdaptedCursor:
 
     @arraysize.setter
     def arraysize(self, value: int) -> None:
-        """Validated setter mirroring ``dqlitedbapi.Cursor.arraysize``.
+        """PEP 249 §6.1.2 setter for the per-``fetchmany`` batch size.
 
-        Rejects ``bool``, non-int, and ``< 1`` so the ``arraysize=0`` /
-        ``arraysize=-1`` footguns are caught at the assignment rather
-        than silently turning every ``fetchmany`` call into ``[]`` (which
-        makes ``while batch := cursor.fetchmany(): ...`` skip the entire
-        result set).
+        **Semantic note (deque-only governance)**: this controls the
+        deque-pop batch size of the adapter's pre-drained ``_rows``
+        buffer. dqlite's wire protocol delivers the entire result set
+        up-front in a single RTT, so ``arraysize`` does NOT influence
+        wire-layer prefetch — that's an aiosqlite / pysqlite pattern
+        not applicable here. The underlying ``AsyncCursor.arraysize``
+        has the same deque-only semantic (the dbapi layer also
+        eagerly buffers ``_rows`` from the wire response); both
+        defaults are ``1`` per PEP 249. Done finding 602 covers the
+        adapter-to-underlying propagation gap.
+
+        Validation rejects ``bool``, non-int, and ``< 1`` so the
+        ``arraysize=0`` / ``arraysize=-1`` footguns are caught at the
+        assignment rather than silently turning every ``fetchmany``
+        call into ``[]`` (which makes ``while batch :=
+        cursor.fetchmany(): ...`` skip the entire result set).
         """
         if not isinstance(value, int) or isinstance(value, bool):
             raise ProgrammingError(f"arraysize must be a positive integer, got {value!r}")

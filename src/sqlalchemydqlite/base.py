@@ -404,8 +404,9 @@ class _DqliteDateTime(sqltypes.DateTime):
         # One-shot WARNING gate per processor instance. A SELECT
         # against a corrupted column would otherwise emit one WARNING
         # per row (up to ``max_total_rows``), drowning operator log
-        # pipelines. Mirrors the ``_max_total_rows_disabled_warning_emitted``
-        # one-shot pattern at base.py:1224. Subsequent bad rows
+        # pipelines. Mirrors the
+        # ``_max_total_rows_disabled_warning_emitted`` one-shot
+        # class-var-flag pattern in ``DqliteDialect``. Subsequent bad rows
         # in the same processor instance demote to DEBUG.
         warned: list[bool] = [False]
 

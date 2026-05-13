@@ -66,6 +66,8 @@ from sqlalchemy.testing.provision import (
     upsert,
 )
 
+from dqlitewire import sanitize_for_log as _sanitize_for_log
+
 # mypy: ignore-errors
 
 # Per-session unique database-name suffix. dqlite has no
@@ -301,7 +303,17 @@ def _dqlite_run_reap_dbs(url: str | sa_url.URL, idents: list[str]) -> None:
             finally:
                 eng.dispose()
         except Exception as e:
-            logger.debug("reap_dbs ident=%s: %s", ident, e)
+            # CWE-117: peer-supplied text can reach `str(e)` (e.g. an
+            # `OperationalError` wrapping a server-emitted message that
+            # the wire layer keeps LF-preserved). Route both interpolations
+            # through `sanitize_for_log` so journald/syslog cannot
+            # interpret forged LF as a record boundary. Every other log
+            # site in this package applies the same discipline.
+            logger.debug(
+                "reap_dbs ident=%s: %s",
+                _sanitize_for_log(str(ident)),
+                _sanitize_for_log(str(e)),
+            )
 
 
 @stop_test_class_outside_fixtures.for_db("dqlite")

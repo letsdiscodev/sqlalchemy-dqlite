@@ -1713,10 +1713,21 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # via the dbapi wrap at ``cursor._call_client`` that routes
         # ``client.ProtocolError`` to ``OperationalError(code=None)``.
         # The canonical prefix is the shared ``WIRE_DECODE_FAILED_PREFIX``
-        # constant emitted by ``dqliteclient/protocol.py``,
-        # ``dqlitedbapi/connection.py``, and ``dqlitedbapi/cursor.py``;
-        # all four packages reference the constant to keep the
-        # substring in lockstep on rename.
+        # constant from ``dqlitewire``. Producer call sites (5 across
+        # 2 packages):
+        #   - ``dqliteclient/protocol.py``: 3 sites (StmtResponse
+        #     db_id-drift rewrap; top-level decode-failure rewrap in
+        #     ``_read_message``; continuation decode-failure rewrap in
+        #     ``_read_response``).
+        #   - ``dqliteclient/connection.py``: 1 site (handshake-time
+        #     ``DqliteConnectionError`` rewrap).
+        #   - ``dqlitedbapi/connection.py``: 1 site (connect-path
+        #     ``OperationalError`` rewrap).
+        # Recognition site (consumer): this tuple entry. The reference
+        # in ``dqlitedbapi/cursor.py`` is a documentary comment only —
+        # cursor.py propagates the upstream message verbatim and does
+        # not emit a new prefix. Renaming the constant ripples through
+        # grep into the five producers and this consumer.
         WIRE_DECODE_FAILED_PREFIX,
         # Cross-loop misuse: every path that produces a code=None
         # OperationalError mentioning a loop mismatch routes through

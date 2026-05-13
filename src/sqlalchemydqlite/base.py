@@ -19,7 +19,13 @@ from sqlalchemy.exc import ArgumentError
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqliteclient import CLOSE_TIMEOUT_FLOOR_RATIONALE, validate_timeout
-from dqlitewire import LEADER_ERROR_CODES, SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
+from dqlitewire import (
+    LEADER_ERROR_CODES,
+    SQLITE_CORRUPT,
+    SQLITE_FORMAT,
+    SQLITE_NOTADB,
+    WIRE_DECODE_FAILED_PREFIX,
+)
 from dqlitewire import sanitize_server_text as _sanitize_server_text
 from dqlitewire.constants import DQLITE_PROTO
 
@@ -1704,9 +1710,12 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # Wire-layer desync: ProtocolError / DecodeError surface here
         # via the dbapi wrap at ``cursor._call_client`` that routes
         # ``client.ProtocolError`` to ``OperationalError(code=None)``.
-        # The literal substring ``"wire decode failed"`` is the
-        # canonical prefix emitted by ``dqliteclient/protocol.py``.
-        "wire decode failed",
+        # The canonical prefix is the shared ``WIRE_DECODE_FAILED_PREFIX``
+        # constant emitted by ``dqliteclient/protocol.py``,
+        # ``dqlitedbapi/connection.py``, and ``dqlitedbapi/cursor.py``;
+        # all four packages reference the constant to keep the
+        # substring in lockstep on rename.
+        WIRE_DECODE_FAILED_PREFIX,
         # Cross-loop misuse: every path that produces a code=None
         # OperationalError mentioning a loop mismatch routes through
         # ``aio._handle_exception``, which remaps the original

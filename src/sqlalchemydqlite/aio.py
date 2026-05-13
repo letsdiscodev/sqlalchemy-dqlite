@@ -1534,8 +1534,34 @@ class DqliteDialect_aio(DqliteDialect):
                 await cur.execute(self._dialect_specific_select_one)
                 await cur.fetchone()
             finally:
-                with contextlib.suppress(Exception):
+                # Mirror the sibling cursor-close discipline in
+                # ``AsyncAdaptedCursor.execute`` (this module, search
+                # for ``except (Exception, asyncio.CancelledError)``):
+                # narrow to that tuple so a greenlet-level cancel is
+                # still absorbed (``CancelledError`` is a
+                # ``BaseException`` subclass since 3.8) but
+                # ``KeyboardInterrupt`` / ``SystemExit`` propagate.
+                # The previous ``contextlib.suppress(Exception)``
+                # silently absorbed dbapi disconnect-class errors
+                # raised from the close round-trip (CORRUPT / FORMAT
+                # / NOTADB); the DEBUG log here makes those failures
+                # observable so a flapping leader is visible in
+                # operator logs even when the ping itself appears
+                # successful. Suppression scope still includes those
+                # errors (the ping already ran successfully, so
+                # retiring the slot now would defeat the whole point
+                # of pre-ping) but they are no longer silent.
+                peer = getattr(dbapi_connection._connection, "address", None)
+                try:
                     await cur.close()
+                except (Exception, asyncio.CancelledError) as exc:
+                    logger.debug(
+                        "_async_ping cursor close (id=%s, peer=%s): %s; suppressed",
+                        id(dbapi_connection),
+                        peer,
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
         except RuntimeError as error:
             dbapi_connection._handle_exception(error)
 

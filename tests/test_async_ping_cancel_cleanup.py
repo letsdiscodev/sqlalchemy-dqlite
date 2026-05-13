@@ -1,21 +1,24 @@
 """Pin: ``DqliteDialect_aio._async_ping`` cancel-recovery contract.
 
 `_async_ping` opens a raw dbapi cursor (NOT the SA adapter) and
-runs ``execute`` / ``fetchone`` / ``close``. Three cancel-arms had
-no fast-feedback test:
+runs ``execute`` / ``fetchone`` / ``close``. The close arm's
+suppression scope was tightened to mirror
+``AsyncAdaptedCursor.execute``'s sibling discipline:
+``(Exception, asyncio.CancelledError)`` with a DEBUG record. This
+file pins:
 
-1. Cancel delivered at ``await cur.execute(...)`` MUST propagate
-   ``CancelledError`` out (the ``finally`` arm's
-   ``contextlib.suppress(Exception)`` does NOT cover
-   ``CancelledError`` — that's deliberate).
-2. The ``finally`` arm's ``await cur.close()`` MUST still run on
-   the cancel path so the borrowed cursor does not leak.
-3. A ``CancelledError`` re-fired from inside ``cur.close()`` must
-   still propagate cleanly (no swallow), so SA's outer pool
-   structured-concurrency invariants stay intact.
-
-A regression that widened the inner ``suppress`` from
-``Exception`` to ``BaseException`` would silently break (1) / (3).
+1. Cancel delivered at ``await cur.execute(...)`` propagates the
+   ``CancelledError`` while the ``finally`` arm still runs
+   ``cur.close()`` so the borrowed cursor does not leak.
+2. A ``CancelledError`` raised from inside ``cur.close()`` is
+   absorbed by the close arm and DEBUG-logged (the ping itself
+   already succeeded; retiring the slot now would defeat
+   pre-ping).
+3. A plain ``RuntimeError`` from ``cur.close()`` is likewise
+   absorbed.
+4. A dbapi disconnect-class error (``OperationalError`` with a
+   slot-fatal code) raised from close is no longer silent — the
+   DEBUG record exposes it so a flapping leader is observable.
 """
 
 from __future__ import annotations
@@ -108,19 +111,24 @@ async def test_async_ping_cancel_mid_execute_runs_close_in_finally() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_ping_cancel_re_raises_through_close_does_not_swallow() -> None:
-    """If ``cur.close()`` itself raises ``CancelledError`` (e.g. a
-    re-delivered cancel during the close coroutine), the outer
-    ``contextlib.suppress(Exception)`` MUST NOT swallow it — the
-    cancel must propagate to SA's outer pool path.
+async def test_async_ping_close_cancellederror_absorbed_and_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If ``cur.close()`` raises ``CancelledError`` (e.g. a
+    re-delivered cancel during the close coroutine), the close arm
+    must absorb it — mirroring the sibling
+    ``AsyncAdaptedCursor.execute`` close discipline — and emit a
+    DEBUG record so the suppression is observable. The ping itself
+    already succeeded, so retiring the slot now would defeat the
+    point of pre-ping; ``KeyboardInterrupt`` / ``SystemExit`` still
+    propagate because the catch tuple excludes them.
     """
     close_called: list[bool] = []
-    execute_finished = asyncio.Event()
 
     cursor = MagicMock()
 
     async def _execute(_sql: str) -> None:
-        execute_finished.set()
+        pass
 
     async def _fetchone() -> Any:
         return (1,)
@@ -141,17 +149,26 @@ async def test_async_ping_cancel_re_raises_through_close_does_not_swallow() -> N
     dialect = DqliteDialect_aio.__new__(DqliteDialect_aio)
     dialect._dialect_specific_select_one = "SELECT 1"
 
-    with pytest.raises(asyncio.CancelledError):
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.aio"):
+        # Must NOT raise — the close-arm CancelledError is suppressed.
         await dialect._async_ping(adapted)
 
-    assert close_called == [True], "cur.close() must run before cancel propagates"
+    assert close_called == [True], "cur.close() must run on the happy path"
+    msgs = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "_async_ping cursor close" in msgs, (
+        "the close-arm absorption must emit a DEBUG record (so a "
+        "flapping leader is observable in logs)"
+    )
+    assert "CancelledError" in msgs
 
 
 @pytest.mark.asyncio
 async def test_async_ping_close_exception_during_normal_path_is_swallowed() -> None:
-    """The ``finally`` arm's ``contextlib.suppress`` IS scoped to
-    ``Exception``: a plain ``RuntimeError`` from ``cur.close()`` on
-    the happy path is absorbed so the ping returns success.
+    """A plain ``RuntimeError`` from ``cur.close()`` on the happy
+    path is absorbed by the ``(Exception, asyncio.CancelledError)``
+    catch tuple so the ping returns success.
     """
     cursor = MagicMock()
 
@@ -179,6 +196,52 @@ async def test_async_ping_close_exception_during_normal_path_is_swallowed() -> N
     # Must not raise — the close-arm RuntimeError is swallowed by
     # ``contextlib.suppress(Exception)``.
     await dialect._async_ping(adapted)
+
+
+@pytest.mark.asyncio
+async def test_async_ping_close_dbapi_error_is_logged_not_silent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A dbapi disconnect-class error (CORRUPT / FORMAT / NOTADB)
+    raised by the close round-trip after a successful ping must be
+    observable in DEBUG logs. The previous
+    ``contextlib.suppress(Exception)`` silently absorbed these so a
+    flapping leader was invisible at the ping site; this test pins
+    the DEBUG emission so the suppression is no longer silent.
+    """
+    from dqlitedbapi.exceptions import OperationalError
+
+    cursor = MagicMock()
+
+    async def _execute(_sql: str) -> None:
+        pass
+
+    async def _fetchone() -> Any:
+        return (1,)
+
+    async def _close() -> None:
+        raise OperationalError("CORRUPT: leader flip mid-close", code=11)
+
+    cursor.execute = _execute
+    cursor.fetchone = _fetchone
+    cursor.close = _close
+
+    adapted = cast(
+        AsyncAdaptedConnection,
+        _FakeAdaptedConnection(_FakeInnerConnection(cursor)),
+    )
+
+    dialect = DqliteDialect_aio.__new__(DqliteDialect_aio)
+    dialect._dialect_specific_select_one = "SELECT 1"
+
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.aio"):
+        await dialect._async_ping(adapted)
+
+    msgs = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "_async_ping cursor close" in msgs, "dbapi error from close must surface in DEBUG logs"
+    assert "OperationalError" in msgs
 
 
 @pytest.mark.asyncio

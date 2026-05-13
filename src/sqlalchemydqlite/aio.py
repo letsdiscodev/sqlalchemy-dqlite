@@ -493,22 +493,28 @@ class AsyncAdaptedCursor:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         return self._adapt_connection
 
-    # PEP 249 optional extensions. The non-adapter cursors raise
-    # NotSupportedError for these same calls; do the same here so a
-    # consumer catching NotSupportedError behaves consistently whether it
-    # is handed an AsyncCursor or a greenlet-wrapped AsyncAdaptedCursor.
+    # PEP 249 optional extensions. The sibling ``callproc`` /
+    # ``nextset`` / ``scroll`` properties below raise
+    # ``NotSupportedError`` because dqlite genuinely has no
+    # server-side feature for them; this ``rownumber`` stub raises
+    # for a different reason — it is a curated adapter choice, not
+    # a feature gap.
     #
-    # ``rownumber`` is intentionally not implemented as a counter:
-    # the adapter buffers rows into a deque that is popped left on
-    # consumption, so a truthful counter would need parallel state
-    # increments in fetchone / fetchmany / fetchall / __next__.
-    # Consumers who need rownumber should use AsyncCursor directly.
-    # We expose a NotSupportedError stub property here (rather than
-    # leaving the attr absent) so a consumer hard-``getattr``-ing
-    # ``cursor.rownumber`` gets a dbapi.Error rather than the bare
-    # ``AttributeError`` that would otherwise escape ``except
-    # dbapi.Error:``. Mirrors the sibling nextset / scroll / callproc
-    # raise discipline.
+    # NOTE: the underlying ``dqlitedbapi.aio.AsyncCursor.rownumber``
+    # DOES implement this as a real counter (description-gated
+    # 0-based index, returns ``int | None``); it does NOT raise.
+    # The adapter does not mirror that because tracking a parallel
+    # counter through the deque-pop ownership model would add
+    # increment sites in fetchone / fetchmany / fetchall /
+    # __next__. Consumers who need rownumber should reach the
+    # underlying ``AsyncCursor`` directly (e.g. via the dbapi
+    # connection's ``cursor()``).
+    #
+    # We expose a ``NotSupportedError`` stub property here (rather
+    # than leaving the attr absent) so a consumer hard-``getattr``-
+    # ing ``cursor.rownumber`` gets a dbapi.Error rather than the
+    # bare ``AttributeError`` that would otherwise escape
+    # ``except dbapi.Error:``. Mirrors the sibling raise discipline.
     @property
     def rownumber(self) -> int:
         if self._closed:

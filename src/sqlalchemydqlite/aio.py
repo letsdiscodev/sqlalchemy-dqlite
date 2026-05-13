@@ -1245,7 +1245,13 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 id(self),
                 peer,
             )
-        except Exception as exc:  # pragma: no cover - defensive
+        except (Exception, asyncio.CancelledError) as exc:  # pragma: no cover - defensive
+            # Narrow to ``(Exception, asyncio.CancelledError)`` so a
+            # greenlet-level cancel from SA's pool-dispose path is
+            # still absorbed (``CancelledError`` is a ``BaseException``
+            # subclass since 3.8) but ``KeyboardInterrupt`` /
+            # ``SystemExit`` propagate. Mirrors the sibling cursor-
+            # close discipline upstream in this module.
             logger.debug(
                 "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
                 "best-effort sync close raised (%s); ignoring",

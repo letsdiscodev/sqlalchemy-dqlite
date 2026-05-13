@@ -424,7 +424,14 @@ class AsyncAdaptedCursor:
         if size is None:
             size = self.arraysize
         if size < 0:
-            raise ProgrammingError(f"fetchmany size must be non-negative, got {size}")
+            # Mirror stdlib ``sqlite3.Cursor.fetchmany(-1)`` and the
+            # underlying ``dqlitedbapi`` cursor's documented contract:
+            # negative size means "fetch all remaining rows". Adapter
+            # rows are buffered in-memory, so this is a fast deque
+            # drain. Without this parity, cross-driver code using
+            # ``fetchmany(-1)`` as "drain all" breaks at the SA layer
+            # despite working through the dbapi layer directly.
+            return self.fetchall()
         return [self._rows.popleft() for _ in range(min(size, len(self._rows)))]
 
     def fetchall(self) -> Sequence[tuple[Any, ...]]:

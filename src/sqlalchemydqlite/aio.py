@@ -15,13 +15,13 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
 from sqlalchemy.util.concurrency import in_greenlet
 
+from dqlitedbapi import DescriptionTuple
 from dqlitedbapi.exceptions import (
     InterfaceError,
     NotSupportedError,
     OperationalError,
     ProgrammingError,
 )
-from dqlitedbapi.types import DescriptionTuple
 from sqlalchemydqlite.base import (
     _TRANSPORT_CLASS_EXCEPTIONS,
     DqliteDialect,

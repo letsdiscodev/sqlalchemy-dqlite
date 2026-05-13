@@ -15,7 +15,8 @@ public surface unnecessarily).
 
 from __future__ import annotations
 
-from dqlitedbapi.types import DescriptionTuple as _DbapiDescriptionTuple
+from dqlitedbapi import DescriptionTuple as _DbapiDescriptionTuple
+from dqlitedbapi.types import DescriptionTuple as _DbapiTypesDescriptionTuple
 from sqlalchemydqlite import aio as _adapter_module
 
 
@@ -23,3 +24,9 @@ def test_description_tuple_alias_is_shared() -> None:
     """The adapter's bound ``DescriptionTuple`` IS the dbapi alias."""
     adapter_alias = _adapter_module.DescriptionTuple  # type: ignore[attr-defined]
     assert adapter_alias is _DbapiDescriptionTuple
+
+
+def test_dbapi_top_level_and_types_submodule_descriptions_are_identical() -> None:
+    """The curated top-level re-export resolves to the same object as
+    the private ``dqlitedbapi.types`` source."""
+    assert _DbapiDescriptionTuple is _DbapiTypesDescriptionTuple

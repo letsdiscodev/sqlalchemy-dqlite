@@ -1554,7 +1554,9 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         """
         return "SERIALIZABLE"
 
-    def set_isolation_level(self, dbapi_connection: DBAPIConnection, level: str | None) -> None:
+    def set_isolation_level(
+        self, dbapi_connection: DBAPIConnection, level: IsolationLevel | None
+    ) -> None:
         """Set isolation level.
 
         dqlite only supports SERIALIZABLE. Any other level is rejected

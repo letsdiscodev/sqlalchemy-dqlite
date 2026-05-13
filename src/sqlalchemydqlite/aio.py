@@ -1400,7 +1400,7 @@ class DqliteDialect_aio(DqliteDialect):
         peer = getattr(dbapi_connection, "address", None)
         try:
             dbapi_connection.terminate()
-        except Exception:  # noqa: BLE001 - terminate must not raise
+        except Exception:  # terminate must not raise
             logger.debug(
                 "do_terminate: terminate raised on dispose for peer=%s id=%s; "
                 "proceeding (has_terminate=True non-raising contract)",

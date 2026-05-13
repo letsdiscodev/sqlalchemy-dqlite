@@ -22,7 +22,11 @@ from dqlitedbapi.exceptions import (
     ProgrammingError,
 )
 from dqlitedbapi.types import DescriptionTuple
-from sqlalchemydqlite.base import _TRANSPORT_CLASS_EXCEPTIONS, DqliteDialect
+from sqlalchemydqlite.base import (
+    _TRANSPORT_CLASS_EXCEPTIONS,
+    DqliteDialect,
+    _walk_cause_chain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -952,18 +956,31 @@ class AsyncAdaptedConnection(AdaptedConnection):
         ``dbapi.OperationalError`` (with the substring preserved) so
         the dialect's substring fallback classifies it as a disconnect.
         """
-        if isinstance(error, (RuntimeError, ProgrammingError)):
-            msg = str(error)
-            # Lower-case once at the top so substring scans below are
-            # case-insensitive, mirroring base.py's ``is_disconnect``
-            # discipline (the ``_dqlite_disconnect_messages`` tuple is
-            # stored lower-cased and the call site lower-cases the
-            # candidate text once). Without this, a Python minor that
-            # flipped the canonical wording's casing (e.g.
-            # ``Event Loop Is Closed``) would silently bypass the
-            # remap and the cross-loop fault would leak as a bare
-            # RuntimeError past SA's classifier. The original ``msg``
-            # is preserved verbatim in the remapped wording's tail.
+        # Walk the ``__cause__`` / ``__context__`` chain (plus PEP 654
+        # group children) up to the shared depth budget so a wrapping
+        # layer that re-raised the cross-loop / loop-closed /
+        # nested-loop fault as a different type does not silently
+        # bypass the remap. Mirrors the ``is_disconnect`` discipline
+        # in base.py (which uses the same ``_walk_cause_chain``
+        # helper); without this walk, an explicit
+        # ``raise FooError(...) from RuntimeError("Event loop is
+        # closed")`` would leak the original RuntimeError past SA's
+        # classifier (gated on ``DatabaseError``) and the pool would
+        # retain the broken slot.
+        #
+        # Lower-case once per hop so substring scans below are
+        # case-insensitive, mirroring base.py's ``is_disconnect``
+        # discipline (the ``_dqlite_disconnect_messages`` tuple is
+        # stored lower-cased and the call site lower-cases the
+        # candidate text once). Without this, a Python minor that
+        # flipped the canonical wording's casing (e.g.
+        # ``Event Loop Is Closed``) would silently bypass the
+        # remap. The original message is preserved verbatim in the
+        # remapped wording's tail.
+        for hop in _walk_cause_chain(error):
+            if not isinstance(hop, (RuntimeError, ProgrammingError)):
+                continue
+            msg = str(hop)
             msg_lower = msg.lower()
             # Both substrings are needed: ``"different loop"`` matches
             # Python's ``"attached to a different loop"`` and any

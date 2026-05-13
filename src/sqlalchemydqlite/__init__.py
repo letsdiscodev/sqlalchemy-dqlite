@@ -35,8 +35,8 @@ __version__: Final[str] = "0.1.5"
 # does ``base.dialect = dialect = pysqlite.dialect``; we follow the same
 # pattern so ``from sqlalchemydqlite import dialect`` resolves
 # canonically.
-dialect = DqliteDialect
-dialect_aio = DqliteDialect_aio
+dialect: Final[type[DqliteDialect]] = DqliteDialect
+dialect_aio: Final[type[DqliteDialect_aio]] = DqliteDialect_aio
 
 __all__ = [  # noqa: RUF022 - grouped: dialect entry points, then SA-shared SQLite types
     # Dialect entry points

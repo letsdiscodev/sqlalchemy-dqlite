@@ -45,6 +45,14 @@ import os
 import time
 from typing import Any
 
+# SA's compliance suite discovers the ``_dqlite_*`` functions below
+# via ``@register.init`` hook decorators, not via ``__all__``. Nothing
+# here is intended for direct user import — declare ``__all__`` empty
+# so ``from sqlalchemydqlite.provision import *`` correctly leaks
+# nothing, and the workspace's submodule-``__all__`` discipline
+# applies uniformly.
+__all__: list[str] = []
+
 from sqlalchemy.engine import url as sa_url
 from sqlalchemy.testing.provision import (
     create_db,

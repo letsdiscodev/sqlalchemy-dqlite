@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from dqliteclient.exceptions import OperationalError as _ClientOperationalError
+from dqlitedbapi.exceptions import InternalError as _DBAPIInternalError
 from dqlitedbapi.exceptions import OperationalError as _DBAPIOperationalError
 from dqlitewire import LEADER_LOST_DB_LOOKUP_SUBSTRING, SQLITE_NOTFOUND
 from sqlalchemydqlite.aio import DqliteDialect_aio
@@ -74,3 +75,59 @@ def test_is_disconnect_does_not_classify_notfound_lookup_stmt(
         raw_message="no statement with the given id 7",
     )
     assert dialect.is_disconnect(e, None, None) is False
+
+
+def test_is_disconnect_classifies_notfound_lookup_db_via_internalerror_with_chained_cause(
+    dialect: DqliteDialect_aio,
+) -> None:
+    """Production-shape end-to-end pin: the dbapi classifier at
+    ``cursor.py:_CODE_TO_EXCEPTION`` maps ``SQLITE_NOTFOUND`` (=12) to
+    ``InternalError`` (matching stdlib ``sqlite3``, settled in
+    ``done/ISSUE-862`` / ``done/ISSUE-954``). So a real wire flow
+    produces ``_DBAPIInternalError(code=12)`` with the chained
+    ``client.OperationalError(code=12)`` as ``__cause__``. SA must
+    classify this via the cause-chain walker — not just via the
+    direct-isinstance arm exercised by the parametrize above.
+
+    Without this pin, a refactor that breaks ``raise ... from cause``
+    in ``cursor._call_client`` would silently lose disconnect
+    classification for the leader-flip arm and the existing
+    parametrize would still pass.
+    """
+    cause = _ClientOperationalError(
+        f"{LEADER_LOST_DB_LOOKUP_SUBSTRING} (db_id=7)",
+        SQLITE_NOTFOUND,
+        raw_message=f"{LEADER_LOST_DB_LOOKUP_SUBSTRING} (db_id=7)",
+    )
+    try:
+        raise _DBAPIInternalError(
+            f"{LEADER_LOST_DB_LOOKUP_SUBSTRING} (db_id=7)",
+            code=SQLITE_NOTFOUND,
+            raw_message=f"{LEADER_LOST_DB_LOOKUP_SUBSTRING} (db_id=7)",
+        ) from cause
+    except _DBAPIInternalError as e:
+        assert dialect.is_disconnect(e, None, None) is True
+
+
+def test_is_disconnect_does_not_classify_notfound_lookup_stmt_via_internalerror_with_chained_cause(
+    dialect: DqliteDialect_aio,
+) -> None:
+    """Negative twin of the production-shape pin above: the
+    ``LOOKUP_STMT`` wording is a server-side state bug, not a
+    transport flip. Even with the dbapi ``InternalError``-with-
+    chained-cause shape that SA's walker sees in production, this
+    must NOT classify as disconnect.
+    """
+    cause = _ClientOperationalError(
+        "no statement with the given id 7",
+        SQLITE_NOTFOUND,
+        raw_message="no statement with the given id 7",
+    )
+    try:
+        raise _DBAPIInternalError(
+            "no statement with the given id 7",
+            code=SQLITE_NOTFOUND,
+            raw_message="no statement with the given id 7",
+        ) from cause
+    except _DBAPIInternalError as e:
+        assert dialect.is_disconnect(e, None, None) is False

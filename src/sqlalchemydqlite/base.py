@@ -21,11 +21,13 @@ import dqlitedbapi.exceptions as _dbapi_exc
 from dqliteclient import CLOSE_TIMEOUT_FLOOR_RATIONALE, validate_timeout
 from dqlitewire import (
     LEADER_ERROR_CODES,
+    LEADER_LOST_DB_LOOKUP_SUBSTRING,
     SQLITE_CORRUPT,
     SQLITE_FORMAT,
     SQLITE_NOTADB,
     WIRE_DECODE_FAILED_PREFIX,
 )
+from dqlitewire import SQLITE_NOTFOUND as _SQLITE_NOTFOUND
 from dqlitewire import sanitize_server_text as _sanitize_server_text
 from dqlitewire.constants import DQLITE_PROTO
 
@@ -1937,6 +1939,26 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                     and getattr(cause, "code", None) in LEADER_ERROR_CODES
                 ):
                     return True
+                # Go-parity ``errNotFound → ErrBadConn`` arm:
+                # SQLITE_NOTFOUND (=12) is overloaded between the
+                # leader-flip ``gateway.c::LOOKUP_DB`` arm (message
+                # "no database opened ...") and the orthogonal
+                # ``LOOKUP_STMT`` arm (server-side state bug, kept
+                # as a non-disconnect InternalError). Substring-gate
+                # on the wire-side ``LEADER_LOST_DB_LOOKUP_SUBSTRING``
+                # so the leader-flip arm participates in pool
+                # invalidation without over-triggering on the stmt-id
+                # path. Mirrors the parallel arm in
+                # ``dqliteclient/connection.py::_run_protocol``.
+                if (
+                    isinstance(cause, err_class)
+                    and getattr(cause, "code", None) == _SQLITE_NOTFOUND
+                ):
+                    msg_lc = (
+                        getattr(cause, "raw_message", None) or getattr(cause, "message", None) or ""
+                    )
+                    if msg_lc.startswith(LEADER_LOST_DB_LOOKUP_SUBSTRING):
+                        return True
             # Substring scan — restricted to OperationalError(code=None)
             # (the wire-decode / ProtocolError / cross-loop-remap
             # surface) and bare DatabaseError with codes 11/24/26

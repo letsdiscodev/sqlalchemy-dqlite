@@ -25,6 +25,7 @@ from CPython / asyncio.
 
 from __future__ import annotations
 
+import ast
 import pathlib
 from types import ModuleType
 
@@ -35,11 +36,41 @@ import dqlitedbapi.connection
 from sqlalchemydqlite.base import DqliteDialect
 
 
-def _read(mod: ModuleType) -> str:
-    """Read the source of a module."""
+def _emitted_string_literals(mod: ModuleType) -> set[str]:
+    """Return every lower-cased string literal that appears as an
+    argument to a ``raise`` or a ``Call`` (including parts of an
+    f-string interpolation) in the module source. Comments and
+    bare-expression docstrings are NOT scanned.
+
+    This narrows the producer/consumer pin away from a raw
+    ``substring in source`` scan, which would survive a producer
+    rename that leaves a stale comment or docstring behind — the
+    silent-regression hazard documented in the issue triage.
+    """
     file_attr = mod.__file__
     assert file_attr is not None, f"{mod!r} has no __file__"
-    return pathlib.Path(file_attr).read_text()
+    tree = ast.parse(pathlib.Path(file_attr).read_text())
+    literals: set[str] = set()
+
+    def _collect_from(parent: ast.AST) -> None:
+        for sub in ast.walk(parent):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                literals.add(sub.value.lower())
+            elif isinstance(sub, ast.JoinedStr):
+                for part in sub.values:
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                        literals.add(part.value.lower())
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Raise) and node.exc is not None:
+            _collect_from(node.exc)
+        elif isinstance(node, ast.Call):
+            for arg in node.args:
+                _collect_from(arg)
+            for kw in node.keywords:
+                if kw.value is not None:
+                    _collect_from(kw.value)
+    return literals
 
 
 # Substrings the SA dialect matches against, that originate from
@@ -62,19 +93,27 @@ _FIRST_PARTY_SUBSTRINGS: dict[str, list[ModuleType]] = {
 
 def test_sa_first_party_disconnect_substrings_emitted_by_producers() -> None:
     """Each first-party SA disconnect substring appears in at least
-    one producer module's source. A producer rename trips this test."""
+    one producer module as an AST-visible string literal in a
+    ``Raise`` / ``Call`` (or f-string interpolation) context.
+    A producer rename trips this test; a stale comment or docstring
+    referencing the old wording does NOT — closing the
+    "comment-survives-the-rename" false-negative window of the prior
+    raw-source scan."""
     sa_substrings = DqliteDialect._dqlite_disconnect_messages
     for substring, producer_mods in _FIRST_PARTY_SUBSTRINGS.items():
         assert substring in sa_substrings, (
             f"SA dialect lost {substring!r} — either restore the entry "
             f"in _dqlite_disconnect_messages or update this test."
         )
-        sources = [_read(mod).lower() for mod in producer_mods]
-        assert any(substring in src for src in sources), (
+        emitted: set[str] = set()
+        for mod in producer_mods:
+            emitted |= _emitted_string_literals(mod)
+        assert any(substring in lit for lit in emitted), (
             f"SA expects substring {substring!r} from one of "
-            f"{[m.__name__ for m in producer_mods]} but no producer source "
-            f"contains a matching literal. Either update the SA "
-            f"classifier or restore the producer wording."
+            f"{[m.__name__ for m in producer_mods]} but no Raise / "
+            f"Call literal contains it; comments and docstrings are "
+            f"NOT scanned. Restore the producer wording or update "
+            f"the SA classifier."
         )
 
 

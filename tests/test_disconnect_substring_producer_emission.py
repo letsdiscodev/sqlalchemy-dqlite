@@ -33,7 +33,9 @@ import dqliteclient.cluster
 import dqliteclient.connection
 import dqliteclient.protocol
 import dqlitedbapi.aio.connection
+import dqlitedbapi.aio.cursor
 import dqlitedbapi.connection
+import dqlitedbapi.cursor
 import sqlalchemydqlite.base
 from sqlalchemydqlite.base import DqliteDialect
 
@@ -129,6 +131,24 @@ _FIRST_PARTY_SUBSTRINGS: dict[str, list[ModuleType]] = {
     "connection invalidated (id=": [
         dqlitedbapi.connection,
         dqlitedbapi.aio.connection,
+    ],
+    # SA's is_disconnect classifier scans ``InterfaceError`` cause
+    # text for ``"connection is closed"`` / ``"cursor is closed"``
+    # via an inline Compare arm at ``base.py:1922`` (NOT via the
+    # bulk ``_dqlite_disconnect_messages`` tuple). Roughly two dozen
+    # producer sites across sync + async connection / cursor emit
+    # the matching ``InterfaceError(f"Connection is closed
+    # (id={...})")`` or ``InterfaceError(f"Cursor is closed
+    # (id={...})")``. A rename on any of these silently disables
+    # the SA classification — the pool retains the broken slot
+    # until the next operation surfaces the dead state.
+    "connection is closed": [
+        dqlitedbapi.connection,
+        dqlitedbapi.aio.connection,
+    ],
+    "cursor is closed": [
+        dqlitedbapi.cursor,
+        dqlitedbapi.aio.cursor,
     ],
 }
 

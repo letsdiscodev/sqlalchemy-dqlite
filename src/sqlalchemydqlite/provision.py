@@ -241,10 +241,24 @@ def _drop_user_tables(eng: Any) -> None:
                 try:
                     conn.exec_driver_sql(f'DROP TABLE IF EXISTS "{name}"')
                 except Exception as e:
-                    logger.debug("drop_user_tables: %s on DROP TABLE %s", e, name)
+                    # CWE-117: both the bubbled-up exception text and
+                    # the table ``name`` from ``sqlite_master`` can
+                    # carry peer-supplied LF/CR. Route both through
+                    # ``sanitize_for_log`` so journald/syslog cannot
+                    # interpret forged LF as a record boundary. The
+                    # sibling ``_dqlite_run_reap_dbs`` arm applies the
+                    # same discipline.
+                    logger.debug(
+                        "drop_user_tables: %s on DROP TABLE %s",
+                        _sanitize_for_log(str(e)),
+                        _sanitize_for_log(str(name)),
+                    )
             conn.commit()
     except Exception as e:
-        logger.debug("drop_user_tables: %s during connect/exec", e)
+        logger.debug(
+            "drop_user_tables: %s during connect/exec",
+            _sanitize_for_log(str(e)),
+        )
 
 
 @drop_db.for_db("dqlite")

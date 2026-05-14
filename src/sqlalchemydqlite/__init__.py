@@ -1,7 +1,7 @@
 """SQLAlchemy 2.0 dialect for dqlite."""
 
 import logging
-from typing import Final
+from typing import Final as _Final
 
 from sqlalchemy.dialects.sqlite import (
     BLOB,
@@ -27,7 +27,7 @@ from sqlalchemy.dialects.sqlite import (
 from sqlalchemydqlite.aio import DqliteDialect_aio
 from sqlalchemydqlite.base import DqliteCompiler, DqliteDialect
 
-__version__: Final[str] = "0.1.6"
+__version__: _Final[str] = "0.1.6"
 
 # SA convention (every shipped dialect package — sqlite, mysql, mssql,
 # oracle, postgresql): expose ``<package>.dialect`` pointing at the
@@ -35,8 +35,8 @@ __version__: Final[str] = "0.1.6"
 # does ``base.dialect = dialect = pysqlite.dialect``; we follow the same
 # pattern so ``from sqlalchemydqlite import dialect`` resolves
 # canonically.
-dialect: Final[type[DqliteDialect]] = DqliteDialect
-dialect_aio: Final[type[DqliteDialect_aio]] = DqliteDialect_aio
+dialect: _Final[type[DqliteDialect]] = DqliteDialect
+dialect_aio: _Final[type[DqliteDialect_aio]] = DqliteDialect_aio
 
 __all__ = [  # grouped: dialect entry points, then SA-shared SQLite types
     # Dialect entry points

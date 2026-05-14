@@ -1341,9 +1341,10 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # a deferred InterfaceError from the first checkout. The
         # dbapi-side parse-at-``__init__`` (per the eager-validation
         # fix) covers the deeper-layer check; this is the
-        # SA-construction-time parity. ``_client_parse_address`` is a
-        # private helper from the client layer; keep the import local
-        # so the SA dialect doesn't require it at module-import time.
+        # SA-construction-time parity. ``parse_address`` is part of
+        # the client's curated top-level surface; the import is kept
+        # local so a SA-only environment without ``dqliteclient``
+        # installed doesn't fail at module-load time.
         from dqliteclient import parse_address as _client_parse_address
 
         try:

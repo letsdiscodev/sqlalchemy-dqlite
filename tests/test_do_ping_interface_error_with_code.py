@@ -1,5 +1,5 @@
 """Pin: ``do_ping`` returns False on any ``InterfaceError`` from
-``SELECT 1``, including the cycle-21 code-bearing variants
+``SELECT 1``, including the code-bearing variants
 (``DQLITE_PROTO`` = 1001, ``SQLITE_MISUSE`` = 21,
 ``SQLITE_RANGE`` = 25).
 

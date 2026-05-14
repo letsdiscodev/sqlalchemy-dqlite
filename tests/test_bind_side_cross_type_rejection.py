@@ -2,8 +2,7 @@
 result-side already rejects, so a bind→read round-trip via the same
 dialect doesn't write a cell that the same dialect's reader rejects.
 
-The cycle 18 result-side closures (ISSUE-804/805/805+) raise
-``DataError`` on:
+The result-side closures raise ``DataError`` on:
 - ``DateTime`` column receiving ``datetime.time`` (no defensible date)
 - ``Date`` column receiving ``datetime.time`` (no defensible date)
 - ``Time`` column receiving ``datetime.datetime`` → narrow
@@ -15,8 +14,8 @@ Symmetric bind-side fixes:
 
 Pysqlite parity reference: pysqlite's DATE.bind_processor emits only
 ``YYYY-MM-DD`` and rejects time inputs; pysqlite's DATETIME.bind_processor
-likewise rejects time. Cycle-18 chose ``DataError`` (PEP 249) for the
-result-side rejections; use the same class for bind-side symmetry.
+likewise rejects time. The result-side rejections chose ``DataError``
+(PEP 249); use the same class for bind-side symmetry.
 """
 
 from __future__ import annotations

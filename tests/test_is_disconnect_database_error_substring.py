@@ -64,9 +64,9 @@ def test_integrity_error_with_disconnect_substring_not_classified() -> None:
     duplicating non-idempotent INSERTs.
 
     The substring scan must be restricted to OperationalError + bare
-    DatabaseError with codes 11/24/26 (the codes that motivated the
-    round-2 widening); IntegrityError (code 19), DataError, etc. must
-    NOT match the substring branch.
+    DatabaseError with the BARE_DATABASE_ERROR_CODES set (11/24/26);
+    IntegrityError (code 19), DataError, etc. must NOT match the
+    substring branch.
     """
     from dqlitedbapi.exceptions import IntegrityError
 
@@ -92,8 +92,9 @@ def test_data_error_with_disconnect_substring_not_classified() -> None:
 
 def test_bare_database_error_with_non_motivating_code_not_classified() -> None:
     """Pin the code-restriction explicitly: bare ``DatabaseError`` with
-    a code OUTSIDE {11, 24, 26} (the round-2 motivating set) must not
-    match the substring branch even with a transport-shaped message."""
+    a code OUTSIDE {11, 24, 26} (i.e. outside
+    ``BARE_DATABASE_ERROR_CODES``) must not match the substring
+    branch even with a transport-shaped message."""
     e = DatabaseError(
         "wire decode failed in column 42",
         code=99,  # not in {11, 24, 26}

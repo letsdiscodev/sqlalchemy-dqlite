@@ -134,8 +134,8 @@ _FIRST_PARTY_SUBSTRINGS: dict[str, list[ModuleType]] = {
     ],
     # SA's is_disconnect classifier scans ``InterfaceError`` cause
     # text for ``"connection is closed"`` / ``"cursor is closed"``
-    # via an inline Compare arm at ``base.py:1922`` (NOT via the
-    # bulk ``_dqlite_disconnect_messages`` tuple). Roughly two dozen
+    # via an inline Compare arm inside ``is_disconnect`` (NOT via
+    # the bulk ``_dqlite_disconnect_messages`` tuple). Roughly two dozen
     # producer sites across sync + async connection / cursor emit
     # the matching ``InterfaceError(f"Connection is closed
     # (id={...})")`` or ``InterfaceError(f"Cursor is closed
@@ -164,11 +164,11 @@ def test_sa_first_party_disconnect_substrings_emitted_by_producers() -> None:
     sa_tuple_substrings = DqliteDialect._dqlite_disconnect_messages
     # Some recognised substrings live in inline ``is_disconnect``
     # arms rather than in the bulk tuple (e.g. the
-    # ``InterfaceError`` cause-text scan ``"connection invalidated
-    # (id=" in message`` at base.py:1942). Pull the literals out of
-    # ``Compare`` operands in the SA dialect source so the
-    # consumer-side existence check works for both shapes without
-    # falling back to a raw-source scan.
+    # ``InterfaceError`` cause-text scan
+    # ``"connection invalidated (id=" in message``). Pull the
+    # literals out of ``Compare`` operands in the SA dialect source
+    # so the consumer-side existence check works for both shapes
+    # without falling back to a raw-source scan.
     sa_compare_literals = _consumer_substring_literals(sqlalchemydqlite.base)
     for substring, producer_mods in _FIRST_PARTY_SUBSTRINGS.items():
         in_tuple = substring in sa_tuple_substrings

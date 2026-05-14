@@ -1175,7 +1175,8 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     # surfaces when third-party glue calls ``await_only``
                     # from a context that already has a running loop on
                     # the same thread (asyncio rejects nested loop
-                    # entry). ``_handle_exception`` (L1040) and
+                    # entry). The ``"loop is already running"`` substring
+                    # arm of ``_handle_exception`` and
                     # ``_dqlite_disconnect_messages`` in base.py both
                     # cover this phrase; route through the same remap so
                     # the close-arm matches that discipline rather than

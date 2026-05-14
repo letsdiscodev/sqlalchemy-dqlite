@@ -1304,7 +1304,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
         The two ``getattr`` reads on ``self._connection`` sit INSIDE
         the try frame so a ``ReferenceError`` from a dead
         ``weakref.proxy`` (the post-``_release_inner_strong_ref``
-        state, see L1280-1286) is absorbed with the same swallow-
+        state) is absorbed with the same swallow-
         and-log discipline as a hook-side failure — the docstring
         contract "Never raises" holds at the boundary the inherited
         ``DqliteDialect.do_close`` fallback's

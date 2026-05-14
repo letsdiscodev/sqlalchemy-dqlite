@@ -1,6 +1,6 @@
 """Pin: sync ``DqliteDialect.do_terminate``'s debug log includes
-``peer=...`` and ``id=...`` substrings, mirroring the async sibling at
-``aio.py:1216-1298``.
+``peer=...`` and ``id=...`` substrings, mirroring the async sibling
+``do_terminate`` in ``aio.py``.
 
 A flapping leader produces repeated terminate-log lines. Without peer
 and id, the operator cannot correlate which slot/node went away.

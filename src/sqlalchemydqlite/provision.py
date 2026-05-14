@@ -238,8 +238,16 @@ def _drop_user_tables(eng: Any) -> None:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall()
             for (name,) in tables:
+                # SQLite escapes ``"`` inside a delimited identifier as
+                # ``""``. A peer / test creating a table named
+                # ``foo"bar`` would otherwise render as
+                # ``DROP TABLE IF EXISTS "foo"bar"`` — a syntax error
+                # that the per-drop swallow below would mask, silently
+                # half-completing the docstring's "drop every user-
+                # visible table" contract.
+                quoted = '"' + name.replace('"', '""') + '"'
                 try:
-                    conn.exec_driver_sql(f'DROP TABLE IF EXISTS "{name}"')
+                    conn.exec_driver_sql(f"DROP TABLE IF EXISTS {quoted}")
                 except Exception as e:
                     # CWE-117: both the bubbled-up exception text and
                     # the table ``name`` from ``sqlite_master`` can

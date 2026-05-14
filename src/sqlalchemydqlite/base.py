@@ -1344,7 +1344,7 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # SA-construction-time parity. ``_client_parse_address`` is a
         # private helper from the client layer; keep the import local
         # so the SA dialect doesn't require it at module-import time.
-        from dqliteclient.connection import parse_address as _client_parse_address
+        from dqliteclient import parse_address as _client_parse_address
 
         try:
             _client_parse_address(address)

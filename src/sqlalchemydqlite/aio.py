@@ -1527,8 +1527,8 @@ class DqliteDialect_aio(DqliteDialect):
         ``_BARE_DBE_DISCONNECT_CODES`` arm so codes 11/24/26
         (CORRUPT/FORMAT/NOTADB) still classify as ping-fail.
         """
-        from dqliteclient.exceptions import DqliteConnectionError
-        from dqlitedbapi.exceptions import DatabaseError
+        from dqliteclient import DqliteConnectionError
+        from dqlitedbapi import DatabaseError
         from sqlalchemydqlite.base import _BARE_DBE_DISCONNECT_CODES
 
         try:

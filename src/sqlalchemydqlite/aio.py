@@ -1137,8 +1137,18 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     # RuntimeError past engine.dispose(). The outer
                     # try/finally still runs the proxy swap on the
                     # raise path.
-                    msg = str(exc)
-                    if "different loop" in msg or "different event loop" in msg:
+                    # Lowercase once at the top of the arm so the
+                    # substring scans below mirror the
+                    # ``_handle_exception`` / ``is_disconnect``
+                    # ``.lower()`` discipline (d8ecb49). The CPython
+                    # source-of-truth for both phrases is at the
+                    # asyncio-internals level, not a stable documented
+                    # API; a future point-release capitalisation tweak
+                    # would otherwise silently bypass the remap and
+                    # leak bare ``RuntimeError`` past
+                    # ``engine.dispose()``.
+                    msg_lower = str(exc).lower()
+                    if "different loop" in msg_lower or "different event loop" in msg_lower:
                         self._handle_exception(exc)
                     # ``RuntimeError("Event loop is closed")`` lands
                     # here during ``engine.dispose()`` after a per-call
@@ -1150,7 +1160,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     # try/finally still runs the proxy swap on this
                     # return path. The debug log preserves the
                     # traceback for triage.
-                    if "Event loop is closed" in msg:
+                    if "event loop is closed" in msg_lower:
                         peer = getattr(self._connection, "address", None)
                         logger.debug(
                             "AsyncAdaptedConnection.close (id=%s, peer=%s): "

@@ -1171,6 +1171,18 @@ class AsyncAdaptedConnection(AdaptedConnection):
                             exc_info=True,
                         )
                         return
+                    # ``RuntimeError("This event loop is already running")``
+                    # surfaces when third-party glue calls ``await_only``
+                    # from a context that already has a running loop on
+                    # the same thread (asyncio rejects nested loop
+                    # entry). ``_handle_exception`` (L1040) and
+                    # ``_dqlite_disconnect_messages`` in base.py both
+                    # cover this phrase; route through the same remap so
+                    # the close-arm matches that discipline rather than
+                    # leaking a bare ``RuntimeError`` past
+                    # ``engine.dispose()``.
+                    if "loop is already running" in msg_lower:
+                        self._handle_exception(exc)
                     # Other RuntimeErrors (programmer bugs) propagate.
                     raise
                 # The non-greenlet path is handled by the

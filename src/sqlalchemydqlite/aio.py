@@ -1303,10 +1303,21 @@ class AsyncAdaptedConnection(AdaptedConnection):
 
         Idempotent. Never raises — a missing hook (older dbapi
         version) or a writer.close() failure is silently absorbed.
+        The two ``getattr`` reads on ``self._connection`` sit INSIDE
+        the try frame so a ``ReferenceError`` from a dead
+        ``weakref.proxy`` (the post-``_release_inner_strong_ref``
+        state, see L1280-1286) is absorbed with the same swallow-
+        and-log discipline as a hook-side failure — the docstring
+        contract "Never raises" holds at the boundary the inherited
+        ``DqliteDialect.do_close`` fallback's
+        ``contextlib.suppress(*_TRANSPORT_CLASS_EXCEPTIONS)`` relies
+        on (``ReferenceError`` is intentionally NOT in that tuple
+        because it is a GC-lifecycle hazard, not a transport class).
         """
-        peer = getattr(self._connection, "address", None)
-        hook = getattr(self._connection, "force_close_transport", None)
+        peer: object | None = None
         try:
+            peer = getattr(self._connection, "address", None)
+            hook = getattr(self._connection, "force_close_transport", None)
             if hook is None:
                 # Older dbapi without the force-close hook; nothing
                 # we can do synchronously. Log so the audit trail

@@ -275,11 +275,13 @@ class TestURLMultiValueQueryParameter:
     ``URL.create(query={"k": ("a", "b")})`` — and any code path that
     calls ``URL.update_query_*`` more than once — produces a tuple-valued
     query entry. The dialect's ``create_connect_args`` handles that with
-    ``raw[-1] if isinstance(raw, tuple) else raw`` (``base.py:256-258``),
-    taking the last occurrence. No unit test pinned the behaviour, so a
-    silent refactor to ``raw[0]`` (first-wins) or to dropping the
-    ``isinstance(raw, tuple)`` branch entirely would pass the rest of
-    the suite.
+    ``raw[-1] if isinstance(raw, tuple) else raw`` (appears twice in
+    ``DqliteDialect.create_connect_args`` — once in the timeout
+    URL-param handler and once in the redirect-handler URL-param
+    resolver), taking the last occurrence. No unit test pinned the
+    behaviour, so a silent refactor to ``raw[0]`` (first-wins) or to
+    dropping the ``isinstance(raw, tuple)`` branch entirely would pass
+    the rest of the suite.
 
     ``last-wins`` matches Flask's ``request.args.get`` and Django's
     ``QueryDict.__getitem__`` — it is a project convention that

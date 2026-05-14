@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """SQLAlchemy testing provision hooks for the dqlite dialect.
 
 The compliance suite under ``sqlalchemy.testing.suite`` discovers this
@@ -67,8 +68,6 @@ from sqlalchemy.testing.provision import (
 )
 
 from dqlitewire import sanitize_for_log as _sanitize_for_log
-
-# mypy: ignore-errors
 
 # Per-session unique database-name suffix. dqlite has no
 # ``DROP DATABASE``: reusing the cluster's ``default`` database across

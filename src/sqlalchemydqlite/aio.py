@@ -1343,6 +1343,29 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 exc_info=True,
             )
 
+    def force_close_transport(self) -> None:
+        """Public alias of :meth:`_force_close_transport`.
+
+        The inherited :meth:`DqliteDialect.do_close` fallback (see
+        ``base.py``) reaches for ``dbapi_connection.force_close_transport()``
+        — the public name, matching the dbapi ``Connection.force_close_transport``
+        on the sync side. ``DqliteDialect_aio`` inherits ``do_close``
+        unmodified, so without this public surface a sync-pool teardown
+        path that reached the transport-class fallback on an
+        ``AsyncAdaptedConnection`` (e.g. cross-loop dispose via
+        ``engine.dispose()``) would raise ``AttributeError`` —
+        ``AttributeError`` is NOT in ``_TRANSPORT_CLASS_EXCEPTIONS`` so
+        it would escape the ``contextlib.suppress`` and the transport
+        would leak.
+
+        The method delegates straight to :meth:`_force_close_transport`
+        which already encapsulates the sync teardown semantics (the
+        underscore variant remains the in-module call shape because
+        every internal call site and existing test pin references it
+        by that name).
+        """
+        self._force_close_transport()
+
     def terminate(self) -> None:
         """Force-close the underlying connection without rollback.
 

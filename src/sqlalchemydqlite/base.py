@@ -92,7 +92,7 @@ _BARE_DBE_DISCONNECT_CODES: Final[frozenset[int]] = BARE_DATABASE_ERROR_CODES
 # non-transient diagnostics, not slot-fatal conditions. The substring
 # scan in ``is_disconnect``'s ``DatabaseError`` arm is gated on the
 # code being in this set (``applies_substring`` arm), so it does NOT
-# fire for the four uninclueded codes; if a future server release
+# fire for the four excluded codes; if a future server release
 # starts emitting them with a transport-class message, classification
 # falls through to the substring arms on the wrapping
 # ``OperationalError`` / ``InterfaceError`` (the dbapi's

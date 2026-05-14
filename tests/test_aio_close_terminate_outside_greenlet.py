@@ -98,6 +98,32 @@ def test_force_close_transport_falls_back_when_dbapi_hook_missing() -> None:
     adapter._force_close_transport()
 
 
+def test_force_close_transport_missing_hook_logs_teardown_skipped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The missing-hook arm logs ``"transport teardown skipped"`` —
+    a single substring operators can grep when an older dbapi is
+    preventing FD reclamation. Orthogonal to the no-raise pin above:
+    that one guards the contract that the arm absorbs the missing
+    hook; this one guards the audit trail that records the no-op."""
+    import logging
+
+    adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
+    # ``spec=["address"]`` denies every other auto-generated
+    # attribute — models a dbapi built before
+    # ``force_close_transport`` existed.
+    inner = MagicMock(spec=["address"])
+    inner.address = "localhost:9001"
+    adapter._connection = inner
+    caplog.set_level(logging.DEBUG, logger="sqlalchemydqlite.aio")
+    # Must not raise even though no hook exists.
+    adapter._force_close_transport()
+    assert any("transport teardown skipped" in record.getMessage() for record in caplog.records), (
+        f"missing 'transport teardown skipped' substring; "
+        f"got: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
 def test_force_close_transport_logs_sync_fallback_substring(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

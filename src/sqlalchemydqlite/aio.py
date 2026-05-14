@@ -15,8 +15,8 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
 from sqlalchemy.util.concurrency import in_greenlet
 
-from dqlitedbapi import DescriptionTuple
-from dqlitedbapi.exceptions import (
+from dqlitedbapi import (
+    DescriptionTuple,
     InterfaceError,
     NotSupportedError,
     OperationalError,
@@ -556,8 +556,6 @@ class AsyncAdaptedCursor:
         # validate before NotSupportedError so a caller typo surfaces
         # as a caller-side bug. ProgrammingError stays in dbapi.Error.
         if mode not in ("relative", "absolute"):
-            from dqlitedbapi.exceptions import ProgrammingError
-
             raise ProgrammingError(f"scroll mode must be 'relative' or 'absolute', got {mode!r}")
         raise NotSupportedError("dqlite cursors are not scrollable")
 

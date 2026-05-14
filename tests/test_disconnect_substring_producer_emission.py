@@ -32,7 +32,9 @@ from types import ModuleType
 import dqliteclient.cluster
 import dqliteclient.connection
 import dqliteclient.protocol
+import dqlitedbapi.aio.connection
 import dqlitedbapi.connection
+import sqlalchemydqlite.base
 from sqlalchemydqlite.base import DqliteDialect
 
 
@@ -73,6 +75,33 @@ def _emitted_string_literals(mod: ModuleType) -> set[str]:
     return literals
 
 
+def _consumer_substring_literals(mod: ModuleType) -> set[str]:
+    """Return every lower-cased string literal that participates in
+    a ``Compare`` node (e.g. ``"foo" in message``) in the module
+    source. Comments and docstrings are NOT scanned.
+
+    The SA dialect recognises some disconnect substrings via inline
+    ``substring in message`` arms in ``is_disconnect`` rather than
+    via the bulk ``_dqlite_disconnect_messages`` tuple. Those
+    literals sit on either side of a ``Compare`` op (typically
+    ``ast.In``), not inside a ``Raise`` / ``Call``. This helper
+    pulls them out so the consumer-side existence assertion picks
+    up both shapes (tuple entry OR inline compare arm) without
+    falling back to a raw-source scan that would survive a comment-
+    only rename.
+    """
+    file_attr = mod.__file__
+    assert file_attr is not None, f"{mod!r} has no __file__"
+    tree = ast.parse(pathlib.Path(file_attr).read_text())
+    literals: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            for operand in (node.left, *node.comparators):
+                if isinstance(operand, ast.Constant) and isinstance(operand.value, str):
+                    literals.add(operand.value.lower())
+    return literals
+
+
 # Substrings the SA dialect matches against, that originate from
 # first-party producer sites (NOT from CPython / asyncio internals).
 # Keys are the lowercased substring as it appears in the SA tuple;
@@ -88,6 +117,19 @@ _FIRST_PARTY_SUBSTRINGS: dict[str, list[ModuleType]] = {
         dqlitedbapi.connection,
     ],
     "not connected": [dqliteclient.connection],
+    # SA's is_disconnect classifier scans ``InterfaceError`` cause
+    # text for ``"connection invalidated (id="`` to route the
+    # dbapi's cancel-after-invalidate signal to pool invalidation.
+    # Six producer sites emit the matching prefix: two sync (commit
+    # / rollback pre-lock guards in ``dqlitedbapi.connection``) and
+    # four async (commit / rollback pre-lock fast-paths and in-lock
+    # rechecks in ``dqlitedbapi.aio.connection``). A rename on any
+    # of the six silently disables the SA classification — the
+    # pool retains the broken slot and the cycle silently regresses.
+    "connection invalidated (id=": [
+        dqlitedbapi.connection,
+        dqlitedbapi.aio.connection,
+    ],
 }
 
 
@@ -99,11 +141,22 @@ def test_sa_first_party_disconnect_substrings_emitted_by_producers() -> None:
     referencing the old wording does NOT — closing the
     "comment-survives-the-rename" false-negative window of the prior
     raw-source scan."""
-    sa_substrings = DqliteDialect._dqlite_disconnect_messages
+    sa_tuple_substrings = DqliteDialect._dqlite_disconnect_messages
+    # Some recognised substrings live in inline ``is_disconnect``
+    # arms rather than in the bulk tuple (e.g. the
+    # ``InterfaceError`` cause-text scan ``"connection invalidated
+    # (id=" in message`` at base.py:1942). Pull the literals out of
+    # ``Compare`` operands in the SA dialect source so the
+    # consumer-side existence check works for both shapes without
+    # falling back to a raw-source scan.
+    sa_compare_literals = _consumer_substring_literals(sqlalchemydqlite.base)
     for substring, producer_mods in _FIRST_PARTY_SUBSTRINGS.items():
-        assert substring in sa_substrings, (
+        in_tuple = substring in sa_tuple_substrings
+        in_compare = any(substring in lit for lit in sa_compare_literals)
+        assert in_tuple or in_compare, (
             f"SA dialect lost {substring!r} — either restore the entry "
-            f"in _dqlite_disconnect_messages or update this test."
+            f"in _dqlite_disconnect_messages, the inline is_disconnect "
+            f"arm, or update this test."
         )
         emitted: set[str] = set()
         for mod in producer_mods:

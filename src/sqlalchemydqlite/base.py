@@ -1861,12 +1861,13 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # Restrict the substring scan to (a) ``OperationalError`` (the
         # historical surface — wire-decode/transport failures) and (b)
         # bare ``DatabaseError`` with codes 11/24/26 (CORRUPT / FORMAT /
-        # NOTADB) — the codes that motivated the round-2 widening to
-        # ``DatabaseError``. Without the code-restriction on the
-        # DatabaseError branch, a server-supplied user-defined error
-        # message inside an ``IntegrityError`` (e.g. ``RAISE(ABORT,
-        # '...timed out validating peer')``) would match the loose
-        # ``"timed out"`` substring and be classified as a disconnect.
+        # NOTADB) — the codes that motivated widening the classifier
+        # beyond ``OperationalError`` to ``DatabaseError``. Without the
+        # code-restriction on the DatabaseError branch, a server-supplied
+        # user-defined error message inside an ``IntegrityError`` (e.g.
+        # ``RAISE(ABORT, '...timed out validating peer')``) would match
+        # the loose ``"timed out"`` substring and be classified as a
+        # disconnect.
         # SA pool would then invalidate-and-retry — duplicating
         # non-idempotent INSERTs. The code set is hoisted to a module-
         # level frozen constant so a future addition / removal updates

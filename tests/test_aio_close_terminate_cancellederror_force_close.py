@@ -3,14 +3,14 @@ the synchronous ``_force_close_transport`` fallback when an outer
 ``asyncio.CancelledError`` lands on the awaited inner work, and then
 re-raise the cancel.
 
-Round 4 added the same shape on ``MissingGreenlet`` (SA's pool
-finalising a fairy from a non-greenlet context). Round 5 closes the
-parallel gap on the cancellation axis: SA's pool calls ``do_close``
-or ``do_terminate`` from inside an outer ``asyncio.timeout()`` /
-``asyncio.shield`` cancel during ``engine.dispose()``. Without this
-catch, the cancel propagates before the sync fallback runs and the
-underlying writer transport leaks (SA's pool absorbs the cancel as
-``BaseException``).
+The same fallback shape covers ``MissingGreenlet`` (SA's pool
+finalising a fairy from a non-greenlet context). This test closes
+the parallel gap on the cancellation axis: SA's pool calls
+``do_close`` or ``do_terminate`` from inside an outer
+``asyncio.timeout()`` / ``asyncio.shield`` cancel during
+``engine.dispose()``. Without the catch, the cancel propagates
+before the sync fallback runs and the underlying writer transport
+leaks (SA's pool absorbs the cancel as ``BaseException``).
 
 The tests use ``greenlet_spawn`` so the inner ``await_only`` calls
 are valid; the fake connection's awaited methods raise

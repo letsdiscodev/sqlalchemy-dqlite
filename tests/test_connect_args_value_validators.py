@@ -1,11 +1,11 @@
 """Pin: ``connect_args={...}`` per-key values are validated against the
 same per-key validators that the URL-query path enforces.
 
-ISSUE-DT4 closed the unknown-key asymmetry but left the value-range
-asymmetry open: ``_URL_QUERY_ALLOWED`` carries per-key validators
-(e.g. ``close_timeout`` floor 0.01s) that ``_validate_connect_kwargs``
-was not invoking. This test pins that the validator now runs against
-``connect_args`` values too.
+The unknown-key check rejects keys not in ``_URL_QUERY_ALLOWED``;
+the per-key value validators (e.g. ``close_timeout`` floor 0.01s)
+must run on both the URL-query path AND the ``connect_args`` path.
+This test pins the ``connect_args`` value-range arm so a regression
+that bypasses the validators for ``connect_args`` is caught.
 """
 
 from __future__ import annotations

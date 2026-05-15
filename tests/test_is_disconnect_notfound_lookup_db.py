@@ -6,8 +6,9 @@ The orthogonal ``LOOKUP_STMT`` arm of upstream gateway.c emits the
 same primary code (12) but with a different message ("no statement
 with the given id ..."). That arm is a server-side state bug
 rather than a transport flip and must NOT participate in pool
-invalidation — keep the existing InternalError classification from
-done/ISSUE-862 / ISSUE-954 intact.
+invalidation — it keeps the existing ``InternalError`` PEP 249
+classification (the dbapi ``_CODE_TO_EXCEPTION`` maps SQLITE_NOTFOUND
+to ``InternalError``, matching stdlib ``sqlite3``).
 
 The discriminator is therefore substring-based via the wire-side
 ``LEADER_LOST_DB_LOOKUP_SUBSTRING`` constant. Mirrors the parallel
@@ -67,8 +68,7 @@ def test_is_disconnect_does_not_classify_notfound_lookup_stmt(
     """``code=SQLITE_NOTFOUND`` with the orthogonal ``LOOKUP_STMT``
     wording is a server-side state bug, NOT a transport flip. Must
     NOT classify as disconnect — preserves the existing
-    ``InternalError`` PEP 249 mapping settled in
-    done/ISSUE-862 / ISSUE-954."""
+    ``InternalError`` PEP 249 mapping."""
     e = err_class(  # type: ignore[call-arg]
         "no statement with the given id 7",
         code=SQLITE_NOTFOUND,
@@ -82,9 +82,8 @@ def test_is_disconnect_classifies_notfound_lookup_db_via_internalerror_with_chai
 ) -> None:
     """Production-shape end-to-end pin: the dbapi classifier at
     ``cursor.py:_CODE_TO_EXCEPTION`` maps ``SQLITE_NOTFOUND`` (=12) to
-    ``InternalError`` (matching stdlib ``sqlite3``, settled in
-    ``done/ISSUE-862`` / ``done/ISSUE-954``). So a real wire flow
-    produces ``_DBAPIInternalError(code=12)`` with the chained
+    ``InternalError`` (matching stdlib ``sqlite3``). So a real wire
+    flow produces ``_DBAPIInternalError(code=12)`` with the chained
     ``client.OperationalError(code=12)`` as ``__cause__``. SA must
     classify this via the cause-chain walker — not just via the
     direct-isinstance arm exercised by the parametrize above.

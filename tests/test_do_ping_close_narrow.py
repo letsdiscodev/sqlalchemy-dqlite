@@ -7,8 +7,6 @@ every ``Exception`` on ``cursor.close()`` — hiding e.g. a
 nothing to the logs. That is too broad: programming bugs must be
 visible, and legitimate connection-level close failures should leave
 a diagnostic trail.
-
-Peer of ISSUE-297.
 """
 
 from __future__ import annotations

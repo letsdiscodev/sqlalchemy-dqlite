@@ -9,7 +9,7 @@ line and the underlying AsyncConnection leaked. SA's pool does NOT
 re-call close() on failure, so the leak is permanent.
 
 Wrap rollback in ``try/finally`` so close() runs on any rollback
-outcome. Mirror of ISSUE-224 which fixed the inverse leak in connect().
+outcome. Mirror of the inverse leak guarded by the connect() path.
 """
 
 from __future__ import annotations

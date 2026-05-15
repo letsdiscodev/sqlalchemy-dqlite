@@ -1,6 +1,6 @@
 """Pin: ``_DqliteTime.result_processor`` honours ``Time(timezone=...)``,
 mirroring ``_DqliteDateTime.result_processor``'s ``want_timezone``
-branches (the ISSUE-582/583 fixes).
+branches.
 
 - ``Time(timezone=True)`` reading a naive cell attaches UTC so
   downstream aware-vs-aware comparisons don't crash.

@@ -7,8 +7,10 @@ sqlalchemy-utils diagnostics) introspects this hook on the connection
 adapter; without it those tools fall through to a less-informative path
 where the equivalent attribute exists on every other async SA dialect.
 
-Pure introspection parity. Does not change runtime behaviour. The
-relationship to wont-fix ISSUE-1311 is documented in ``aio.py``.
+Pure introspection parity. Does not change runtime behaviour — the
+hand-rolled ``terminate()`` body exists because the SA
+``AsyncAdapt_dbapi_connection`` mixin is incompatible with this
+dialect's adapter shape (the longer rationale lives in ``aio.py``).
 """
 
 from __future__ import annotations

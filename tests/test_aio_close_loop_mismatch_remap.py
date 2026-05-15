@@ -2,10 +2,11 @@
 ``RuntimeError`` through ``_handle_exception`` so SA's
 ``is_disconnect`` (gated on ``DatabaseError``) classifies it.
 
-Round 2 introduced the remap on ``commit/rollback/execute/executemany``
-paths but missed ``close()``. Cross-loop close (e.g., from
-``engine.dispose()`` after the loop closes) would propagate a bare
-``RuntimeError("attached to a different loop")`` past pool teardown.
+The remap covers ``commit`` / ``rollback`` / ``execute`` /
+``executemany`` / ``close``. Cross-loop close (e.g. from
+``engine.dispose()`` after the loop closes) would otherwise
+propagate a bare ``RuntimeError("attached to a different loop")``
+past pool teardown.
 
 Test runs through SA's ``greenlet_spawn`` so ``await_only`` works.
 """

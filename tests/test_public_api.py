@@ -2,8 +2,7 @@
 
 Every public module declares ``__all__`` listing its public names.
 These tests guard against accidental leakage of private helpers and
-against drift in the public-class set. See ISSUE-112 / 131 / 180
-precedents for the policy.
+against drift in the public-class set.
 """
 
 import sqlalchemydqlite

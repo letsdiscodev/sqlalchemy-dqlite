@@ -457,9 +457,9 @@ class TestIsDisconnectTypeDispatch:
         """Defensive fence against future reclassification drift: a stray
         OperationalError carrying a common SQLite code (generic error,
         SQLITE_BUSY, SQLITE_CONSTRAINT, SQLITE_CANTOPEN) must not be
-        misread as a disconnect. Constraint codes in particular now
-        surface as IntegrityError after ISSUE-209, but this test pins
-        the fallback behaviour for any stray OperationalError that
+        misread as a disconnect. Constraint codes normally surface as
+        ``IntegrityError`` via the dbapi classifier; this test pins
+        the fallback behaviour for any stray ``OperationalError`` that
         slips through."""
         dialect = DqliteDialect()
         e = dqliteclient.exceptions.OperationalError("application error", code)

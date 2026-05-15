@@ -2,10 +2,10 @@
 the parent connection's _handle_exception hook, mirroring SA's
 reference AsyncAdapt_aiosqlite_cursor pattern.
 
-ISSUE-587 wired commit/rollback through the hook; the cursor methods
-were left unwired. The hook is the single place to remap driver-layer
-quirks (loop-mismatch RuntimeError, client-layer subclass shape, etc.)
-without editing every execute call site.
+The hook is the single place to remap driver-layer quirks
+(loop-mismatch ``RuntimeError``, client-layer subclass shape, etc.)
+without editing every execute / executemany / commit / rollback call
+site. This test pins that the cursor methods route through it.
 """
 
 from __future__ import annotations

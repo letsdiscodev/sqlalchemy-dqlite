@@ -2,10 +2,10 @@
 loop-mismatch ``RuntimeError`` through ``_handle_exception`` so the
 remap fires regardless of which method tripped it.
 
-Round 2 added the remap on commit/rollback/execute/executemany; Round
-3 closed the ``close()`` gap. Without per-site coverage a future
+The remap covers ``commit`` / ``rollback`` / ``execute`` /
+``executemany`` / ``close``. Without per-site coverage a future
 refactor that splits a call out of the ``try/except BaseException``
-envelope (e.g., adding an early-return fast path or moving the
+envelope (e.g. adding an early-return fast path or moving the
 ``await_only`` inside a helper) silently regresses the classification
 on that path, and SA's pool stops invalidating slots when the wrong
 loop touches them.

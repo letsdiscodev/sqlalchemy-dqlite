@@ -9,8 +9,9 @@ non-disconnect and the pool kept the broken slot.
 ``ClusterPolicyError`` (a ``ClusterError`` subclass) is excluded from
 the disconnect set: policy rejections are deterministic configuration
 errors and classifying them as disconnect would re-enter the retry
-loop against a permanent rejection (see the ISSUE-600 rationale in
-``_call_client``).
+loop against a permanent rejection. The exclusion is enforced at
+``_call_client`` (which wraps ``ClusterPolicyError`` to
+``InterfaceError`` rather than ``OperationalError``).
 """
 
 from __future__ import annotations

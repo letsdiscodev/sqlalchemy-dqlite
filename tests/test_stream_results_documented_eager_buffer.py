@@ -8,11 +8,11 @@ divergence from SA's streaming contract that's a consequence of the
 greenlet-eager-fetch pattern. The sync side has the same eager-fetch
 shape via the underlying dbapi cursor.
 
-ISSUE-DT5 dropped the peak-memory variant of this assertion (SA exposes
-no per-dialect rejection hook; peak memory is hard to assert in a unit
-test). This pin is narrower: the call returns ``len(rows) == N`` and
-no rows are lost, which is the contract a future maintainer wiring up
-true streaming on one side but forgetting the other could break.
+SA exposes no per-dialect rejection hook and peak memory is hard to
+assert in a unit test, so this pin is narrower than a peak-memory
+assertion: the call returns ``len(rows) == N`` and no rows are lost,
+which is the contract a future maintainer wiring up true streaming
+on one side but forgetting the other could break.
 
 Integration test against the cluster on localhost:9001 — exercises the
 real adapter path on a real connection. No grey-box buffer inspection;

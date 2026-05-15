@@ -6,7 +6,7 @@ has no mechanism to weaken isolation — every statement goes through
 Raft consensus. If upstream dqlite ever grows a read-replica or
 snapshot-isolation mode, this test fails loudly and signals that
 ``get_isolation_level`` (and ``get_isolation_level_values``) must
-start introspecting rather than returning a constant. See ISSUE-651.
+start introspecting rather than returning a constant.
 """
 
 from __future__ import annotations

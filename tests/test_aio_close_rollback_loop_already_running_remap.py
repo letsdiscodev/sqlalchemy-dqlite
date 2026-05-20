@@ -34,3 +34,33 @@ async def test_close_remaps_loop_already_running_runtimeerror_to_operational_err
 
     with pytest.raises(OperationalError, match="event loop already running"):
         await greenlet_spawn(adapter.close)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "msg",
+    [
+        "This event loop is ALREADY RUNNING",
+        "LOOP IS ALREADY RUNNING",
+        "this event loop is already running",
+        "loop is Already Running",
+    ],
+)
+async def test_close_remaps_loop_already_running_case_variants(msg: str) -> None:
+    """The remap uses ``msg_lower.find("loop is already running")`` so a
+    CPython capitalisation tweak on the third RuntimeError phrase must
+    NOT silently bypass the remap. Mirror of the case-insensitive pins
+    already in place for the other two substrings (``"different loop"``
+    and ``"event loop is closed"``). Without this coverage the third
+    arm could regress to canonical-case-only and ``engine.dispose()``
+    would propagate a bare RuntimeError past the
+    ``has_terminate=True`` contract."""
+    adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
+    inner = MagicMock()
+    inner.rollback = AsyncMock(side_effect=RuntimeError(msg))
+    inner.close = AsyncMock()
+    inner.address = "localhost:9001"
+    adapter._connection = inner
+
+    with pytest.raises(OperationalError, match="event loop already running"):
+        await greenlet_spawn(adapter.close)

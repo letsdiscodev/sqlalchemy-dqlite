@@ -203,6 +203,37 @@ def _safe_for_log(value: str) -> str:
     return _truncate_for_log(_sanitize_server_text(value))
 
 
+def _log_safe_peer(obj: object) -> str | None:
+    """Return ``obj.address`` rendered safe for line-oriented log
+    output, or ``None`` if the underlying object exposes no address.
+
+    Routes every interpolation of a peer address through the wire-
+    layer ``sanitize_server_text`` discipline (strips C0/C1, U+2028/
+    U+2029, full bidi block, ZW chars, BOM). Defense-in-depth: the
+    client-layer ``parse_address`` gate rejects CRLF / control chars
+    / IDN / credentials-style ``@`` at connection-construction time,
+    so today the per-call sanitization is a no-op on every in-tree
+    code path. The wrap is still load-bearing for two scenarios that
+    bypass the gate:
+
+    1. ``dial_func`` overrides that skip ``parse_address`` and may
+       assign a redirect target post-dial (documented bypass at
+       ``dqliteclient._dial._dial.py``).
+    2. Future refactors that update ``_address`` post-redirect to
+       report the connected leader rather than the seed address —
+       a reasonable extension whose server-supplied bytes would
+       reach the log site without re-validation.
+
+    Mirrors the sibling discipline at ``dqliteclient.connection``'s
+    ``_log_safe_address`` and at every CWE-117-annotated wrap in
+    ``cluster.py`` / ``pool.py``.
+    """
+    addr = getattr(obj, "address", None)
+    if addr is None:
+        return None
+    return _sanitize_server_text(str(addr))
+
+
 __all__ = ["DqliteCompiler", "DqliteDialect"]
 
 _TRUE_TOKENS: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
@@ -2154,7 +2185,7 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         shutdown and a forced finalize must not mask them, mirroring
         the async sibling's stance on ``CancelledError``.
         """
-        peer = getattr(dbapi_connection, "address", None)
+        peer = _log_safe_peer(dbapi_connection)
         try:
             dbapi_connection.force_close_transport()
         except Exception:  # terminate must not raise

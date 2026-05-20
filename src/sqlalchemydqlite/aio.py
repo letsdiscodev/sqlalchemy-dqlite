@@ -25,6 +25,7 @@ from dqlitedbapi import (
 from sqlalchemydqlite.base import (
     _TRANSPORT_CLASS_EXCEPTIONS,
     DqliteDialect,
+    _log_safe_peer,
     _walk_cause_chain,
 )
 
@@ -328,7 +329,7 @@ class AsyncAdaptedCursor:
                     # discipline applied to AsyncAdaptedConnection
                     # close()/terminate() and to the dialect-side
                     # do_ping close arm.
-                    peer = getattr(self._adapt_connection._connection, "address", None)
+                    peer = _log_safe_peer(self._adapt_connection._connection)
                     logger.debug(
                         "AsyncAdaptedCursor.execute (id=%s, peer=%s): "
                         "underlying cursor close raised %s; suppressed",
@@ -414,7 +415,7 @@ class AsyncAdaptedCursor:
                     # bridge needed.
                     cursor.close()
                 except (Exception, asyncio.CancelledError) as exc:
-                    peer = getattr(self._adapt_connection._connection, "address", None)
+                    peer = _log_safe_peer(self._adapt_connection._connection)
                     logger.debug(
                         "AsyncAdaptedCursor.executemany (id=%s, peer=%s): "
                         "underlying cursor close raised %s; suppressed",
@@ -1123,7 +1124,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     # propagating. Include both id(self) and the peer
                     # address so a noisy pool can be correlated to
                     # specific adapter instances and nodes.
-                    peer = getattr(self._connection, "address", None)
+                    peer = _log_safe_peer(self._connection)
                     logger.debug(
                         "AsyncAdaptedConnection.close (id=%s, peer=%s): "
                         "rollback failed (%s); proceeding to close",
@@ -1166,7 +1167,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     # return path. The debug log preserves the
                     # traceback for triage.
                     if "event loop is closed" in msg_lower:
-                        peer = getattr(self._connection, "address", None)
+                        peer = _log_safe_peer(self._connection)
                         logger.debug(
                             "AsyncAdaptedConnection.close (id=%s, peer=%s): "
                             "rollback raised RuntimeError (%s); skipping close",
@@ -1214,7 +1215,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 try:
                     await_only(self._connection.close())
                 except _TRANSPORT_CLASS_EXCEPTIONS as exc:
-                    peer = getattr(self._connection, "address", None)
+                    peer = _log_safe_peer(self._connection)
                     logger.debug(
                         "AsyncAdaptedConnection.close (id=%s, peer=%s): "
                         "close failed (%s); proceeding with teardown",
@@ -1234,7 +1235,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     # dialect-level promise) means close()/dispose
                     # must not propagate failures from this path; the
                     # debug log preserves the traceback for triage.
-                    peer = getattr(self._connection, "address", None)
+                    peer = _log_safe_peer(self._connection)
                     logger.debug(
                         "AsyncAdaptedConnection.close (id=%s, peer=%s): "
                         "close raised RuntimeError (%s); reaped transport "
@@ -1321,7 +1322,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
         """
         peer: object | None = None
         try:
-            peer = getattr(self._connection, "address", None)
+            peer = _log_safe_peer(self._connection)
             hook = getattr(self._connection, "force_close_transport", None)
             if hook is None:
                 # Older dbapi without the force-close hook; nothing
@@ -1425,7 +1426,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
             try:
                 await_only(self._connection.close())
             except _TRANSPORT_CLASS_EXCEPTIONS as exc:
-                peer = getattr(self._connection, "address", None)
+                peer = _log_safe_peer(self._connection)
                 logger.debug(
                     "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "
                     "close failed (%s); teardown complete",
@@ -1443,7 +1444,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # ``has_terminate=True`` promises SA that dispose never
                 # propagates failures from this path; reap the writer
                 # synchronously and stay quiet (DEBUG only).
-                peer = getattr(self._connection, "address", None)
+                peer = _log_safe_peer(self._connection)
                 logger.debug(
                     "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "
                     "close raised RuntimeError (%s); reaped transport "
@@ -1530,7 +1531,7 @@ class DqliteDialect_aio(DqliteDialect):
         contract says cancels must propagate, and an outer cancel
         signalling "abort dispose now" must not be silently swallowed.
         """
-        peer = getattr(dbapi_connection, "address", None)
+        peer = _log_safe_peer(dbapi_connection)
         try:
             dbapi_connection.terminate()
         except Exception:  # terminate must not raise
@@ -1665,7 +1666,7 @@ class DqliteDialect_aio(DqliteDialect):
                 # errors (the ping already ran successfully, so
                 # retiring the slot now would defeat the whole point
                 # of pre-ping) but they are no longer silent.
-                peer = getattr(dbapi_connection._connection, "address", None)
+                peer = _log_safe_peer(dbapi_connection._connection)
                 try:
                     # ``AsyncCursor.close`` is sync — see its
                     # docstring. No await needed.

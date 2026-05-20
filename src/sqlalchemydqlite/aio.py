@@ -1578,6 +1578,19 @@ class DqliteDialect_aio(DqliteDialect):
             if getattr(exc, "code", None) in _BARE_DBE_DISCONNECT_CODES:
                 return False
             raise
+        except RuntimeError:
+            # ``_handle_exception`` remaps three known loop-state
+            # RuntimeError phrasings into ``OperationalError``; any
+            # other RuntimeError (a future Python wording change, an
+            # ``asyncio.get_running_loop`` failure, a ``Task got bad
+            # yield`` shape, ``await_only`` pre-coroutine surfaces)
+            # would otherwise escape ``do_ping`` entirely. SA's
+            # ``_do_ping_w_event`` catches only ``loaded_dbapi.Error``
+            # and would not invalidate the slot. Treat any
+            # RuntimeError on the ping path as slot-fatal — same
+            # posture as the ``OSError`` catch above (transport-class
+            # faults retire the slot).
+            return False
         return True
 
     async def _async_ping(self, dbapi_connection: Any) -> None:

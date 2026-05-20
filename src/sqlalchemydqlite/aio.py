@@ -764,7 +764,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
         gets ``ReferenceError`` — outside the ``dbapi.Error`` umbrella.
         Mirror the closed-state guard added to ``cursor()`` so the
         post-close path raises ``InterfaceError`` cleanly."""
-        if isinstance(self._connection, weakref.ProxyTypes):
+        if type(self._connection) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(self)})")
         return self._connection
 
@@ -776,7 +776,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
         not a ``dbapi.Error`` subclass and bypasses SA's exception
         classifier. Surface ``InterfaceError`` up front so cross-driver
         retry middleware sees a clean ``dbapi.Error``."""
-        if isinstance(self._connection, weakref.ProxyTypes):
+        if type(self._connection) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(self)})")
         return super().run_async(fn)
 
@@ -809,7 +809,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # state via the proxy type check and raise ``InterfaceError``
         # up front, matching the dbapi-layer ``AsyncConnection.cursor``
         # discipline.
-        if isinstance(self._connection, weakref.ProxyTypes):
+        if type(self._connection) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(self)})")
         return AsyncAdaptedCursor(self)
 
@@ -1060,6 +1060,24 @@ class AsyncAdaptedConnection(AdaptedConnection):
             self._handle_exception(error)
 
     def close(self) -> None:
+        # Idempotency short-circuit: after the first close, the inner
+        # ``AsyncConnection`` is swapped for a ``weakref.proxy``. A
+        # second close that tries to call ``self._connection.rollback()``
+        # on a now-GC'd proxy raises ``ReferenceError`` — not a
+        # ``dbapi.Error`` subclass and uncaught by the
+        # ``_TRANSPORT_CLASS_EXCEPTIONS`` arm or
+        # ``_handle_exception``'s narrow remap. The sibling
+        # ``AsyncAdaptedCursor.close()`` carries the same
+        # ``self._closed``-style guard for exactly this reason; the
+        # ``ProxyTypes`` check on ``self._connection`` is its
+        # adapter-level equivalent (no separate flag needed because
+        # ``_release_inner_strong_ref`` already encodes "closed" in
+        # the type of the slot). Stays compatible with PEP 249 §6.1.1's
+        # idempotent-close expectation and matches every modern async
+        # driver (aiosqlite / asyncpg / psycopg3).
+        if type(self._connection) in weakref.ProxyTypes:
+            return
+
         # Preflight on ``in_greenlet()`` matches SA's reference adapter
         # idiom (``connectors/asyncio.py:217-220, 392-415``). Outside a
         # greenlet (GC sweep / atexit / non-greenlet finalize), skip
@@ -1398,6 +1416,12 @@ class AsyncAdaptedConnection(AdaptedConnection):
         the same diagnostic-ring / fixture-pinning concern that
         motivates close()'s swap applies symmetrically here.
         """
+        # Idempotency short-circuit — see ``close()`` for rationale.
+        # SA's pool invalidate path can race ``terminate`` with a
+        # parallel ``close``; the second caller must not raise.
+        if type(self._connection) in weakref.ProxyTypes:
+            return
+
         # Preflight on ``in_greenlet()`` — see ``close()`` for
         # rationale. Non-greenlet finalize paths reap the writer
         # synchronously without paying the ``MissingGreenlet``
@@ -1828,6 +1852,27 @@ class DqliteDialect_aio(DqliteDialect):
             raise
         return AsyncAdaptedConnection(raw_conn, dbapi=self.loaded_dbapi)
 
-    def get_driver_connection(self, connection: Any) -> Any:
-        """Return the underlying driver-level connection."""
-        return connection._connection
+    def get_driver_connection(self, dbapi_connection: Any) -> Any:
+        """Return the underlying driver-level connection.
+
+        Closed-state guard: after ``AsyncAdaptedConnection.close()`` /
+        ``terminate()`` swaps ``connection._connection`` for a
+        ``weakref.proxy``, attribute access on the proxy raises
+        ``ReferenceError`` if the inner has been GC'd — outside the
+        ``dbapi.Error`` umbrella and bypassing SA's
+        ``_handle_dbapi_exception`` classifier. Mirror the
+        proxy-detection guard already on the sibling
+        ``AsyncAdaptedConnection.driver_connection`` / ``run_async`` /
+        ``cursor`` so this dialect-level hook returns through the
+        same ``InterfaceError`` channel.
+
+        Implementation note: use ``type(inner) in ProxyTypes`` rather
+        than ``isinstance(inner, ProxyTypes)`` — ``isinstance`` on a
+        ``weakref.proxy`` whose target has been GC'd can itself raise
+        ``ReferenceError`` because the proxy's ``__class__`` is
+        forwarded to the dead target's class.
+        """
+        inner = dbapi_connection._connection
+        if type(inner) in weakref.ProxyTypes:
+            raise InterfaceError(f"Connection is closed (id={id(dbapi_connection)})")
+        return inner

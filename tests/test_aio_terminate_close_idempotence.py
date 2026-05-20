@@ -37,10 +37,14 @@ async def test_terminate_twice_does_not_raise() -> None:
     await greenlet_spawn(adapter.terminate)
     await greenlet_spawn(adapter.terminate)
 
-    # Both calls reached the underlying close; the inner mock is
-    # idempotent (every AsyncMock() invocation returns its return
-    # value without raising). The pin is "no exception escapes".
-    assert adapter._connection.close.await_count == 2
+    # The pin is "no exception escapes". The first ``terminate`` runs
+    # the inner close and swaps ``self._connection`` for a
+    # ``weakref.proxy``; the second ``terminate`` short-circuits on
+    # the adapter-level idempotency guard (the proxy-state check) and
+    # does NOT reach the inner — the inner could already be dead-
+    # proxied, and calling ``inner.close()`` on a GC'd proxy would
+    # raise ``ReferenceError`` outside the ``dbapi.Error`` umbrella.
+    assert adapter._connection.close.await_count == 1
 
 
 @pytest.mark.asyncio

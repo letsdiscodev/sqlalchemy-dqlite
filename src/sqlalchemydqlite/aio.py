@@ -47,6 +47,47 @@ __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 type _Description = Sequence[DescriptionTuple] | None
 
 
+def _remap_loop_state_runtime_error(error: BaseException) -> None:
+    """Walk the cause/context chain of ``error`` and re-raise any
+    loop-state ``RuntimeError`` / ``ProgrammingError`` as a
+    ``dbapi.OperationalError`` so SA's ``_handle_dbapi_exception``
+    classifier routes it through ``is_disconnect``.
+
+    Returns normally (does NOT raise) if no loop-state shape matches —
+    callers are expected to follow up with their own re-raise so the
+    original exception propagates unchanged.
+
+    Three substring patterns (case-insensitive) and their remapped
+    wording:
+
+    * ``"different loop"`` / ``"different event loop"`` →
+      ``OperationalError("event-loop mismatch: ...")``
+    * ``"event loop is closed"`` → ``OperationalError("event loop closed: ...")``
+    * ``"loop is already running"`` → ``OperationalError("event loop already running: ...")``
+
+    The remapped wording must stay in sync with
+    ``_dqlite_disconnect_messages`` in ``base.py`` so SA's
+    ``is_disconnect`` classifier recognises the slot as fatal.
+
+    Used by ``AsyncAdaptedConnection._handle_exception`` (the canonical
+    site invoked from commit / rollback / execute / executemany /
+    close-rollback) AND by ``DqliteDialect_aio.connect()``'s
+    eager-connect arm where there's no ``AsyncAdaptedConnection`` yet
+    to dispatch through.
+    """
+    for hop in _walk_cause_chain(error):
+        if not isinstance(hop, (RuntimeError, ProgrammingError)):
+            continue
+        msg = str(hop)
+        msg_lower = msg.lower()
+        if "different loop" in msg_lower or "different event loop" in msg_lower:
+            raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
+        if "event loop is closed" in msg_lower:
+            raise OperationalError(f"event loop closed: {msg}", code=None) from error
+        if "loop is already running" in msg_lower:
+            raise OperationalError(f"event loop already running: {msg}", code=None) from error
+
+
 class AsyncAdaptedCursor:
     """Adapts an AsyncCursor for SQLAlchemy's greenlet-based async engine.
 
@@ -1844,7 +1885,22 @@ class DqliteDialect_aio(DqliteDialect):
                 raw_conn = creator_fn(*cargs, **cparams)
             else:
                 raw_conn = self.loaded_dbapi.connect(*cargs, **cparams)
-            await_only(raw_conn.connect())
+            try:
+                await_only(raw_conn.connect())
+            except BaseException as error:
+                # Route eager-connect RuntimeErrors through the same
+                # loop-state remap as every other ``await_only`` site
+                # in this adapter (commit / rollback / execute /
+                # executemany / close-rollback / _async_ping). Without
+                # this, a cross-loop / closed-loop / nested-loop
+                # ``RuntimeError`` leaks past SA's
+                # ``_handle_dbapi_exception`` classifier (gated on
+                # ``dbapi.Error``) so the pool retains the broken
+                # slot and ``engine.dispose()`` re-raises bare. The
+                # connect path was the sole remaining ``await_only``
+                # site without the guard.
+                _remap_loop_state_runtime_error(error)
+                raise  # unreachable when remap matches; preserved otherwise
         except BaseException:
             if raw_conn is not None:
                 with contextlib.suppress(Exception, asyncio.CancelledError):

@@ -68,3 +68,46 @@ def test_floor_case_insensitive_name_matching() -> None:
     for name in ("floor", "FLOOR", "Floor"):
         with pytest.raises(NotSupportedError, match="SQLITE_ENABLE_MATH_FUNCTIONS"):
             str(select(getattr(func, name)(t.c.x)).compile(dialect=DqliteDialect()))
+
+
+def test_floor_inside_compound_expression_still_trips_gate() -> None:
+    """The compiler walks expression trees depth-first; a nested
+    ``floor`` inside ``coalesce`` / ``sum`` / etc. must still trip
+    the gate. A regression that hoists ``floor`` into a wrapper or
+    that adds short-circuit logic skipping nested functions would
+    slip past the top-level-only existing tests."""
+    m = MetaData()
+    t = Table("t", m, Column("x", Integer))
+
+    with pytest.raises(NotSupportedError, match="SQLITE_ENABLE_MATH_FUNCTIONS"):
+        str(select(func.coalesce(func.floor(t.c.x), 0)).compile(dialect=DqliteDialect()))
+
+
+def test_floor_in_where_clause_trips_gate() -> None:
+    """The gate fires at compile time regardless of clause
+    position; the WHERE branch is the most common production form."""
+    m = MetaData()
+    t = Table("t", m, Column("x", Integer))
+
+    stmt = select(t.c.x).where(func.floor(t.c.x) > 0)
+    with pytest.raises(NotSupportedError, match="SQLITE_ENABLE_MATH_FUNCTIONS"):
+        str(stmt.compile(dialect=DqliteDialect()))
+
+
+def test_floor_in_order_by_trips_gate() -> None:
+    """ORDER BY branch coverage — same rationale as WHERE."""
+    m = MetaData()
+    t = Table("t", m, Column("x", Integer))
+
+    stmt = select(t.c.x).order_by(func.floor(t.c.x))
+    with pytest.raises(NotSupportedError, match="SQLITE_ENABLE_MATH_FUNCTIONS"):
+        str(stmt.compile(dialect=DqliteDialect()))
+
+
+def test_floor_zero_args_still_trips_gate_before_arg_validation() -> None:
+    """The gate fires on the function name alone, before SA's
+    argument-resolver runs. A regression moving the gate after
+    arg-validation would surface SA's generic "wrong number of
+    args" error, masking the dqlite-specific guidance."""
+    with pytest.raises(NotSupportedError, match="SQLITE_ENABLE_MATH_FUNCTIONS"):
+        str(select(func.floor()).compile(dialect=DqliteDialect()))

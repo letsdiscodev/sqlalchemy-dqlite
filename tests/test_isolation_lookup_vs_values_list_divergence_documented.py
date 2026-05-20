@@ -47,3 +47,49 @@ def test_values_list_includes_autocommit_for_routing() -> None:
     values = dialect.get_isolation_level_values(MagicMock())
     assert "SERIALIZABLE" in values
     assert "AUTOCOMMIT" in values
+
+
+def test_set_isolation_level_autocommit_raises_dialect_dedicated_message() -> None:
+    """End-to-end semantic pin: when SA's
+    ``_assert_and_set_isolation_level`` validates the level against
+    ``get_isolation_level_values()`` (which includes AUTOCOMMIT) and
+    then forwards to ``set_isolation_level``, the dialect's
+    dedicated rejection message fires — naming the single-leader
+    Raft / SA transaction-model rationale.
+
+    A regression that "aligns the inconsistency" by dropping
+    AUTOCOMMIT from ``get_isolation_level_values()`` would cause
+    SA's generic "Invalid value" validator to fire instead,
+    masking the dialect-specific operator guidance. The negative
+    assertion below catches that scenario."""
+    from sqlalchemy.exc import ArgumentError
+
+    dialect = DqliteDialect.__new__(DqliteDialect)
+    # Confirm AUTOCOMMIT routes through the validator (it's in the values list).
+    advertised = dialect.get_isolation_level_values(MagicMock())
+    assert "AUTOCOMMIT" in advertised, (
+        "AUTOCOMMIT must be advertised so SA's validator does not "
+        "reject it before reaching set_isolation_level"
+    )
+
+    # The dedicated rejection fires with the dqlite-specific rationale.
+    import pytest
+
+    with pytest.raises(ArgumentError) as excinfo:
+        dialect.set_isolation_level(MagicMock(), "AUTOCOMMIT")
+    msg = str(excinfo.value)
+    assert "dqlite" in msg.lower(), (
+        f"AUTOCOMMIT rejection must come from the dialect's "
+        f"_AUTOCOMMIT_REJECTION_MSG (the diagnostic-routing channel "
+        f"the divergence was added for), not SA's generic validator. "
+        f"Got: {msg!r}"
+    )
+    assert "BEGIN" in msg and "COMMIT" in msg, (
+        "Dedicated message must explain the SA-side transaction model"
+    )
+    # Negative: SA's generic validator message must NOT have surfaced.
+    assert "Invalid value" not in msg, (
+        "If SA's generic 'Invalid value for isolation_level' fires, "
+        "AUTOCOMMIT was dropped from get_isolation_level_values() — "
+        "the diagnostic-routing divergence regressed"
+    )

@@ -1726,7 +1726,7 @@ class DqliteDialect_aio(DqliteDialect):
         # ``InterfaceError`` up front so cross-driver retry middleware
         # and SA's ``_handle_dbapi_exception`` see a clean
         # ``dbapi.Error``.
-        if isinstance(dbapi_connection._connection, weakref.ProxyTypes):
+        if type(dbapi_connection._connection) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(dbapi_connection)})")
         try:
             cur = dbapi_connection._connection.cursor()
@@ -1793,7 +1793,7 @@ class DqliteDialect_aio(DqliteDialect):
         if (
             connection is not None
             and isinstance(connection, AsyncAdaptedConnection)
-            and isinstance(connection._connection, weakref.ProxyTypes)
+            and type(connection._connection) in weakref.ProxyTypes
         ):
             return True
         return super().is_disconnect(e, connection, cursor)

@@ -100,3 +100,67 @@ async def test_double_terminate_with_proxied_inner_does_not_raise() -> None:
 
     # Second terminate must not raise.
     await greenlet_spawn(adapter.terminate)
+
+
+class _CallableTargetForProxy:
+    """A callable Python object that ``weakref.proxy`` wraps as
+    ``CallableProxyType``. The callable variant is the one where
+    ``isinstance(dead_proxy, ProxyTypes)`` reliably raises
+    ``ReferenceError`` across Python versions (the non-callable
+    ``ProxyType`` has a fast-path on CPython 3.13+ that does not
+    forward the ``__class__`` lookup)."""
+
+    def __call__(self) -> None:
+        return None
+
+
+def test_isinstance_on_dead_callable_proxy_raises_reference_error() -> None:
+    """Documents *why* the guards use ``type(x) in ProxyTypes``
+    rather than ``isinstance(x, ProxyTypes)``. ``isinstance`` on a
+    dead ``CallableProxyType`` forwards through ``__class__`` and
+    raises ``ReferenceError`` — outside the ``dbapi.Error`` umbrella,
+    bypassing SA's ``_handle_dbapi_exception`` classifier."""
+    target = _CallableTargetForProxy()
+    proxy = weakref.proxy(target)
+    assert isinstance(proxy, weakref.CallableProxyType)
+    # Drop the strong ref + force GC so the proxy target is collected.
+    del target
+    gc.collect()
+
+    # The buggy form raises:
+    with pytest.raises(ReferenceError):
+        isinstance(proxy, weakref.ProxyTypes)
+
+    # The correct form (``type(x) in ProxyTypes``) does not raise —
+    # this is the discriminator the production guards use.
+    assert type(proxy) in weakref.ProxyTypes
+
+
+def test_proxy_guards_use_type_not_isinstance_discriminator() -> None:
+    """Pin the exact discriminator. A regression reverting any
+    guard from ``type(x) in ProxyTypes`` back to ``isinstance(x,
+    ProxyTypes)`` would silently re-introduce the ``ReferenceError``
+    leak on the dead-callable-proxy path. Source-inspection pin
+    against the load-bearing sites."""
+    import inspect
+
+    from sqlalchemydqlite import aio as aio_module
+
+    source = inspect.getsource(aio_module)
+    isinstance_sites = source.count("isinstance(self._connection, weakref.ProxyTypes)")
+    isinstance_neighbour_sites = source.count(
+        "isinstance(connection._connection, weakref.ProxyTypes)"
+    ) + source.count("isinstance(dbapi_connection._connection, weakref.ProxyTypes)")
+    assert isinstance_sites == 0, (
+        "All ``isinstance(self._connection, weakref.ProxyTypes)`` "
+        "guards must use the ``type(...) in ProxyTypes`` form "
+        "instead — see _CallableTargetForProxy test for why."
+    )
+    assert isinstance_neighbour_sites == 0, (
+        "All ``isinstance(<adapter>._connection, weakref.ProxyTypes)`` "
+        "guards must use the ``type(...) in ProxyTypes`` form."
+    )
+    # The correct form must still be present at the load-bearing
+    # sites so the test catches a regression that drops the guard
+    # entirely (not just reverts the form).
+    assert source.count("type(self._connection) in weakref.ProxyTypes") >= 5

@@ -2280,8 +2280,17 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         through the narrowed except so they are not silently
         swallowed into the fallback.
 
-        Mirrors the async-sibling discipline in ``aio.py``'s
-        ``AsyncAdaptedConnection.close``.
+        Happy-path mirrors ``aio.py``'s
+        ``AsyncAdaptedConnection.close`` — both invoke the dbapi's
+        rich (async-native on the aio side) close machinery first.
+        The transport-class fallback leg, however, INTENTIONALLY
+        reaches ``_force_close_transport`` (sync teardown) on BOTH
+        the sync and async dialects: by the time the fallback fires,
+        the async close has already been tried and failed; routing
+        back through async close machinery just to fail again is
+        over-engineering. ``aio.py``'s ``force_close_transport``
+        public alias is the documented sync-teardown surface for
+        exactly this leg.
         """
         try:
             dbapi_connection.close()

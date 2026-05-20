@@ -764,6 +764,42 @@ class DqliteCompiler(SQLiteCompiler):
     def visit_not_regexp_match_op_binary(self, binary: Any, operator: Any, **kw: Any) -> str:
         raise _dbapi_exc.NotSupportedError(self._REGEXP_MATCH_NOT_SUPPORTED_MSG)
 
+    # pysqlite registers a ``floor`` UDF via ``Connection.create_function``
+    # on every connect (see ``pysqlite.py::on_connect``) to paper over
+    # SQLite builds compiled WITHOUT ``SQLITE_ENABLE_MATH_FUNCTIONS``
+    # (the default upstream build flag for SQLite < 3.35). dqlite has
+    # no UDF primitive — the SA dialect's ``on_connect`` is a no-op —
+    # so ``sa.func.floor(col)`` would silently produce ``no such
+    # function: floor`` at runtime on dqlite servers built without
+    # math functions.
+    #
+    # Symmetric with ``visit_regexp_match_op_binary`` above: emit a
+    # ``NotSupportedError`` at compile time naming the SQLite build
+    # dependency so the failure surfaces with a clear diagnostic.
+    # Operators running a dqlite-server with math functions enabled
+    # can subclass ``DqliteCompiler`` and override ``visit_function``
+    # to relax this gate.
+    _FLOOR_NEEDS_MATH_FUNCTIONS_MSG = (
+        "sa.func.floor(...) requires the dqlite-server SQLite build to "
+        "be compiled with SQLITE_ENABLE_MATH_FUNCTIONS. The dqlite "
+        "dialect cannot register the floor UDF the way SQLAlchemy's "
+        "pysqlite dialect does (Connection.create_function) because "
+        "the dqlite wire protocol has no UDF primitive. Use server-"
+        "side CAST (e.g. ``CAST(col AS INTEGER)``) or pre-compute "
+        "client-side."
+    )
+
+    def visit_function(
+        self,
+        func: Any,
+        add_to_result_map: Any = None,
+        **kwargs: Any,
+    ) -> str:
+        name = getattr(func, "name", "")
+        if isinstance(name, str) and name.lower() == "floor":
+            raise _dbapi_exc.NotSupportedError(self._FLOOR_NEEDS_MATH_FUNCTIONS_MSG)
+        return super().visit_function(func, add_to_result_map, **kwargs)
+
 
 class DqliteDialect(SQLiteDialect_pysqlite):
     """SQLAlchemy dialect for dqlite.

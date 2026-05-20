@@ -785,11 +785,14 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # which takes ``server_side: bool = False``. The dialect pins
         # ``supports_server_side_cursors=False`` so SA itself never
         # passes ``server_side=True`` here, but third-party callers
-        # and future SA paths may; raise ``NotImplementedError``
-        # explicitly so misuse surfaces clearly rather than failing
-        # opaquely on an unexpected kwarg.
+        # and future SA paths may; raise ``NotSupportedError`` (a
+        # PEP 249 ``dbapi.Error`` subclass) so the rejection routes
+        # through SA's ``_handle_dbapi_exception`` classifier and
+        # cross-driver ``except dbapi.Error:`` clauses catch it.
+        # Sibling cursor surface (``callproc`` / ``nextset`` /
+        # ``scroll``) follows the same discipline.
         if server_side:
-            raise NotImplementedError(
+            raise NotSupportedError(
                 "Server-side cursors are not supported by the dqlite dialect; "
                 "supports_server_side_cursors is pinned to False."
             )

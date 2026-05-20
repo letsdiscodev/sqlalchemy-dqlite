@@ -7,7 +7,7 @@ were not — the coverage report listed:
 
 - ``driver_connection``: ``return self._connection`` (success branch)
 - ``run_async``: ``return super().run_async(fn)`` (greenlet-bridge passthrough)
-- ``cursor``: ``raise NotImplementedError(...)`` for ``server_side=True``
+- ``cursor``: ``raise NotSupportedError(...)`` for ``server_side=True``
 - ``execute``: ``cur.execute(operation, parameters)`` (params branch)
 
 Without these pins, a refactor to either guard could silently break
@@ -69,12 +69,19 @@ def test_run_async_delegates_to_super_when_open() -> None:
         adapter.run_async(callback)
 
 
-def test_cursor_server_side_true_raises_not_implemented() -> None:
+def test_cursor_server_side_true_raises_not_supported_error() -> None:
     """The dialect pins ``supports_server_side_cursors=False``, so SA
     itself never passes ``server_side=True``. Third-party callers
-    (and future SA paths) might; pin the explicit reject."""
+    (and future SA paths) might; pin the explicit reject as
+    ``NotSupportedError`` (a PEP 249 ``dbapi.Error`` subclass) so the
+    rejection routes through SA's ``_handle_dbapi_exception``
+    classifier and cross-driver ``except dbapi.Error:`` catches it.
+    Matches the discipline of sibling cursor surface (``callproc`` /
+    ``nextset`` / ``scroll`` all raise ``NotSupportedError``)."""
+    from dqlitedbapi.exceptions import NotSupportedError
+
     adapter = _make_adapter()
-    with pytest.raises(NotImplementedError, match="Server-side"):
+    with pytest.raises(NotSupportedError, match="Server-side"):
         adapter.cursor(server_side=True)
 
 

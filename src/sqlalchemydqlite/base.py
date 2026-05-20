@@ -794,6 +794,21 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     * ``is_disconnect`` is a broad classifier walking exception
       cause chains; pysqlite's narrow substring check covers only
       the in-process sqlite3 case.
+
+    **DDL keyword-argument prefix is ``sqlite_*``, NOT ``dqlite_*``**.
+    SA's ``DialectKWArgs`` keys per-construct dialect kwargs by the
+    user-written prefix (the regex on ``<prefix>_<arg>``), so a
+    ``Table(..., dqlite_with_rowid=False)`` stores the value under
+    ``dialect_options['dqlite']``. The inherited
+    ``SQLiteDDLCompiler``, however, reads exclusively from
+    ``dialect_options['sqlite']``. Therefore the ``dqlite_*`` form
+    is silently dropped at compile time; the ``sqlite_*`` form is
+    the one that takes effect.
+
+    Use ``sqlite_with_rowid``, ``sqlite_autoincrement``,
+    ``sqlite_strict``, ``sqlite_on_conflict``, ``sqlite_where``
+    (Index) and ``sqlite_on_conflict_*`` (Column) — see SA's
+    ``SQLiteDialect.construct_arguments`` for the full list.
     """
 
     name = "dqlite"

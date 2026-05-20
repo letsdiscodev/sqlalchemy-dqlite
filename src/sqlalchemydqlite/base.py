@@ -226,9 +226,12 @@ _AUTOCOMMIT_REJECTION_MSG: Final[str] = (
 )
 
 
-def _walk_cause_chain(e: BaseException, max_depth: int = 25) -> Iterator[BaseException]:
+def _walk_cause_chain(
+    e: BaseException, max_depth: int = 25, max_nodes: int = 256
+) -> Iterator[BaseException]:
     """Yield ``e`` and each ``__cause__`` / ``__context__`` /
-    ``BaseExceptionGroup.exceptions`` child up to ``max_depth``.
+    ``BaseExceptionGroup.exceptions`` child up to ``max_depth`` and
+    ``max_nodes``.
 
     The ``visited`` set prevents an infinite loop on pathological
     cycles (``raise X from X`` or a deeply-nested wrap that loops
@@ -261,12 +264,25 @@ def _walk_cause_chain(e: BaseException, max_depth: int = 25) -> Iterator[BaseExc
     group cannot loop. ``max_depth=25`` accommodates retry +
     telemetry + circuit-breaker + group-fanout towers of realistic
     depth without changing the cycle-defence contract.
+
+    ``max_nodes=256`` caps the total number of distinct exceptions
+    visited so a pathological ``BaseExceptionGroup`` with thousands
+    of unique children (constructed by third-party retry middleware
+    or fuzzing) cannot drag every ``is_disconnect`` call into O(N)
+    work in the group size. 256 is ~10× the in-tree ``_bounded_group``
+    cap of 20, which is comfortably above any realistic
+    retry+telemetry+circuit-breaker fan-out. Past the cap, the walker
+    stops cleanly without raising — the classifier sees the first 256
+    nodes (more than enough for any real-world disconnect chain) and
+    treats the remainder as opaque.
     """
     from collections import deque
 
     seen: set[int] = set()
     queue: deque[tuple[BaseException, int]] = deque([(e, 0)])
     while queue:
+        if len(seen) >= max_nodes:
+            return
         cur, depth = queue.popleft()
         if id(cur) in seen or depth >= max_depth:
             continue

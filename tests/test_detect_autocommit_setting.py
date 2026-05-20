@@ -68,6 +68,11 @@ class TestDetectAutocommitSetting:
         # Read the value through an instance so the property descriptor
         # actually fires (as opposed to checking the descriptor itself).
         instance_unused = DqliteSyncConnection.__new__(DqliteSyncConnection)
+        # The ``isolation_level`` getter now raises ``InterfaceError``
+        # on a closed connection (stdlib parity). ``__new__`` skips
+        # ``__init__`` and leaves ``_closed`` unset; set it explicitly
+        # so the probe under test reaches the property body.
+        instance_unused._closed = False
         assert instance_unused.isolation_level is None
 
     def test_async_dbapi_connection_isolation_level_also_returns_none(self) -> None:
@@ -78,6 +83,9 @@ class TestDetectAutocommitSetting:
         )
 
         instance_unused = DqliteAsyncConnection.__new__(DqliteAsyncConnection)
+        # See sync sibling above — closed-state guard requires
+        # ``_closed`` to be initialised before the property fires.
+        instance_unused._closed = False
         assert instance_unused.isolation_level is None
 
     def test_override_remains_load_bearing_against_isolation_level_eq_none(self) -> None:

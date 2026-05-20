@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import ast
 import inspect
+from typing import Any
 
 import sqlalchemydqlite.aio as _aio_mod
 import sqlalchemydqlite.base as _base_mod
 
 
-def _find_raw_address_getattrs(module: object) -> list[tuple[int, str]]:
+def _find_raw_address_getattrs(module: Any) -> list[tuple[int, str]]:
     """Walk a module's AST and return every ``getattr(<x>, "address",
     None)`` call OUTSIDE the ``_log_safe_peer`` helper itself (the
     helper IS the one site that's allowed to dereference the raw

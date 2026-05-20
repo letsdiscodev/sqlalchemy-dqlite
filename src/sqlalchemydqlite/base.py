@@ -1633,9 +1633,26 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         ``initialize()``. Diverges from pysqlite's
         ``_isolation_lookup`` which would ``KeyError`` on None.
         """
-        if level is None or level == "SERIALIZABLE":
+        # Compare case-insensitively. SA's engine flow upper-cases
+        # before dispatching here, so the upper-case form is what
+        # production code delivers — but direct callers (test
+        # harnesses, custom engine implementations, third-party
+        # connect-listener authors) often invoke
+        # ``dialect.set_isolation_level(conn, "serializable")``
+        # straight. The previous case-sensitive comparison fell
+        # through such inputs to the generic rejection message, which
+        # is confusing because the value only differs in case.
+        if level is None:
             return
-        if level == "AUTOCOMMIT":
+        if not isinstance(level, str):
+            raise ArgumentError(
+                f"dqlite only supports SERIALIZABLE isolation; requested level "
+                f"{level!r} is not a string."
+            )
+        normalised = level.upper()
+        if normalised == "SERIALIZABLE":
+            return
+        if normalised == "AUTOCOMMIT":
             raise ArgumentError(_AUTOCOMMIT_REJECTION_MSG)
         raise ArgumentError(
             f"dqlite only supports SERIALIZABLE isolation; requested level "

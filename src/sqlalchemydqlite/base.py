@@ -610,8 +610,9 @@ class _DqliteTime(sqltypes.Time):
                 # ``"YYYY-MM-DD HH:MM:SS"`` ISO string into
                 # ``datetime.datetime``. If such a payload lands in a
                 # ``Time`` column, narrow via ``.time()`` — sibling
-                # parity with ``_DqliteDate``'s ``datetime -> date``
-                # narrowing at line ~284. The date component is
+                # parity with ``_DqliteDate.result_processor``'s
+                # ``datetime -> date`` narrowing (the ``value.date()``
+                # branch). The date component is
                 # silently dropped (mirroring ``_DqliteDate``'s
                 # documented "tzinfo is dropped" decision); ``Time``
                 # has no date dimension to preserve. ``isinstance``
@@ -1423,8 +1424,9 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         documented 0.01s floor.
         """
         # Surface the dedicated AUTOCOMMIT rejection on the
-        # connect_args path, matching the engine-level rejection at
-        # __init__ (line 1035-1037) that fires for
+        # connect_args path, matching the engine-level rejection in
+        # ``__init__`` (the ``iso_level.upper() == "AUTOCOMMIT"``
+        # branch) that fires for
         # ``create_engine(..., isolation_level="AUTOCOMMIT")``. Without
         # this special-case, the rejection still happens via the
         # allowlist below, but with a generic "Unknown dqlite connect

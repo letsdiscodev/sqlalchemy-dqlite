@@ -314,8 +314,9 @@ def _dqlite_run_reap_dbs(url: str | sa_url.URL, idents: list[str]) -> None:
         # route to the async dialect that requires
         # ``create_async_engine``. The sync rewrite via the
         # ``"dqlitedbapi"`` driver token resolves to the bare
-        # ``"dqlite"`` drivername (``_format_url`` line 128 maps
-        # both ``"dqlite"`` and ``"dqlitedbapi"`` to the bare form).
+        # ``"dqlite"`` drivername (``_format_url``'s
+        # ``driver in ("dqlite", "dqlitedbapi")`` branch maps
+        # both to the bare form).
         follower_url = _format_url(parsed, "dqlitedbapi", ident)
         try:
             eng = create_engine(follower_url)

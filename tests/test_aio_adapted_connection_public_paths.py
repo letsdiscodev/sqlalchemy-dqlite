@@ -5,10 +5,10 @@ The closed-state guards on ``driver_connection``, ``run_async``, and
 ``weakref.proxy`` arm. Their *success* paths (return after the guard)
 were not — the coverage report listed:
 
-- ``aio.py:737``  ``return self._connection``       (driver_connection success)
-- ``aio.py:749``  ``return super().run_async(fn)``  (run_async success)
-- ``aio.py:761``  ``raise NotImplementedError(...)``(cursor server_side reject)
-- ``aio.py:805``  ``cur.execute(operation, parameters)`` (execute params branch)
+- ``driver_connection``: ``return self._connection`` (success branch)
+- ``run_async``: ``return super().run_async(fn)`` (greenlet-bridge passthrough)
+- ``cursor``: ``raise NotImplementedError(...)`` for ``server_side=True``
+- ``execute``: ``cur.execute(operation, parameters)`` (params branch)
 
 Without these pins, a refactor to either guard could silently break
 the success path and leave only an integration-test signal. They are

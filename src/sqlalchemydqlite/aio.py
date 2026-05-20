@@ -1601,8 +1601,10 @@ class DqliteDialect_aio(DqliteDialect):
         """Async leg of ``do_ping``: open a cursor, run ``SELECT 1``,
         fetch one row, close. ``cursor()`` on the dbapi
         ``AsyncConnection`` is synchronous (returns an ``AsyncCursor``);
-        ``execute`` / ``fetchone`` / ``close`` on the cursor are
-        coroutines.
+        ``execute`` / ``fetchone`` on the cursor are coroutines;
+        ``close`` is synchronous by design (see ``AsyncCursor.close``
+        docstring — sync to surface forgot-await as a sharp error
+        rather than a silent no-op).
 
         Route any ``RuntimeError`` through the adapter's
         ``_handle_exception`` so loop-state shapes (different-loop,
@@ -1624,9 +1626,9 @@ class DqliteDialect_aio(DqliteDialect):
         ``(RuntimeError, ProgrammingError)`` to preserve the
         ping-failure / slot-invalidation chain.
         """
-        # Closed-state guard mirroring ``AsyncAdaptedConnection.cursor``
-        # at line ~723: ``close()`` replaces ``self._connection`` with
-        # ``weakref.proxy(...)``. Reaching into ``_connection.cursor()``
+        # Closed-state guard mirroring ``AsyncAdaptedConnection.cursor``'s
+        # closed-state guard: ``close()`` replaces ``self._connection``
+        # with ``weakref.proxy(...)``. Reaching into ``_connection.cursor()``
         # directly would surface ``ReferenceError`` if the proxied
         # inner has been GC'd — not a ``dbapi.Error`` subclass and
         # would escape the outer ``do_ping`` classifier

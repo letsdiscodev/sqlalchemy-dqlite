@@ -51,3 +51,53 @@ def test_cursor_method_uses_cursor_cls_hook() -> None:
     assert type(cur) is _MyCursor, (
         f"cursor() must instantiate via _cursor_cls hook; got {type(cur).__name__}"
     )
+
+
+def test_cursor_hook_subclass_still_rejects_server_side() -> None:
+    """A subclass overriding ``_cursor_cls`` must NOT bypass the
+    ``server_side=True`` rejection — the reject sits ABOVE the hook
+    in ``cursor()``'s body so the dialect's
+    ``supports_server_side_cursors=False`` pin survives the swap. A
+    regression routing ``server_side`` through the hook (letting the
+    cursor class decide) would silently let a third-party subclass
+    with a real server-side cursor succeed."""
+    import pytest
+
+    from dqlitedbapi.exceptions import NotSupportedError
+
+    class _MyCursor(AsyncAdaptedCursor):
+        pass
+
+    class _MyAdapter(AsyncAdaptedConnection):
+        _cursor_cls = _MyCursor
+
+    adapter = _MyAdapter.__new__(_MyAdapter)
+    adapter._connection = MagicMock()
+
+    with pytest.raises(NotSupportedError, match="Server-side"):
+        adapter.cursor(server_side=True)
+
+
+def test_cursor_hook_subclass_still_rejects_post_close() -> None:
+    """The closed-state guard (proxy-type detection) must fire BEFORE
+    ``self._cursor_cls(self)`` so a subclass swap can't expose a
+    fresh cursor over a dead-proxied connection. Mirror of the
+    server_side-reject pin above."""
+    import weakref
+
+    import pytest
+
+    from dqlitedbapi.exceptions import InterfaceError
+
+    class _MyCursor(AsyncAdaptedCursor):
+        pass
+
+    class _MyAdapter(AsyncAdaptedConnection):
+        _cursor_cls = _MyCursor
+
+    adapter = _MyAdapter.__new__(_MyAdapter)
+    target = type("Inner", (), {})()
+    adapter._connection = weakref.proxy(target)  # alive proxy state
+
+    with pytest.raises(InterfaceError, match="Connection is closed"):
+        adapter.cursor()

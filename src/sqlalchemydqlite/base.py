@@ -1834,6 +1834,20 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # Errors propagate unwrapped — SA's Connection._begin_impl wraps the
     # call in _handle_dbapi_exception, so is_disconnect classification
     # and pool-invalidation kick in for transport-level BEGIN failures.
+    #
+    # **Asymmetric with the SAVEPOINT family**: ``do_savepoint`` /
+    # ``do_release_savepoint`` / ``do_rollback_to_savepoint`` are
+    # inherited from ``DefaultDialect`` and route through SA's
+    # ``connection.execute(SavepointClause(name))`` pipeline rather
+    # than the bespoke raw-cursor shape used here. The pipeline path
+    # is correct for the SAVEPOINT case — SA's
+    # ``_handle_dbapi_exception`` already wraps any raised exception
+    # through ``is_disconnect`` classification before SA propagates,
+    # so the close-after-BEGIN-exception-preservation discipline
+    # this method enforces is not needed there (SA's pipeline never
+    # has a separate close step that could mask the dbapi-raised
+    # exception). The asymmetry is intentional; do NOT mirror this
+    # raw-cursor shape to the savepoint family.
     def do_begin(self, dbapi_connection: DBAPIConnection) -> None:
         cursor = dbapi_connection.cursor()
         try:

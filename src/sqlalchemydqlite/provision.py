@@ -76,11 +76,22 @@ from dqlitewire import sanitize_for_log as _sanitize_for_log
 # unique token at URL-rewrite time so each pytest run gets a fresh,
 # empty database namespace on the cluster.
 #
-# Token shape: ``sa_<pid>_<monotonic-ns>`` — bounded length, safe
-# across the dbapi/URL/wire layers (no path separators, no ``@``, no
-# whitespace), and sufficiently unique for parallel pytest runs that
-# share a cluster fixture. Module-level so the value is stable across
-# every URL rewrite within a single pytest session.
+# Token shape: ``sa_<importing-process-pid>_<monotonic-ns>`` — bounded
+# length, safe across the dbapi/URL/wire layers (no path separators,
+# no ``@``, no whitespace), and sufficiently unique for parallel
+# pytest runs that share a cluster fixture. Module-level so the value
+# is stable across every URL rewrite within a single pytest session.
+#
+# **Fork note.** Under fork-based ``pytest-xdist`` (or any
+# ``multiprocessing.fork`` context), worker processes inherit the
+# token verbatim — the ``<pid>`` component embeds the IMPORTING
+# process's pid, which is the xdist controller's, not the worker's.
+# Per-worker uniqueness is provided by :func:`_format_url`'s
+# ``ident`` suffix (e.g. ``gw0`` / ``gw1``); the pid is defensive
+# overprovisioning, not the primary isolation token. No
+# ``os.register_at_fork`` refresh hook is registered because the
+# existing ``_SESSION_TOKEN in database`` idempotence check below
+# relies on cross-process URL passthrough remaining stable.
 _SESSION_TOKEN: Final[str] = f"sa_{os.getpid()}_{time.monotonic_ns()}"
 
 # The SA testing API documents ``log`` / ``logger`` as the canonical

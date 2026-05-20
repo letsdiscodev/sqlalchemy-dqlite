@@ -1336,6 +1336,8 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             "max_continuation_frames",
             "trust_server_heartbeat",
             "close_timeout",
+            "dial_timeout",
+            "attempt_timeout",
         }
     )
 
@@ -1395,6 +1397,29 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # contract (URL-time errors surface as ``ArgumentError``) is
         # preserved.
         "close_timeout": (float, _validate_close_timeout_url),
+        # go-dqlite parity knobs: dial_timeout / attempt_timeout
+        # mirror Config.DialTimeout / Config.AttemptTimeout on the
+        # client layer. Reuse the same float-positive-finite shape
+        # as ``timeout`` — neither knob gates FIN-flush, so the
+        # 0.01s close_timeout floor's rationale does not apply.
+        "dial_timeout": (
+            float,
+            lambda v: (
+                not isinstance(v, bool)
+                and isinstance(v, int | float)
+                and math.isfinite(v)
+                and v > 0
+            ),
+        ),
+        "attempt_timeout": (
+            float,
+            lambda v: (
+                not isinstance(v, bool)
+                and isinstance(v, int | float)
+                and math.isfinite(v)
+                and v > 0
+            ),
+        ),
     }
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:

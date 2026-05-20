@@ -318,7 +318,9 @@ class AsyncAdaptedCursor:
                 # ``contextlib.suppress`` docs call out ``BaseException``
                 # here as an anti-pattern for exactly this reason.
                 try:
-                    await_only(cursor.close())
+                    # ``AsyncCursor.close`` is sync; no ``await_only``
+                    # bridge needed.
+                    cursor.close()
                 except (Exception, asyncio.CancelledError) as exc:
                     # DEBUG-log the suppressed close failure so a
                     # flapping leader (close fails repeatedly post-
@@ -408,7 +410,9 @@ class AsyncAdaptedCursor:
                 # above — see the rationale there. Keeps KI / SystemExit
                 # propagating while still covering greenlet cancellation.
                 try:
-                    await_only(cursor.close())
+                    # ``AsyncCursor.close`` is sync; no ``await_only``
+                    # bridge needed.
+                    cursor.close()
                 except (Exception, asyncio.CancelledError) as exc:
                     peer = getattr(self._adapt_connection._connection, "address", None)
                     logger.debug(
@@ -1658,7 +1662,9 @@ class DqliteDialect_aio(DqliteDialect):
                 # of pre-ping) but they are no longer silent.
                 peer = getattr(dbapi_connection._connection, "address", None)
                 try:
-                    await cur.close()
+                    # ``AsyncCursor.close`` is sync — see its
+                    # docstring. No await needed.
+                    cur.close()
                 except (Exception, asyncio.CancelledError) as exc:
                     logger.debug(
                         "_async_ping cursor close (id=%s, peer=%s): %s; suppressed",

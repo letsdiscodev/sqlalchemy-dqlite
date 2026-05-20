@@ -46,7 +46,7 @@ class _FakeAsyncCursor:
         self.rowcount = -1
         self.lastrowid: int | None = None
         self._raise = raise_on_executemany
-        self.close = AsyncMock()
+        self.close = MagicMock()
         self.fetchall = AsyncMock(return_value=[])
 
     async def executemany(
@@ -118,4 +118,4 @@ class TestAsyncExecutemanyLeaderFlipResetState:
         assert cur.lastrowid == 42
         assert cur._rows == deque()
         # Cursor was closed in the finally block.
-        underlying.close.assert_awaited_once()
+        underlying.close.assert_called_once()

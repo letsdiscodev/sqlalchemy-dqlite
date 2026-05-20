@@ -31,7 +31,7 @@ async def test_do_ping_select_1_returns_true_on_healthy_connection() -> None:
     cursor = MagicMock()
     cursor.execute = AsyncMock()
     cursor.fetchone = AsyncMock(return_value=(1,))
-    cursor.close = AsyncMock()
+    cursor.close = MagicMock()
 
     inner_conn = MagicMock()
     inner_conn.cursor = MagicMock(return_value=cursor)
@@ -43,7 +43,7 @@ async def test_do_ping_select_1_returns_true_on_healthy_connection() -> None:
     assert result is True
     cursor.execute.assert_awaited_once_with("SELECT 1")
     cursor.fetchone.assert_awaited_once()
-    cursor.close.assert_awaited_once()
+    cursor.close.assert_called_once()
 
 
 async def test_do_ping_returns_false_on_loop_state_runtime_error() -> None:
@@ -55,7 +55,7 @@ async def test_do_ping_returns_false_on_loop_state_runtime_error() -> None:
 
     cursor = MagicMock()
     cursor.execute = AsyncMock(side_effect=RuntimeError("got Future attached to a different loop"))
-    cursor.close = AsyncMock()
+    cursor.close = MagicMock()
 
     inner_conn = MagicMock()
     inner_conn.cursor = MagicMock(return_value=cursor)
@@ -82,7 +82,7 @@ async def test_do_ping_returns_false_on_operational_error() -> None:
 
     cursor = MagicMock()
     cursor.execute = AsyncMock(side_effect=DbapiOperationalError("connection lost"))
-    cursor.close = AsyncMock()
+    cursor.close = MagicMock()
 
     inner_conn = MagicMock()
     inner_conn.cursor = MagicMock(return_value=cursor)

@@ -83,7 +83,7 @@ async def test_async_ping_cancel_mid_execute_runs_close_in_finally() -> None:
         # Block forever — caller cancels the task.
         await asyncio.Event().wait()
 
-    async def _close() -> None:
+    def _close() -> None:
         close_called.append(True)
 
     cursor.execute = _execute
@@ -133,7 +133,7 @@ async def test_async_ping_close_cancellederror_absorbed_and_logged(
     async def _fetchone() -> Any:
         return (1,)
 
-    async def _close() -> None:
+    def _close() -> None:
         close_called.append(True)
         raise asyncio.CancelledError
 
@@ -178,7 +178,7 @@ async def test_async_ping_close_exception_during_normal_path_is_swallowed() -> N
     async def _fetchone() -> Any:
         return (1,)
 
-    async def _close() -> None:
+    def _close() -> None:
         raise RuntimeError("close failed")
 
     cursor.execute = _execute
@@ -219,7 +219,7 @@ async def test_async_ping_close_dbapi_error_is_logged_not_silent(
     async def _fetchone() -> Any:
         return (1,)
 
-    async def _close() -> None:
+    def _close() -> None:
         raise OperationalError("CORRUPT: leader flip mid-close", code=11)
 
     cursor.execute = _execute

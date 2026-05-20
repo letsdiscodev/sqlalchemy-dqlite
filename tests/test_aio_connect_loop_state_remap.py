@@ -66,6 +66,34 @@ async def test_connect_remaps_loop_state_runtime_error_to_operational_error(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "msg, expected_substring",
+    [
+        ("AsyncConnection used from a different event loop", "event-loop mismatch"),
+        ("This event loop is closed (id=42)", "event loop closed"),
+    ],
+)
+async def test_connect_remaps_loop_state_programming_error_to_operational_error(
+    msg: str, expected_substring: str
+) -> None:
+    """The dbapi-layer ``AsyncConnection`` raises ``ProgrammingError``
+    (not ``RuntimeError``) on cross-loop reuse. The helper's filter
+    ``isinstance(hop, (RuntimeError, ProgrammingError))`` exists
+    precisely to catch this. Symmetric with the ``_handle_exception``
+    site's ProgrammingError coverage in
+    ``test_async_handle_exception_cause_walk.py``."""
+    from dqlitedbapi.exceptions import ProgrammingError as _DbapiProgrammingError
+
+    dialect = _make_dialect_with_inner(_DbapiProgrammingError(msg))
+
+    def _do_connect() -> Any:
+        return dialect.connect(host="ignored", port=9001)
+
+    with pytest.raises(OperationalError, match=expected_substring):
+        await greenlet_spawn(_do_connect)
+
+
+@pytest.mark.asyncio
 async def test_connect_does_not_remap_unrelated_runtime_error() -> None:
     """A RuntimeError without any loop-state substring must propagate
     bare (matching prior behavior for the non-load-bearing path)."""

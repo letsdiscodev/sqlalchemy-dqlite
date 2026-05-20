@@ -805,6 +805,29 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     is silently dropped at compile time; the ``sqlite_*`` form is
     the one that takes effect.
 
+    **Isolation levels**: only ``SERIALIZABLE`` is honoured (dqlite
+    is single-leader Raft, so every commit is serialised). Two
+    discoverable surfaces deliberately diverge:
+
+    * ``_isolation_lookup`` is the *truthful* set — ``{"SERIALIZABLE":
+      0}``. Third-party introspection consulting this private
+      attribute (e.g. SA-internal paths that bypass the values-list,
+      future refactors) sees only the level actually honoured.
+    * ``get_isolation_level_values()`` returns ``["SERIALIZABLE",
+      "AUTOCOMMIT"]``. ``AUTOCOMMIT`` is advertised as a *diagnostic-
+      routing channel*: SA's ``_assert_and_set_isolation_level``
+      validates against the values-list, accepts ``AUTOCOMMIT``,
+      forwards to ``set_isolation_level``, which then raises the
+      dedicated ``_AUTOCOMMIT_REJECTION_MSG``. Without that
+      advertisement, SA's generic "unknown isolation level" rejection
+      would fire BEFORE our dedicated message, hiding the
+      dqlite-specific guidance.
+
+    Third-party code performing isolation-level introspection should
+    consult ``_isolation_lookup.keys()`` for the truthful set;
+    ``AUTOCOMMIT`` from ``get_isolation_level_values()`` is a
+    rejection-channel marker, not an accepted level.
+
     Use ``sqlite_with_rowid``, ``sqlite_autoincrement``,
     ``sqlite_strict``, ``sqlite_on_conflict``, ``sqlite_where``
     (Index) and ``sqlite_on_conflict_*`` (Column) — see SA's

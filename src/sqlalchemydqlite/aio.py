@@ -7,7 +7,7 @@ import types
 import weakref
 from collections import deque
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any, NoReturn, Self
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn, Self
 
 from sqlalchemy import pool
 from sqlalchemy.engine import URL, AdaptedConnection
@@ -734,6 +734,21 @@ class AsyncAdaptedConnection(AdaptedConnection):
     # extension points.
     await_ = staticmethod(await_only)
 
+    # Class-level cursor-class hooks mirror SA's reference
+    # ``AsyncAdapt_dbapi_connection._cursor_cls`` /
+    # ``_ss_cursor_cls`` (sqlalchemy/connectors/asyncio.py:336-337).
+    # SA dialect subclasses (asyncpg pattern) swap the cursor class
+    # by overriding these attributes at class scope without
+    # re-implementing ``cursor()``. ``_ss_cursor_cls`` is
+    # intentionally aliased to ``AsyncAdaptedCursor`` because the
+    # dialect pins ``supports_server_side_cursors=False`` —
+    # ``cursor(server_side=True)`` short-circuits on
+    # ``NotSupportedError`` before instantiation, so this attribute
+    # is provided for SA-introspection parity rather than for
+    # construction.
+    _cursor_cls: ClassVar[type] = AsyncAdaptedCursor
+    _ss_cursor_cls: ClassVar[type] = AsyncAdaptedCursor
+
     @staticmethod
     def _terminate_handled_exceptions() -> tuple[type[BaseException], ...]:
         """Introspection parity with SA's reference at
@@ -852,7 +867,12 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # discipline.
         if type(self._connection) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(self)})")
-        return AsyncAdaptedCursor(self)
+        # Read the cursor class from the class-level hook so dialect
+        # subclasses can swap ``AsyncAdaptedCursor`` without overriding
+        # ``cursor()``. Matches SA's reference connector pattern at
+        # ``sqlalchemy/connectors/asyncio.py:347-352``.
+        cursor: AsyncAdaptedCursor = self._cursor_cls(self)
+        return cursor
 
     def execute(
         self,

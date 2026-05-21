@@ -42,6 +42,16 @@ if TYPE_CHECKING:
 
 __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 
+# Module-private sentinel used by ``AsyncAdaptedConnection.__init__``
+# to discriminate "second positional omitted" from "second positional
+# explicitly passed as ``None``" — the two inputs that the earlier
+# ``connection is None`` discriminator conflated. The annotation
+# surface on the parameter still presents
+# ``connection: AsyncConnection | None = None`` to IDE / type
+# tooling; the runtime default is ``_UNSET`` and the body branches
+# on identity to ``_UNSET``. See the docstring on the constructor.
+_UNSET: Any = object()
+
 # PEP 249 specifies ``cursor.description`` as a sequence of sequences —
 # a ``list[tuple]`` is the canonical shape but a strict type alias of
 # ``list`` would reject a dbapi cursor that returns a tuple-of-tuples
@@ -851,7 +861,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
     def __init__(
         self,
         dbapi: Any,
-        connection: "AsyncConnection | None" = None,
+        connection: "AsyncConnection | None" = _UNSET,
     ) -> None:
         # Signature mirrors SA's reference connector
         # (``sqlalchemy.connectors.asyncio.AsyncAdapt_dbapi_connection``
@@ -870,10 +880,19 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # positional connection may still exist. The contract: SA's
         # reference shape always passes BOTH positional args. The
         # legacy single-positional shape is ``(connection,)`` only.
-        # Detect by ``connection is None`` — i.e. the second positional
-        # was not supplied — and treat the first positional as the
-        # connection in that case.
-        if connection is None:
+        #
+        # Discriminate "second positional omitted" from "second
+        # positional explicitly passed as ``None``" via the
+        # module-private ``_UNSET`` sentinel — distinct from the
+        # plain-``None`` annotation surface so IDE auto-complete
+        # still reports the parameter as ``connection: AsyncConnection
+        # | None = None``. ``connection is _UNSET`` selects the
+        # legacy branch; an explicit ``connection=None`` (caller
+        # wants the module bound but the inner connection deferred)
+        # selects the SA-reference branch with ``_connection = None``,
+        # not the dbapi module misassigned to ``_connection`` (the
+        # earlier ``connection is None`` trap).
+        if connection is _UNSET:
             # Legacy single-positional construction:
             # ``AsyncAdaptedConnection(raw_conn)``.
             inner_conn: Any = dbapi

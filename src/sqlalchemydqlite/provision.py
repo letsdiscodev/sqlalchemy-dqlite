@@ -43,6 +43,7 @@ the test fixture's docker-compose. So:
 
 import logging
 import os
+import re
 import time
 from typing import Any, Final
 
@@ -126,6 +127,45 @@ logger = logging.getLogger(__name__)
 _DRIVERNAMES: Final[frozenset[str]] = frozenset({"dqlite", "dqlitedbapi", "aio"})
 
 
+# Characters scrubbed from the follower ident before it is appended to
+# the database name. The earlier strip only handled ``/`` and ``@`` —
+# the surrounding narrative comment at the call site promised ``@`` /
+# path-separators / control chars, which the two-character strip did
+# not deliver. Widen the scrub to match the documented intent:
+#
+# * ``@`` and ``/`` — the original two; userinfo and unix path-
+#   separator interpretation by intermediate URL parsers and the
+#   server's database-name field.
+# * ``\\`` — windows path-separator; the comment's "path-separators"
+#   plural was load-bearing.
+# * C0 control chars (``\\x00``..``\\x1f``) — split log records that
+#   echo the URL (CWE-117 log-record-splitting), late-reject at the
+#   wire's ``encode_text`` for NUL with an obscure error far from the
+#   ident source, and route TAB as a TSV-encoded column separator in
+#   structured loggers.
+# * U+2028 / U+2029 — LINE SEPARATOR / PARAGRAPH SEPARATOR; treated
+#   as LF-equivalent by journald and many JSON log encoders.
+#
+# Other characters (alphanumerics, dots, dashes, underscores, ...)
+# survive verbatim. This is NOT a strict ``[A-Za-z0-9_]`` allowlist:
+# legitimate idents with version suffixes (``gw0.1``) or hyphens
+# stay readable, the scrub is scoped to characters the comment
+# enumerates as cross-layer hazards.
+_IDENT_SCRUB_RE: Final[re.Pattern[str]] = re.compile(r"[@/\\\x00-\x1f  ]")
+
+
+def _sanitise_ident(ident: str) -> str:
+    """Replace each ``@`` / path-separator / control-char / line-
+    separator code point in ``ident`` with ``_``.
+
+    Shared by both arms of ``_format_url`` so the already-suffixed
+    branch and the fresh-suffix branch carry the same policy. The
+    scrub is conservative (replace-only, no allowlist) so legitimate
+    custom idents with dots / hyphens survive.
+    """
+    return _IDENT_SCRUB_RE.sub("_", ident)
+
+
 def _format_url(url: sa_url.URL, driver: str | None, ident: str | None) -> sa_url.URL:
     """Rewrite ``url`` for a specific test driver and follower ident.
 
@@ -167,17 +207,20 @@ def _format_url(url: sa_url.URL, driver: str | None, ident: str | None) -> sa_ur
         # Prior pass already attached the session token. Append the
         # follower ident only.
         if ident:
-            ident_clean = ident.replace("/", "_").replace("@", "_")
+            ident_clean = _sanitise_ident(ident)
             ident_suffix = f"_{ident_clean}"
             if not database.endswith(ident_suffix):
                 database = f"{database}{ident_suffix}"
     else:
         suffix = _SESSION_TOKEN
         if ident:
-            # Avoid ``@`` / path-separators / control chars so the
-            # resulting name parses cleanly across the dbapi/URL/wire
-            # layers.
-            ident_clean = ident.replace("/", "_").replace("@", "_")
+            # Scrub ``@`` / path-separators / control chars / line-
+            # separators so the resulting name parses cleanly across
+            # the dbapi / URL / wire layers (CWE-117 log-record-
+            # splitting via control chars, defense-in-depth against
+            # unusual fixture configs). See ``_sanitise_ident`` for
+            # the full character list and rationale.
+            ident_clean = _sanitise_ident(ident)
             suffix = f"{suffix}_{ident_clean}"
         database = f"{database}_{suffix}"
 

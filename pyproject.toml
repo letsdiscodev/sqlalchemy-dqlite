@@ -83,6 +83,15 @@ asyncio_default_fixture_loop_scope = "function"
 # (--dburi etc.) the project-wide test runner does not pass. Run the
 # suite explicitly with ``pytest tests/compliance/``.
 addopts = ["--ignore=tests/compliance"]
+filterwarnings = [
+    # Promote deprecations to errors so the suite catches stdlib
+    # deprecation surface under the CPython version the workspace
+    # already runs CI on (3.13/3.14). Whitelist genuine third-party
+    # noise with explicit ``ignore:<pattern>:DeprecationWarning:<module>``
+    # entries below, with a comment explaining the upstream tracker.
+    "error::DeprecationWarning",
+    "error::PendingDeprecationWarning",
+]
 
 [tool.mypy]
 strict = true

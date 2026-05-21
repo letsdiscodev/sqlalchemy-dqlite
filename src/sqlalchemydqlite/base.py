@@ -2245,7 +2245,31 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                     for marker in _RAFT_COLLAPSE_DISCONNECT_MARKERS:
                         if marker in msg_lower:
                             return True
-            elif isinstance(cause, _dbapi_exc.DatabaseError):
+            elif type(cause) is _dbapi_exc.DatabaseError:
+                # Type-identity check (NOT isinstance) is deliberate.
+                # ``DatabaseError`` has subclasses
+                # (``OperationalError``, ``IntegrityError``,
+                # ``InternalError``, ``ProgrammingError``,
+                # ``DataError``, ``NotSupportedError``) which would
+                # otherwise reach this branch via MRO. The intent of
+                # this arm is the BARE ``DatabaseError`` instance
+                # produced by ``_classify_operational`` for codes
+                # 11/24/26 (CORRUPT/FORMAT/NOTADB) — see
+                # ``_BARE_DBE_DISCONNECT_CODES``. Caller-side bug
+                # classes (``ProgrammingError(code=SQLITE_MISUSE)``,
+                # ``DataError``, etc.) MUST propagate as caller errors
+                # rather than triggering pool invalidation: SA's retry
+                # path would re-run the same broken caller code
+                # against a fresh connection, duplicating non-
+                # idempotent INSERTs. Today the typical caller-bug
+                # codes (21 SQLITE_MISUSE, 25 SQLITE_RANGE) are absent
+                # from ``_BARE_DBE_DISCONNECT_CODES`` so the
+                # ``isinstance`` shape would be inert in practice, but
+                # a future server release that adds CORRUPT/FORMAT/
+                # NOTADB as an extended code on a subclass would
+                # silently activate disconnect classification on
+                # caller bugs. ``type is`` makes the scope explicit
+                # and matches the docstring intent above.
                 applies_substring = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
             elif isinstance(cause, _dbapi_exc.InterfaceError):
                 # Server-emitted ``DQLITE_PROTO`` (1001) carries a

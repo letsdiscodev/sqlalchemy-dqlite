@@ -1140,69 +1140,20 @@ class AsyncAdaptedConnection(AdaptedConnection):
         ``dbapi.OperationalError`` (with the substring preserved) so
         the dialect's substring fallback classifies it as a disconnect.
         """
-        # Walk the ``__cause__`` / ``__context__`` chain (plus PEP 654
-        # group children) up to the shared depth budget so a wrapping
-        # layer that re-raised the cross-loop / loop-closed /
-        # nested-loop fault as a different type does not silently
-        # bypass the remap. Mirrors the ``is_disconnect`` discipline
-        # in base.py (which uses the same ``_walk_cause_chain``
-        # helper); without this walk, an explicit
-        # ``raise FooError(...) from RuntimeError("Event loop is
-        # closed")`` would leak the original RuntimeError past SA's
-        # classifier (gated on ``DatabaseError``) and the pool would
-        # retain the broken slot.
-        #
-        # Lower-case once per hop so substring scans below are
-        # case-insensitive, mirroring base.py's ``is_disconnect``
-        # discipline (the ``_dqlite_disconnect_messages`` tuple is
-        # stored lower-cased and the call site lower-cases the
-        # candidate text once). Without this, a Python minor that
-        # flipped the canonical wording's casing (e.g.
-        # ``Event Loop Is Closed``) would silently bypass the
-        # remap. The original message is preserved verbatim in the
-        # remapped wording's tail.
-        for hop in _walk_cause_chain(error):
-            if not isinstance(hop, (RuntimeError, ProgrammingError)):
-                continue
-            msg = str(hop)
-            msg_lower = msg.lower()
-            # Both substrings are needed: ``"different loop"`` matches
-            # Python's ``"attached to a different loop"`` and any
-            # variant that uses the bare phrase, while
-            # ``"different event loop"`` matches dqlitedbapi's distinct
-            # wording. The redundant ``or "attached to a different
-            # loop"`` clause from the older arm was dropped — that
-            # phrase strictly contains ``"different loop"`` so the
-            # first check already matches it.
-            if "different loop" in msg_lower or "different event loop" in msg_lower:
-                raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
-            # ``RuntimeError("Event loop is closed")`` reaches us via
-            # ``commit`` / ``rollback`` / ``execute`` / ``executemany``
-            # when the asyncio loop has been torn down between
-            # checkout and the operation (per-call ``asyncio.run()``
-            # patterns). Without a remap it leaks as a bare
-            # RuntimeError past SA's ``is_disconnect`` classifier
-            # (which is gated on ``DatabaseError``) and the broken
-            # slot survives. Treat as a transport-class disconnect
-            # so the pool invalidates and the next checkout gets a
-            # fresh connection. The remapped wording ``"event loop
-            # closed"`` is the substring matched by
-            # ``_dqlite_disconnect_messages`` in base.py; any change
-            # to that wording must keep the substring in sync.
-            if "event loop is closed" in msg_lower:
-                raise OperationalError(f"event loop closed: {msg}", code=None) from error
-            # ``RuntimeError("This event loop is already running")``
-            # surfaces when third-party glue calls ``await_only`` from
-            # a context that already has a running loop on the same
-            # thread (asyncio rejects nested loop entry). Without
-            # remap, the bare RuntimeError leaks past SA's
-            # ``is_disconnect`` classifier (gated on DatabaseError)
-            # and the pool retains the broken slot. Treat as a
-            # transport-class disconnect so the slot invalidates.
-            # Substring is added to ``_dqlite_disconnect_messages`` in
-            # base.py for symmetric classification.
-            if "loop is already running" in msg_lower:
-                raise OperationalError(f"event loop already running: {msg}", code=None) from error
+        # Delegate the loop-state substring scan to the canonical
+        # module-level helper ``_remap_loop_state_runtime_error``.
+        # The helper walks the ``__cause__`` / ``__context__`` chain
+        # (plus PEP 654 group children), tests each hop for
+        # ``(RuntimeError, ProgrammingError)``, and raises an
+        # ``OperationalError`` with the remapped wording if any of the
+        # three substring patterns matches; returns normally otherwise.
+        # Keeping the substring tuple in ONE place avoids the
+        # three-site DRY drift (helper + this method + close-arm
+        # below) that would otherwise let a Python minor wording
+        # change silently bypass one of the three sites — a hazard the
+        # ``done/sa-async-close-rollback-arm-missing-loop-is-already-
+        # running-remap.md`` near-miss documents.
+        _remap_loop_state_runtime_error(error)
         raise error
 
     def commit(self) -> None:

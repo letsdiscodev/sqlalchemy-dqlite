@@ -315,7 +315,18 @@ def _dqlite_run_reap_dbs(url: str | sa_url.URL, idents: list[str]) -> None:
     from sqlalchemy import create_engine
 
     parsed = sa_url.make_url(url) if isinstance(url, str) else url
-    logger.info("dqlite reap_dbs: %d follower(s) at %s", len(idents), parsed)
+    # CWE-532 (credential leakage) + CWE-117 (log injection on the host
+    # portion). ``URL.__str__`` defaults to
+    # ``render_as_string(hide_password=False)`` — the password lands in
+    # the INFO record verbatim. Use the explicit ``hide_password=True``
+    # form to render the password as ``***``. The host portion is then
+    # routed through ``sanitize_for_log`` so a peer- or
+    # operator-supplied URL whose host carries LF / U+2028 / bidi /
+    # ZWSP cannot split the log record. Mirrors the discipline at the
+    # sibling DEBUG sites in this file (``_drop_user_tables`` and the
+    # reap-loop per-ident error path).
+    safe_url = _sanitize_for_log(parsed.render_as_string(hide_password=True))
+    logger.info("dqlite reap_dbs: %d follower(s) at %s", len(idents), safe_url)
     for ident in idents:
         # Force the sync drivername regardless of the input URL's
         # ``+driver`` suffix. ``_drop_user_tables`` uses sync

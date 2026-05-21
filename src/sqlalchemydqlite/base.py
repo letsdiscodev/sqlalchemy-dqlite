@@ -29,6 +29,7 @@ from dqlitewire import (
     WIRE_DECODE_FAILED_PREFIX,
 )
 from dqlitewire import SQLITE_NOTFOUND as _SQLITE_NOTFOUND
+from dqlitewire import sanitize_for_log as _sanitize_for_log
 from dqlitewire import sanitize_server_text as _sanitize_server_text
 
 
@@ -259,13 +260,22 @@ def _log_safe_peer(obj: object) -> str | None:
     output, or ``None`` if the underlying object exposes no address.
 
     Routes every interpolation of a peer address through the wire-
-    layer ``sanitize_server_text`` discipline (strips C0/C1, U+2028/
-    U+2029, full bidi block, ZW chars, BOM). Defense-in-depth: the
-    client-layer ``parse_address`` gate rejects CRLF / control chars
-    / IDN / credentials-style ``@`` at connection-construction time,
-    so today the per-call sanitization is a no-op on every in-tree
-    code path. The wrap is still load-bearing for two scenarios that
-    bypass the gate:
+    layer ``sanitize_for_log`` discipline. That helper applies
+    ``sanitize_server_text`` (strips C0/C1, U+2028/U+2029, full bidi
+    block, ZW chars, BOM) AND additionally escapes LF as the literal
+    two-byte sequence ``\\n`` and tab as ``\\t`` so a hostile peer
+    cannot inject fake log lines into syslog / journald via a
+    server-supplied LF in an address field. ``sanitize_server_text``
+    alone leaves LF and tab intact for multi-line display rendering;
+    that is the wrong contract for ``logger.warning`` /
+    ``logger.error`` / ``logger.debug`` interpolation, which is the
+    only consumer of this helper.
+
+    Defense-in-depth: the client-layer ``parse_address`` gate rejects
+    CRLF / control chars / IDN / credentials-style ``@`` at
+    connection-construction time, so today the per-call sanitization
+    is a no-op on every in-tree code path. The wrap is still
+    load-bearing for two scenarios that bypass the gate:
 
     1. ``dial_func`` overrides that skip ``parse_address`` and may
        assign a redirect target post-dial (documented bypass at
@@ -276,13 +286,13 @@ def _log_safe_peer(obj: object) -> str | None:
        reach the log site without re-validation.
 
     Mirrors the sibling discipline at ``dqliteclient.connection``'s
-    ``_log_safe_address`` and at every CWE-117-annotated wrap in
-    ``cluster.py`` / ``pool.py``.
+    ``_log_safe_address`` (which also uses ``sanitize_for_log``) and
+    at every CWE-117-annotated wrap in ``cluster.py`` / ``pool.py``.
     """
     addr = getattr(obj, "address", None)
     if addr is None:
         return None
-    return _sanitize_server_text(str(addr))
+    return _sanitize_for_log(str(addr))
 
 
 __all__ = ["DqliteCompiler", "DqliteDialect"]

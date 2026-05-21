@@ -1860,6 +1860,36 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             f"{level!r} is not supported."
         )
 
+    def reset_isolation_level(self, dbapi_connection: DBAPIConnection) -> None:
+        """SA pool-checkin hook — no-op on this dialect.
+
+        dqlite is a single-isolation-level engine (SERIALIZABLE; see
+        ``get_isolation_level`` / ``set_isolation_level``). There is
+        no per-connection isolation state to reset on pool checkin.
+        SA's inherited ``DefaultDialect.reset_isolation_level``
+        (``engine/default.py:1004-1019``) calls
+        ``_assert_and_set_isolation_level`` which validates against
+        ``get_isolation_level_values()`` — our values list advertises
+        ``"AUTOCOMMIT"`` as a diagnostic-routing channel (see
+        ``_isolation_lookup`` docstring above for the divergence
+        rationale). If a caller used
+        ``Connection.execution_options(isolation_level="AUTOCOMMIT")``
+        on a slot, SA's inherited reset would route checkin through
+        ``set_isolation_level("AUTOCOMMIT")`` which raises
+        ``_AUTOCOMMIT_REJECTION_MSG`` — from a finalize path the user
+        did not initiate. SA's pool marks the slot bad and logs a
+        warning even though the user's AUTOCOMMIT attempt should have
+        been rejected at the ``execution_options`` site (and was).
+        Overriding to a no-op keeps the dialect's SERIALIZABLE-only
+        contract symmetric across the connect / set / reset surfaces
+        and prevents the surprise raise from a SA-internal
+        finalize path.
+
+        The override mirrors the discipline applied to the sibling
+        ``_isolation_lookup`` truthful-set + values-list-diagnostic-
+        channel pattern.
+        """
+
     def on_connect(self) -> Callable[[DBAPIConnection], None]:
         """Override pysqlite's ``on_connect`` to a no-op.
 

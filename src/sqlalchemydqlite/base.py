@@ -18,7 +18,7 @@ from sqlalchemy.exc import ArgumentError
 
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
-from dqliteclient import CLOSE_TIMEOUT_FLOOR_RATIONALE, validate_timeout
+from dqliteclient import CLOSE_TIMEOUT_FLOOR, CLOSE_TIMEOUT_FLOOR_RATIONALE, validate_timeout
 from dqlitewire import (
     BARE_DATABASE_ERROR_CODES,
     DQLITE_PROTO,
@@ -49,7 +49,7 @@ def _validate_close_timeout_url(value: float) -> bool:
         validate_timeout(
             value,
             name="close_timeout",
-            min_value=0.01,
+            min_value=CLOSE_TIMEOUT_FLOOR,
             min_value_rationale=CLOSE_TIMEOUT_FLOOR_RATIONALE,
         )
     except (TypeError, ValueError) as e:

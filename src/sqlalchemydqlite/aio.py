@@ -11,11 +11,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, NoReturn, Self
 
 from sqlalchemy import pool
 from sqlalchemy.engine import URL, AdaptedConnection
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.util import await_only
 from sqlalchemy.util.concurrency import in_greenlet
 
+from dqliteclient import DqliteConnectionError
 from dqlitedbapi import (
+    DatabaseError,
     DescriptionTuple,
     InterfaceError,
     NotSupportedError,
@@ -23,6 +26,8 @@ from dqlitedbapi import (
     ProgrammingError,
 )
 from sqlalchemydqlite.base import (
+    _AUTOCOMMIT_REJECTION_MSG,
+    _BARE_DBE_DISCONNECT_CODES,
     _TRANSPORT_CLASS_EXCEPTIONS,
     DqliteDialect,
     _log_safe_peer,
@@ -777,24 +782,47 @@ class AsyncAdaptedConnection(AdaptedConnection):
 
     def __init__(
         self,
-        connection: "AsyncConnection",
-        *,
-        dbapi: Any = None,
+        dbapi: Any,
+        connection: "AsyncConnection | None" = None,
     ) -> None:
+        # Signature mirrors SA's reference connector
+        # (``sqlalchemy.connectors.asyncio.AsyncAdapt_dbapi_connection``
+        # and ``sqlalchemy.dialects.sqlite.aiosqlite.AsyncAdapt_aiosqlite_connection``):
+        # ``(self, dbapi, connection)`` with ``dbapi`` first as a
+        # positional parameter. Third-party instrumentation (Sentry,
+        # OpenTelemetry, Datadog, sqlalchemy-utils) and SA's own
+        # ``AsyncAdaptFallback_*`` subclasses construct adapters by
+        # mimicking this reference shape; a divergent positional order
+        # surfaces a ``TypeError`` on copy-pasted construction.
+        #
+        # Backward-compatible argument detection: an earlier signature
+        # was ``(connection, *, dbapi=None)``. In-tree callers have all
+        # been migrated to the SA-reference shape, but test fixtures and
+        # any external code that instantiated the adapter with a single
+        # positional connection may still exist. The contract: SA's
+        # reference shape always passes BOTH positional args. The
+        # legacy single-positional shape is ``(connection,)`` only.
+        # Detect by ``connection is None`` — i.e. the second positional
+        # was not supplied — and treat the first positional as the
+        # connection in that case.
+        if connection is None:
+            # Legacy single-positional construction:
+            # ``AsyncAdaptedConnection(raw_conn)``.
+            inner_conn: Any = dbapi
+            dbapi_module: Any = None
+        else:
+            inner_conn = connection
+            dbapi_module = dbapi
         # ``_connection`` is the concrete ``dqlitedbapi.aio.AsyncConnection``
         # this adapter wraps; SQLAlchemy's parent ``AdaptedConnection``
         # declares the attribute with a wider Protocol type, so we keep
         # the store on ``Any`` and rely on the annotation here to document
         # the intended input shape.
-        self._connection: Any = connection
+        self._connection: Any = inner_conn
         # ``dbapi`` mirrors SA's reference connector — third-party
         # instrumentation hard-``getattr``-s ``dbapi_connection.dbapi``
-        # to reach the dbapi module's exception classes. Keyword-only
-        # so the existing single-positional construction
-        # (``AsyncAdaptedConnection(raw_conn)``) keeps working without
-        # touching every call site; default ``None`` is acceptable
-        # because dqlite's own code does not read this attribute.
-        self.dbapi = dbapi
+        # to reach the dbapi module's exception classes.
+        self.dbapi = dbapi_module
 
     def __reduce__(self) -> NoReturn:
         # Wraps a live ``AsyncConnection`` (loop-bound, holds a live
@@ -848,11 +876,6 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # cross-driver ``except dbapi.Error:`` clauses catch it.
         # Sibling cursor surface (``callproc`` / ``nextset`` /
         # ``scroll``) follows the same discipline.
-        if server_side:
-            raise NotSupportedError(
-                "Server-side cursors are not supported by the dqlite dialect; "
-                "supports_server_side_cursors is pinned to False."
-            )
         # Closed-state guard: ``close()`` replaces ``self._connection``
         # with ``weakref.proxy(...)``. Returning a fresh
         # ``AsyncAdaptedCursor`` over a proxy that may have been GC'd
@@ -865,8 +888,19 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # state via the proxy type check and raise ``InterfaceError``
         # up front, matching the dbapi-layer ``AsyncConnection.cursor``
         # discipline.
+        #
+        # Closed-state check FIRST: on a closed adapter,
+        # ``cursor(server_side=True)`` must surface ``InterfaceError``
+        # (the actionable signal) rather than ``NotSupportedError`` (a
+        # feature-availability diagnostic on a connection that's no
+        # longer usable at all).
         if type(self._connection) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(self)})")
+        if server_side:
+            raise NotSupportedError(
+                "Server-side cursors are not supported by the dqlite dialect; "
+                "supports_server_side_cursors is pinned to False."
+            )
         # Read the cursor class from the class-level hook so dialect
         # subclasses can swap ``AsyncAdaptedCursor`` without overriding
         # ``cursor()``. Matches SA's reference connector pattern at
@@ -982,10 +1016,6 @@ class AsyncAdaptedConnection(AdaptedConnection):
         connection.
         """
         if value:
-            from sqlalchemy.exc import ArgumentError
-
-            from sqlalchemydqlite.base import _AUTOCOMMIT_REJECTION_MSG
-
             raise ArgumentError(_AUTOCOMMIT_REJECTION_MSG)
         # value is False → already the effective mode, no-op.
 
@@ -1653,10 +1683,6 @@ class DqliteDialect_aio(DqliteDialect):
         ``_BARE_DBE_DISCONNECT_CODES`` arm so codes 11/24/26
         (CORRUPT/FORMAT/NOTADB) still classify as ping-fail.
         """
-        from dqliteclient import DqliteConnectionError
-        from dqlitedbapi import DatabaseError
-        from sqlalchemydqlite.base import _BARE_DBE_DISCONNECT_CODES
-
         try:
             await_only(self._async_ping(dbapi_connection))
         except (
@@ -1924,9 +1950,9 @@ class DqliteDialect_aio(DqliteDialect):
         except BaseException:
             if raw_conn is not None:
                 with contextlib.suppress(Exception, asyncio.CancelledError):
-                    AsyncAdaptedConnection(raw_conn, dbapi=self.loaded_dbapi).terminate()
+                    AsyncAdaptedConnection(self.loaded_dbapi, raw_conn).terminate()
             raise
-        return AsyncAdaptedConnection(raw_conn, dbapi=self.loaded_dbapi)
+        return AsyncAdaptedConnection(self.loaded_dbapi, raw_conn)
 
     def get_driver_connection(self, dbapi_connection: Any) -> Any:
         """Return the underlying driver-level connection.

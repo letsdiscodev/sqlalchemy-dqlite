@@ -72,7 +72,7 @@ async def test_cancellation_during_commit_propagates_unchanged() -> None:
     ``_handle_dbapi_exception``."""
     started = asyncio.Event()
     raw = _GatedAsyncConnection(started)
-    adapter = AsyncAdaptedConnection(raw)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(raw)
 
     async def driver() -> None:
         # ``adapter.commit`` is a sync method; SA invokes it from
@@ -113,7 +113,7 @@ async def test_cancellation_during_rollback_propagates_unchanged() -> None:
         async def close(self) -> None: ...
 
     started = asyncio.Event()
-    adapter = AsyncAdaptedConnection(_GatedRollback(started))  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(_GatedRollback(started))  
 
     async def driver() -> None:
         await greenlet_spawn(adapter.rollback)

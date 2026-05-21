@@ -131,7 +131,7 @@ def test_close_rollback_loop_closed_runs_proxy_swap() -> None:
     swap. Pin: this arm now flows through the swap.
     """
     inner = _FakeAsyncConn(rollback_exc=RuntimeError("Event loop is closed"))
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     originals = _stub_greenlet_machinery()
     try:
         adapter.close()
@@ -150,7 +150,7 @@ def test_close_rollback_loop_different_runs_proxy_swap() -> None:
     import dqlitedbapi.exceptions as _dbapi_exc
 
     inner = _FakeAsyncConn(rollback_exc=RuntimeError("attached to a different loop"))
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     originals = _stub_greenlet_machinery()
     try:
         with pytest.raises(_dbapi_exc.OperationalError):
@@ -165,7 +165,7 @@ def test_close_rollback_transport_class_runs_proxy_swap() -> None:
     falls through to the close-finally + outer-finally swap.
     """
     inner = _FakeAsyncConn(rollback_exc=ConnectionResetError("rollback FIN"))
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     originals = _stub_greenlet_machinery()
     try:
         adapter.close()
@@ -180,7 +180,7 @@ def test_close_close_arm_runtime_error_runs_proxy_swap() -> None:
     outer-finally swap.
     """
     inner = _FakeAsyncConn(close_exc=RuntimeError("Event loop is closed"))
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     originals = _stub_greenlet_machinery()
     try:
         adapter.close()
@@ -194,7 +194,7 @@ def test_close_close_arm_transport_class_runs_proxy_swap() -> None:
     falls through to the outer-finally swap.
     """
     inner = _FakeAsyncConn(close_exc=ConnectionResetError("close FIN"))
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     originals = _stub_greenlet_machinery()
     try:
         adapter.close()
@@ -211,7 +211,7 @@ def test_close_no_exception_path_releases_inner_pin() -> None:
     extended with the new outer try/finally guarantee.
     """
     inner = _FakeAsyncConn()
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     originals = _stub_greenlet_machinery()
     try:
         adapter.close()
@@ -234,7 +234,7 @@ def test_terminate_runs_proxy_swap() -> None:
     asymmetry between close and terminate is the regression class.
     """
     inner = _FakeAsyncConn()
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     originals = _stub_greenlet_machinery()
     try:
         adapter.terminate()
@@ -254,7 +254,7 @@ def test_terminate_close_runtime_error_runs_proxy_swap() -> None:
     ``asyncio.run()`` teardown. Pin the swap on this arm too.
     """
     inner = _FakeAsyncConn(close_exc=RuntimeError("Event loop is closed"))
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     originals = _stub_greenlet_machinery()
     try:
         adapter.terminate()
@@ -268,7 +268,7 @@ def test_terminate_close_transport_class_runs_proxy_swap() -> None:
     close on forced reclaim. Pin the swap on this arm too.
     """
     inner = _FakeAsyncConn(close_exc=ConnectionResetError("terminate FIN"))
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     originals = _stub_greenlet_machinery()
     try:
         adapter.terminate()

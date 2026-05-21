@@ -59,7 +59,7 @@ def _swap_await_only() -> tuple[object, object, object]:
 
 def _run_close(close_exc: BaseException | None) -> _FakeAsyncConn:
     fake = _FakeAsyncConn(close_exc=close_exc)
-    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(fake)
     aio_module, orig, _orig_in_greenlet = _swap_await_only()
     try:
         adapter.close()  # must not raise for a class in the narrow tuple
@@ -102,7 +102,7 @@ class TestFinalCloseSuppression:
         programmer bug (AttributeError) must escape so a refactor
         regression doesn't get silently eaten."""
         fake = _FakeAsyncConn(close_exc=AttributeError("typo"))
-        adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+        adapter = AsyncAdaptedConnection(fake)
         aio_module, orig, _orig_in_greenlet = _swap_await_only()
         try:
             with pytest.raises(AttributeError):
@@ -127,7 +127,7 @@ class TestCloseMatrix:
             close_exc=OSError(32, "Broken pipe"),
             rollback_exc=OSError(104, "reset by peer"),
         )
-        adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+        adapter = AsyncAdaptedConnection(fake)
         aio_module, orig, _orig_in_greenlet = _swap_await_only()
         try:
             adapter.close()  # neither branch propagates
@@ -145,7 +145,7 @@ class TestCloseMatrix:
             close_exc=OSError(32, "Broken pipe"),
             rollback_exc=OperationalError("leader flip", code=None),
         )
-        adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+        adapter = AsyncAdaptedConnection(fake)
         aio_module, orig, _orig_in_greenlet = _swap_await_only()
         try:
             adapter.close()  # both branches suppress

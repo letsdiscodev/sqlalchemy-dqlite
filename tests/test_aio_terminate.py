@@ -53,7 +53,7 @@ class TestAsyncAdaptedConnectionTerminate:
         event loop.
         """
         fake = _FakeAsyncConn()
-        adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+        adapter = AsyncAdaptedConnection(fake)
 
         from sqlalchemydqlite import aio as aio_module
 
@@ -110,7 +110,7 @@ class TestTerminateSuppressesTransportExceptions:
 
     def _run_terminate(self, close_exc: BaseException) -> _FakeAsyncConnWithExc:
         fake = _FakeAsyncConnWithExc(close_exc=close_exc)
-        adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+        adapter = AsyncAdaptedConnection(fake)
         aio_module, orig, orig_in_greenlet = self._swap_await_only()
         try:
             adapter.terminate()  # must not raise
@@ -152,7 +152,7 @@ class TestTerminateSuppressesTransportExceptions:
         import pytest
 
         fake = _FakeAsyncConnWithExc(close_exc=AttributeError("wrong attr"))
-        adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+        adapter = AsyncAdaptedConnection(fake)
         aio_module, orig, orig_in_greenlet = self._swap_await_only()
         try:
             with pytest.raises(AttributeError):
@@ -204,7 +204,7 @@ class TestDoTerminateDelegatesToAdapter:
         """Under a mocked connection, do_terminate must not invoke
         rollback even as a side-effect of teardown logic elsewhere."""
         fake = _FakeAsyncConn()
-        adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+        adapter = AsyncAdaptedConnection(fake)
         dialect = DqliteDialect_aio()
 
         from sqlalchemydqlite import aio as aio_module

@@ -35,16 +35,19 @@ from sqlalchemydqlite.base import _DqliteDate, _DqliteDateTime, _DqliteTime
 def test_async_adapted_connection_exposes_dbapi_attribute() -> None:
     """SA reference connector parity: AsyncAdaptedConnection has
     a ``dbapi`` attribute. Third-party introspection hard-getattrs
-    it to reach the dbapi module's exception classes."""
+    it to reach the dbapi module's exception classes. The
+    constructor mirrors SA's reference shape
+    ``(self, dbapi, connection)``."""
     sentinel = MagicMock(name="dbapi_module")
-    adapter = AsyncAdaptedConnection(MagicMock(), dbapi=sentinel)
+    adapter = AsyncAdaptedConnection(sentinel, MagicMock())
     assert adapter.dbapi is sentinel
 
 
 def test_async_adapted_connection_dbapi_kwarg_optional() -> None:
-    """Backward compatibility: existing call sites that pass only
+    """Backward compatibility: legacy call sites that pass only
     the connection (single positional arg) still work; ``dbapi``
-    defaults to None."""
+    defaults to None. The runtime detection in ``__init__`` checks
+    whether the second positional argument was supplied."""
     adapter = AsyncAdaptedConnection(MagicMock())
     assert adapter.dbapi is None
 

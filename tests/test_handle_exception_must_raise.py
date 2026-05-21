@@ -28,7 +28,7 @@ def _make_adapter() -> AsyncAdaptedConnection:
     connection — _handle_exception does not touch ``_connection`` so
     the placeholder is harmless. Avoids needing a live AsyncConnection."""
     # AsyncAdaptedConnection.__init__ takes one positional argument.
-    return AsyncAdaptedConnection(None)  # type: ignore[arg-type]
+    return AsyncAdaptedConnection(None)
 
 
 class TestBaseHandleExceptionAlwaysRaises:

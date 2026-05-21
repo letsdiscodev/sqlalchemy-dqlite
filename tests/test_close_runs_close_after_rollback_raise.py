@@ -66,7 +66,7 @@ def test_close_runs_after_rollback_raises_cancelled_error() -> None:
     CancelledError propagates as the active exception.
     """
     fake = _FakeAsyncConn(asyncio.CancelledError())
-    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(fake)
 
     aio_module, orig_await, orig_in_greenlet = _install_fake_await_only()
     try:
@@ -83,7 +83,7 @@ def test_close_runs_after_rollback_raises_attribute_error() -> None:
     prevent close() from running, even though the bug propagates.
     """
     fake = _FakeAsyncConn(AttributeError("bug"))
-    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(fake)
 
     aio_module, orig_await, orig_in_greenlet = _install_fake_await_only()
     try:

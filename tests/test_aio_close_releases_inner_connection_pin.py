@@ -46,7 +46,7 @@ class _FakeAsyncConn:
 def test_async_adapted_connection_close_drops_strong_inner_ref() -> None:
     inner = _FakeAsyncConn()
     inner_ref = weakref.ref(inner)
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
 
     # Stub out ``await_only`` and ``in_greenlet`` so close() runs
     # in-process without a real greenlet context.
@@ -89,7 +89,7 @@ def test_async_adapted_connection_close_drops_strong_inner_ref() -> None:
 
 def test_async_adapted_cursor_close_drops_strong_inner_conn_ref() -> None:
     inner = _FakeAsyncConn()
-    adapter = AsyncAdaptedConnection(inner)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(inner)
     cur = AsyncAdaptedCursor(adapter)
 
     # Stub out ``await_only`` and ``in_greenlet`` so adapter.close()

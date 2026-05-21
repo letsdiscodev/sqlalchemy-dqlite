@@ -38,7 +38,7 @@ class _FakeAsyncConn:
 
 def test_close_logs_rollback_failure(caplog: pytest.LogCaptureFixture) -> None:
     fake = _FakeAsyncConn(OperationalError("server gone"))
-    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(fake)
 
     # sqlalchemy.util.await_only drives the coroutine; using a live
     # engine is overkill for an observability test. Stub await_only.
@@ -81,7 +81,7 @@ def test_close_logs_rollback_failure(caplog: pytest.LogCaptureFixture) -> None:
 def test_close_propagates_programming_bug() -> None:
     """RuntimeError / AttributeError / etc. are NOT suppressed."""
     fake = _FakeAsyncConn(RuntimeError("programming bug"))
-    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(fake)
 
     from sqlalchemydqlite import aio as aio_module
 
@@ -108,7 +108,7 @@ def test_close_with_also_failing_transport_errors(caplog: pytest.LogCaptureFixtu
     is all caught and DEBUG-logged.
     """
     fake = _FakeAsyncConn(DqliteConnectionError("peer reset"))
-    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(fake)
 
     from sqlalchemydqlite import aio as aio_module
 
@@ -165,7 +165,7 @@ def test_close_suppresses_os_level_rollback_errors(
     re-raising and leaking the underlying AsyncConnection.
     """
     fake = _FakeAsyncConn(exc)
-    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(fake)
 
     from sqlalchemydqlite import aio as aio_module
 
@@ -207,7 +207,7 @@ def test_close_propagates_value_error_out_of_tuple() -> None:
     widening the suppression back to ``except Exception``.
     """
     fake = _FakeAsyncConn(ValueError("parameter out of range"))
-    adapter = AsyncAdaptedConnection(fake)  # type: ignore[arg-type]
+    adapter = AsyncAdaptedConnection(fake)
 
     from sqlalchemydqlite import aio as aio_module
 

@@ -134,6 +134,36 @@ class AsyncAdaptedCursor:
     layer above ``@property``), this adapter must be reshaped to
     keep the underlying cursor alive across the execute boundary,
     then converted to ``@property`` delegation.
+
+    **Sync-only context-manager / iterator contract**: this adapter
+    exposes only the synchronous protocol — ``__enter__`` /
+    ``__exit__`` (close the cursor on exit) and ``__iter__`` /
+    ``__next__`` (drain the buffered ``_rows`` deque). The async
+    counterparts ``__aenter__`` / ``__aexit__`` / ``__aiter__`` /
+    ``__anext__`` are deliberately ABSENT to mirror SA's reference
+    ``AsyncAdapt_dbapi_cursor`` shape (``sqlalchemy/connectors/
+    asyncio.py:279-283``), which is sync-only at the cursor level.
+    Code expecting ``async with cur as c:`` or ``async for row in
+    cur:`` (the aiosqlite / psycopg user-facing shape) will see
+    ``TypeError`` and must either:
+
+    * Use the sync forms — ``with cur as c:`` / ``for row in cur:``
+      — which work correctly from inside an ``async def`` because the
+      rows are eagerly buffered at ``execute()`` time and the close
+      is a synchronous deque-reset on this adapter.
+    * Reach the underlying ``dqlitedbapi.aio.AsyncCursor`` via
+      ``cur._adapt_connection._connection.cursor()`` for native async
+      context-manager / async-iterator semantics. Crossing this
+      abstraction barrier is supported for advanced callers but
+      bypasses SA's exception classifier and the adapter's
+      ``_handle_exception`` remap; production code should prefer
+      the sync forms above.
+
+    The asymmetry with aiosqlite's user-facing shape is intentional:
+    SA's ``AsyncAdapt_dbapi_cursor`` is the contract SA's pool /
+    Result / Connection layers call into, and adding async-cm /
+    async-iterator methods here would surprise SA-pattern callers
+    who expect cross-driver consistency at the adapter layer.
     """
 
     # Declare instance layout — matches the slot discipline SA's own
@@ -298,6 +328,18 @@ class AsyncAdaptedCursor:
         try:
             try:
                 cursor = self._connection.cursor()
+                # Propagate the adapter's arraysize onto the freshly
+                # opened underlying cursor BEFORE the await so any
+                # future wire-protocol prefetch tuning consumes the
+                # caller's intent (e.g. ``cursor.arraysize = 50``).
+                # Today the dbapi layer also buffers the full result
+                # in-memory and ``arraysize`` is deque-only, so this
+                # propagation is forward-compat scaffolding rather than
+                # behaviour-changing. Setting it at execute-time (not
+                # in the property setter) is correct because the
+                # underlying cursor does not exist at setter time —
+                # opened fresh per call.
+                cursor.arraysize = self._arraysize
                 if parameters is not None:
                     await_only(cursor.execute(operation, parameters))
                 else:
@@ -396,11 +438,32 @@ class AsyncAdaptedCursor:
         per the qmark-only dbapi contract; mappings are rejected at the
         DBAPI cursor layer at runtime, and SA's compiler always hands
         a sequence to qmark dialects.
+
+        ``seq_of_parameters`` is materialised to a ``list`` if the
+        caller hands in a one-shot iterable (generator, ``map(...)``,
+        ``iter([...])``, file reader). Without this, a disconnect-class
+        exception mid-stream (leader flip during an executemany batch)
+        triggers SA's pool-invalidation + engine-retry path, which
+        re-issues the same ``executemany`` against the now-exhausted
+        iterator — silent zero-row execute followed by COMMIT, a
+        data-loss class. SA's own compiler always hands a list today,
+        so the ``isinstance(list)`` gate keeps that call a no-copy
+        fast path. Callers needing streaming-memory semantics for a
+        very large bind set must drive multiple ``execute()`` calls
+        themselves; ``executemany`` cannot stream because the retry
+        contract requires re-iteration.
         """
         # Mirror the closed-cursor guard the other methods on this
         # class apply; see ``execute`` for the rationale.
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
+        # Materialise non-list iterables so SA's retry path
+        # (disconnect classify → pool invalidate → re-issue against
+        # fresh connection) can re-iterate the bind sequence. The
+        # ``isinstance`` gate keeps SA's canonical (always a list)
+        # call a no-copy fast path.
+        if not isinstance(seq_of_parameters, list):
+            seq_of_parameters = list(seq_of_parameters)
         # Clear state up-front so cancellation mid-call doesn't leak
         # a previous execution's buffered rows. ``lastrowid`` is NOT
         # cleared here (sticky-INSERT contract — see ``execute`` for
@@ -416,6 +479,10 @@ class AsyncAdaptedCursor:
         try:
             try:
                 cursor = self._connection.cursor()
+                # Same arraysize propagation as ``execute`` — forward-
+                # compat scaffolding for any future wire-level
+                # prefetch tuning the dbapi layer might honour.
+                cursor.arraysize = self._arraysize
                 await_only(cursor.executemany(operation, seq_of_parameters))
                 # Mirror execute()'s post-call pattern: if the statement had
                 # a RETURNING clause, the underlying cursor accumulates rows

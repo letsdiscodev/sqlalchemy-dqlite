@@ -113,7 +113,7 @@ async def test_cancellation_during_rollback_propagates_unchanged() -> None:
         async def close(self) -> None: ...
 
     started = asyncio.Event()
-    adapter = AsyncAdaptedConnection(_GatedRollback(started))  
+    adapter = AsyncAdaptedConnection(_GatedRollback(started))
 
     async def driver() -> None:
         await greenlet_spawn(adapter.rollback)

@@ -282,6 +282,19 @@ class AsyncAdaptedCursor:
         self._arraysize = value
 
     def close(self) -> None:
+        """PEP 249 §6.1 ``close`` on the SA-adapted async cursor.
+
+        Idempotent: a second call is a no-op (mirrors stdlib
+        ``sqlite3.Cursor.close`` and the underlying
+        ``dqlitedbapi.aio.AsyncCursor.close``). Scrubs ``description``
+        / ``rowcount`` / ``lastrowid`` to the "no operation performed"
+        sentinel and swaps the strong back-references to the parent
+        adapter and inner dbapi connection for ``weakref.proxy``
+        wrappers so a retained closed cursor does not pin the inner
+        ``AsyncConnection`` (and through it the client-layer state).
+        See the inline comment for the full partial-failure /
+        ``TypeError`` suppression rationale.
+        """
         # Idempotent close: stdlib ``sqlite3.Cursor.close`` and the
         # dbapi ``Cursor.close`` / ``AsyncCursor.close`` siblings all
         # short-circuit on a second call. Without this gate, double-
@@ -587,6 +600,19 @@ class AsyncAdaptedCursor:
                     )
 
     def fetchone(self) -> tuple[Any, ...] | None:
+        """PEP 249 §6.2 ``fetchone`` on the SA-adapted async cursor.
+
+        Returns the next pre-buffered row, or ``None`` on exhaustion
+        (PEP 249 None-on-exhaustion contract). Raises
+        ``InterfaceError`` on a closed cursor.
+
+        Rows are eagerly drained from the underlying
+        ``AsyncCursor._rows`` deque at ``execute`` / ``executemany``
+        time; this method does not initiate any wire I/O — dqlite's
+        wire protocol delivers the entire result set up-front in a
+        single RTT (no server-side prefetch knob, mirroring the
+        ``arraysize.setter`` semantic note).
+        """
         # Narrow to the actual row shape. ``Any | None`` collapses to
         # ``Any`` under mypy's gradual typing, defeating the previous
         # narrowing attempt; ``tuple[Any, ...] | None`` matches what
@@ -600,6 +626,22 @@ class AsyncAdaptedCursor:
         return None
 
     def fetchmany(self, size: int | None = None) -> Sequence[tuple[Any, ...]]:
+        """PEP 249 §6.2 ``fetchmany`` on the SA-adapted async cursor.
+
+        Returns up to ``size`` next rows from the pre-buffered deque;
+        ``size`` defaults to ``self.arraysize``. Returns ``[]`` on
+        exhaustion. Raises ``InterfaceError`` on a closed cursor.
+
+        Negative ``size`` mirrors stdlib ``sqlite3.Cursor.fetchmany(-1)``
+        and the underlying ``dqlitedbapi`` cursor: "fetch all remaining
+        rows" (delegates to ``fetchall``). Without this parity, cross-
+        driver code using ``fetchmany(-1)`` as "drain all" would break
+        at the SA layer despite working through the dbapi layer
+        directly.
+
+        Like ``fetchone`` this does not initiate wire I/O — the deque
+        is filled at ``execute`` time (no server-side prefetch).
+        """
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         if size is None:
@@ -616,6 +658,17 @@ class AsyncAdaptedCursor:
         return [self._rows.popleft() for _ in range(min(size, len(self._rows)))]
 
     def fetchall(self) -> Sequence[tuple[Any, ...]]:
+        """PEP 249 §6.2 ``fetchall`` on the SA-adapted async cursor.
+
+        Returns all remaining pre-buffered rows and clears the
+        internal deque. Returns ``[]`` on exhaustion. Raises
+        ``InterfaceError`` on a closed cursor.
+
+        As with ``fetchone`` / ``fetchmany``, no wire I/O is issued —
+        the deque was populated at ``execute`` time (dqlite delivers
+        the full result set in a single RTT; there is no server-side
+        prefetch to drive).
+        """
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         retval = list(self._rows)

@@ -150,6 +150,34 @@ the cluster.
 .venv/bin/pytest tests/ --ignore=tests/integration
 ```
 
+## Commit message hygiene
+
+Commit messages must not contain workflow vocabulary
+("Round N" / "Cycle N" / "Phase N" / "Bundle X" / "ultrathink"),
+`ISSUE-<token>` identifiers, or `done/*.md` filename references.
+The durable referent for cross-commit citations is the commit hash;
+the workflow token is ornamental and leaks the development process
+into the published history.
+
+`scripts/check-commit-msg.sh` enforces the rule. Install it as a
+local `commit-msg` hook:
+
+```bash
+ln -s ../../scripts/check-commit-msg.sh .git/hooks/commit-msg
+```
+
+Or lint a range manually:
+
+```bash
+scripts/check-commit-msg.sh --range origin/main..HEAD
+```
+
+The same script ships in `python-dqlite-wire/scripts/` so the
+workspace shares a single rule across packages. Published commits
+that already contain the pattern (e.g. `33d1d96`'s "Round 7"
+opener) are left intact — amending would rewrite SHAs sibling
+packages reference; the script is forward-looking only.
+
 ## SQLAlchemy URL Format
 
 ```

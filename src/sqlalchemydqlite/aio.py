@@ -90,6 +90,29 @@ def _remap_loop_state_runtime_error(error: BaseException) -> None:
     close-rollback) AND by ``DqliteDialect_aio.connect()``'s
     eager-connect arm where there's no ``AsyncAdaptedConnection`` yet
     to dispatch through.
+
+    .. note::
+       **The close-arm's** ``"event loop is closed"`` **branch
+       deliberately does NOT delegate to this helper.**
+       ``AsyncAdaptedConnection.close()`` runs under the
+       ``has_terminate=True`` dialect promise that ``close()`` /
+       ``do_close()`` MUST NOT propagate — SA's pool finalize cannot
+       tolerate a raise from the dispose path. The helper raises on
+       any matching substring; routing the close-arm through it would
+       silently break the must-not-raise invariant for the one
+       substring (``"event loop is closed"``) that the close-arm
+       handles bespoke (``logger.debug`` + ``return``). The
+       ``"different loop"`` and ``"loop is already running"``
+       substrings on the close-arm DO route through
+       ``_handle_exception`` (transitively through this helper) and
+       DO raise, because those shapes indicate programmer-bug
+       conditions distinct from the routine cross-loop dispose race.
+       A future contributor "consolidating the close-arm" by removing
+       the bespoke branch and calling this helper unconditionally
+       would compile and pass type checks while silently breaking
+       the must-not-raise contract. Do NOT do that without re-reading
+       the close-arm's inline rationale and adjusting the
+       ``has_terminate`` discipline.
     """
     for hop in _walk_cause_chain(error):
         if not isinstance(hop, (RuntimeError, ProgrammingError)):

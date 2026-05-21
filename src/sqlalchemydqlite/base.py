@@ -463,6 +463,33 @@ class _DqliteDateTime(sqltypes.DateTime):
     any observability; a log line makes the data-integrity problem
     visible while keeping the forgiving behaviour that lets operators
     repair bad rows at their own pace rather than aborting a full read.
+
+    **Mixed-writer hazard under** ``DateTime(timezone=False)``.
+    SQLAlchemy's ``timezone=False`` column contract is "this column
+    stores naive timestamps interpreted as a fixed (usually UTC)
+    wall clock." The result processor honours the contract for
+    tz-aware wire values (converts via UTC, strips tz) but passes
+    naive wire values through UNCHANGED — the same behaviour as
+    pysqlite. That's correct IF every writer to the column already
+    stored UTC wall clock. dqlite, unlike stdlib ``sqlite3``,
+    preserves tz-aware writes on the wire — so a heterogeneous
+    client population (e.g. a Go peer writing a local-time naive
+    timestamp) can land a naive cell representing local wall clock
+    (not UTC) on a column that SA-side readers interpret as UTC.
+    The cell is then "wrong by the writer's UTC offset" with no
+    diagnostic.
+
+    The dialect does not enforce a write-side UTC discipline; the
+    column contract under ``timezone=False`` is the application's
+    responsibility to maintain uniformly across every writer to a
+    shared cluster. Applications mixing dqlite-SA with native-language
+    peers (Go, C, Rust) should either standardise on
+    ``DateTime(timezone=True)`` (which converts tz-aware-or-attach-UTC
+    on read and avoids the wall-clock-interpretation ambiguity) or
+    enforce uniform UTC-wall-clock writes at the application layer.
+    Matches pysqlite parity — the divergence is in what wire formats
+    the underlying driver allows, not in the SA-side processor
+    behaviour.
     """
 
     def bind_processor(self, dialect: Any) -> Callable[[Any], Any] | None:
@@ -1071,9 +1098,10 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # and ``DefaultDialect.do_terminate`` line 717). The inherited
     # default is ``False`` (do_terminate falls back to do_close),
     # which would route engine.dispose's forced reclaim through
-    # ``Connection.close()`` — bounded by ``self._timeout`` (default
-    # 10 s, gated on a parked wire read). Under partition + SIGTERM
-    # that 10 s blocks operator shutdown SLAs.
+    # ``Connection.close()`` — bounded by the dbapi connection's
+    # ``timeout`` attribute (default 10 s, gated on a parked wire
+    # read). Under partition + SIGTERM that 10 s blocks operator
+    # shutdown SLAs.
     #
     # Pin True locally so SA's terminate path lands on
     # :meth:`do_terminate` below, which calls the dbapi's bounded
@@ -1917,6 +1945,29 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         and the compliance suite tests cover the calling shape; keep
         the parent's annotation.) If a future dqlite version gains a
         UDF primitive, this is the hook to register replacements at.
+
+        **Foreign-key enforcement is NOT enabled by this hook.**
+        SA's SQLite reflection docs (see
+        ``.../sqlalchemy/dialects/sqlite/base.py``'s "Foreign Key
+        Support" prose) require every connection to issue
+        ``PRAGMA foreign_keys = ON`` before use — pysqlite does not
+        emit it from ``on_connect`` either; the recipe lives in
+        user code as a ``@event.listens_for(engine, "connect")``
+        handler. dqlite inherits the same default by design (pysqlite
+        parity). Applications that need FK enforcement should attach
+        the recipe at engine-construction time, e.g.::
+
+            from sqlalchemy import event
+
+
+            @event.listens_for(engine, "connect")
+            def _fk_pragma_on_connect(dbapi_connection, _):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
+
+        The dialect deliberately stays out of this choice so
+        applications can opt in or out without a URL knob to manage.
         """
         return lambda _conn: None
 
@@ -2021,25 +2072,42 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         parameters: Any,
         context: Any = None,
     ) -> None:
-        """Drift-defence override of ``DefaultDialect.do_executemany``.
+        """Intentional opt-out of any future ``DefaultDialect.do_executemany`` growth.
 
         SA's default at ``engine/default.py:948-952`` is a one-line
-        pass-through ``cursor.executemany(statement, parameters)``.
-        pysqlite and aiosqlite inherit it; this dialect overrides
-        EXPLICITLY for the same drift-defence rationale that pins
-        ``supports_sane_multi_rowcount = True`` and
-        ``insert_executemany_returning = True`` on this class — every
-        other rowcount / executemany flag is pinned locally. An
-        upstream SA refactor that introduces, for example, per-
-        parameter-set serialised iteration in
-        ``DefaultDialect.do_executemany`` (to support a DBAPI quirk
-        on another driver) would otherwise silently change executemany
-        semantics for the dqlite dialect while the surrounding flags
-        keep claiming the original contract. The body MUST stay byte-
-        equivalent to SA's default — no paramstyle conversion, no
-        per-parameter unrolling; if SA ever extends the default in a
-        way the dqlite dialect needs, that addition must be made
-        deliberately here rather than inherited silently.
+        pass-through ``cursor.executemany(statement, parameters)``;
+        pysqlite and aiosqlite inherit it unchanged. This override is
+        byte-equivalent to that body today, but the override itself
+        is the contract: if SA's ``DefaultDialect.do_executemany``
+        ever grows wrapper logic (per-parameter-set serialisation
+        for a DBAPI quirk on another driver, dispatch-event hooks,
+        paramstyle conversion), the dqlite dialect deliberately does
+        NOT pick up the new behaviour. The surrounding rowcount /
+        executemany flags
+        (``supports_sane_multi_rowcount = True``,
+        ``insert_executemany_returning = True``) are value-pinned
+        locally; this override is the matching behavioural opt-out.
+
+        Limits of what this override delivers:
+
+        * The override does NOT call ``super().do_executemany(...)``,
+          so any future hook SA dispatches at the default site
+          (e.g. ``dispatch.do_executemany``) is bypassed silently
+          on dqlite. To pick up a future SA default extension,
+          delete this override or route through ``super()``.
+        * The behavioural pin guards against SA inserting wrapper
+          logic above ``cursor.executemany``. It does NOT guard
+          against the dbapi-layer ``executemany`` itself changing
+          semantics — that's a separate contract surface owned by
+          ``dqlitedbapi``.
+        * The body MUST stay byte-equivalent to the pass-through —
+          a behavioural pin test (``test_do_executemany_local_override_pin``)
+          asserts exactly one ``cursor.executemany(statement,
+          parameters)`` call with the verbatim arguments.
+
+        Any future maintainer who wants the SA-default behaviour back
+        (e.g. to opt in to a new SA hook) must delete this override
+        deliberately — there is no implicit-inherit path.
         """
         cursor.executemany(statement, parameters)
 
@@ -2548,9 +2616,14 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         SA's pool calls this for forced reclaim during
         ``engine.dispose()`` under failure or shutdown. ``has_terminate
         = True`` (above) promises SA that the path is bounded — unlike
-        :meth:`do_close`, which awaits ``Connection._close_async`` for
-        up to ``self._timeout`` (default 10 s, gated on a parked wire
-        read).
+        :meth:`do_close`, which routes through the dbapi's sync
+        ``Connection.close()`` (which itself drives the bounded
+        ``_run_sync(_close_async())`` shutdown on the loop thread,
+        bounded by the dbapi connection's ``timeout`` attribute —
+        ``dbapi_connection._timeout``, default 10 s, gated on a parked
+        wire read). The dialect itself owns no ``_timeout`` attribute;
+        the timeout lives on the dbapi connection and is configured
+        via the ``timeout`` URL parameter / ``connect_args``.
 
         Routes through the dbapi's :meth:`Connection.force_close_transport`,
         which schedules ``writer.close()`` on the loop thread and

@@ -154,6 +154,37 @@ _TRANSPORT_CLASS_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
     OSError,
 )
 
+# Tail-suppression set for the ``do_close`` fallback leg's
+# ``force_close_transport`` call. Strictly wider than
+# ``_TRANSPORT_CLASS_EXCEPTIONS`` because by the time the fallback fires
+# the first close already failed, the transport is in an unknown state,
+# and the only invariant left for the dialect to honour is "do_close
+# never raises". Two extra classes vs. the first-close set:
+#
+# * ``RuntimeError`` — surfaced as ``RuntimeError("Event loop is
+#   closed")`` from the dbapi's writer-close machinery during cross-loop
+#   ``engine.dispose()``. The async sibling's ``_force_close_transport``
+#   absorbs it internally; the sync sibling does not, so the dialect-
+#   level suppress is the layer that keeps SA's pool finalize from
+#   aborting.
+# * ``ReferenceError`` — surfaced when an ``AsyncAdaptedConnection``'s
+#   inner ``weakref.proxy`` has been GC'd between the first close and
+#   the fallback (rare, but reachable when pytest fixture teardown
+#   collects the inner before the dialect's pool-finalize hop). The
+#   ``AsyncAdaptedConnection._force_close_transport`` body absorbs
+#   ``ReferenceError`` from the public alias, but the sync path through
+#   the dbapi ``Connection.force_close_transport`` can still produce one
+#   on a half-collected weakproxy on the connection's own _writer slot.
+#
+# The set is narrow on purpose — ``AttributeError`` / ``TypeError``
+# (programmer bugs from a refactor) propagate so real defects do not get
+# silently swallowed into the cleanup path.
+_FORCE_CLOSE_TAIL_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
+    *_TRANSPORT_CLASS_EXCEPTIONS,
+    RuntimeError,
+    ReferenceError,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -2321,6 +2352,16 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         over-engineering. ``aio.py``'s ``force_close_transport``
         public alias is the documented sync-teardown surface for
         exactly this leg.
+
+        The fallback's suppress tuple is ``_FORCE_CLOSE_TAIL_EXCEPTIONS``,
+        not the narrower ``_TRANSPORT_CLASS_EXCEPTIONS`` used on the
+        first-close arm. The wider tuple adds ``RuntimeError`` (for
+        cross-loop ``RuntimeError("Event loop is closed")`` from the
+        dbapi's writer-close machinery on a defunct loop) and
+        ``ReferenceError`` (for dead-proxy weakref on a half-collected
+        ``AsyncAdaptedConnection``). Both are reachable on
+        ``engine.dispose()`` paths and would otherwise abort SA's pool
+        finalize.
         """
         try:
             dbapi_connection.close()
@@ -2330,7 +2371,7 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 "falling back to force_close_transport",
                 exc_info=True,
             )
-            with contextlib.suppress(*_TRANSPORT_CLASS_EXCEPTIONS):
+            with contextlib.suppress(*_FORCE_CLOSE_TAIL_EXCEPTIONS):
                 dbapi_connection.force_close_transport()
 
     def do_terminate(self, dbapi_connection: Any) -> None:

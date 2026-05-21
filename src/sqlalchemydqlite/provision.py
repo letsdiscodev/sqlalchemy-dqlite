@@ -138,11 +138,16 @@ _DRIVERNAMES: Final[frozenset[str]] = frozenset({"dqlite", "dqlitedbapi", "aio"}
 #   server's database-name field.
 # * ``\\`` — windows path-separator; the comment's "path-separators"
 #   plural was load-bearing.
-# * C0 control chars (``\\x00``..``\\x1f``) — split log records that
-#   echo the URL (CWE-117 log-record-splitting), late-reject at the
-#   wire's ``encode_text`` for NUL with an obscure error far from the
-#   ident source, and route TAB as a TSV-encoded column separator in
-#   structured loggers.
+# * Control chars across the full Unicode ``Cc`` category: C0
+#   (``\\x00``..``\\x1f``), DEL (``\\x7f``), and C1
+#   (``\\x80``..``\\x9f``). Split log records that echo the URL
+#   (CWE-117 log-record-splitting), late-reject at the wire's
+#   ``encode_text`` for NUL with an obscure error far from the
+#   ident source, route TAB as a TSV-encoded column separator in
+#   structured loggers, and cover NEL (``\\x85``) which
+#   ``str.splitlines`` treats as a line terminator alongside
+#   ``\\n`` / ``\\r``. DEL is the seventh-bit-only C0 trailer that
+#   shares the TTY / terminal-control hazards of the C0 range.
 # * U+2028 / U+2029 — LINE SEPARATOR / PARAGRAPH SEPARATOR; treated
 #   as LF-equivalent by journald and many JSON log encoders.
 #
@@ -151,17 +156,28 @@ _DRIVERNAMES: Final[frozenset[str]] = frozenset({"dqlite", "dqlitedbapi", "aio"}
 # legitimate idents with version suffixes (``gw0.1``) or hyphens
 # stay readable, the scrub is scoped to characters the comment
 # enumerates as cross-layer hazards.
-_IDENT_SCRUB_RE: Final[re.Pattern[str]] = re.compile(r"[@/\\\x00-\x1f  ]")
+_IDENT_SCRUB_RE: Final[re.Pattern[str]] = re.compile(r"[@/\\\x00-\x1f\x7f-\x9f  ]")
 
 
 def _sanitise_ident(ident: str) -> str:
     """Replace each ``@`` / path-separator / control-char / line-
     separator code point in ``ident`` with ``_``.
 
-    Shared by both arms of ``_format_url`` so the already-suffixed
-    branch and the fresh-suffix branch carry the same policy. The
-    scrub is conservative (replace-only, no allowlist) so legitimate
-    custom idents with dots / hyphens survive.
+    Scoped to test-fixture idents (pytest-xdist worker tokens such as
+    ``gw0`` / ``gw1`` and any custom follower idents wired into the
+    SA provision plugin). Shared by both arms of ``_format_url`` so
+    the already-suffixed branch and the fresh-suffix branch carry the
+    same policy. The scrub is conservative (replace-only, no
+    allowlist) so legitimate custom idents with dots / hyphens
+    survive.
+
+    "Control-char" coverage spans the full Unicode ``Cc`` category:
+    C0 (``\\x00``..``\\x1f``), DEL (``\\x7f``), and C1
+    (``\\x80``..``\\x9f``). NEL (``\\x85``) and DEL are explicitly
+    included so the docstring's plural "control chars" promise
+    matches the implementation; per ``str.splitlines`` NEL is also a
+    line terminator and shares the log-record-splitting hazard with
+    LF / CR / U+2028 / U+2029.
     """
     return _IDENT_SCRUB_RE.sub("_", ident)
 

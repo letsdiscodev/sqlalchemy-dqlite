@@ -120,6 +120,44 @@ def test_ident_with_hyphen_preserved() -> None:
     assert "worker-a" in out.database
 
 
+def test_ident_with_del_replaced() -> None:
+    """DEL (``\\x7f``) is a control character per Unicode category
+    ``Cc``; the docstring promise of "control chars" must cover it.
+    DEL is the seventh-bit-only C0 trailer that shares the TTY /
+    terminal-control hazards of the C0 range and is the load-bearing
+    omission flagged in the round-9 audit of the round-8 widening."""
+    out = _format_url(_base(), "dqlitedbapi", "gw0\x7finject")
+    assert out.database is not None
+    assert "\x7f" not in out.database
+
+
+def test_ident_with_nel_replaced() -> None:
+    """NEL (``\\x85``) is treated as a line terminator by
+    ``str.splitlines`` (the only non-LF/CR byte in the default
+    splitlines newline set) and several log forwarders — matches the
+    line-separator promise alongside LF / CR / U+2028 / U+2029."""
+    out = _format_url(_base(), "dqlitedbapi", "gw0\x85inject")
+    assert out.database is not None
+    assert "\x85" not in out.database
+
+
+def test_ident_with_c1_low_replaced() -> None:
+    """Pin the C1 lower boundary (``\\x80``): Unicode category ``Cc``.
+    Some structured log formats decode / escape C1 inconsistently;
+    the widened class covers the full ``Cc`` category."""
+    out = _format_url(_base(), "dqlitedbapi", "gw0\x80inject")
+    assert out.database is not None
+    assert "\x80" not in out.database
+
+
+def test_ident_with_c1_high_replaced() -> None:
+    """Pin the C1 upper boundary (``\\x9f``): last byte of the
+    extended control range."""
+    out = _format_url(_base(), "dqlitedbapi", "gw0\x9finject")
+    assert out.database is not None
+    assert "\x9f" not in out.database
+
+
 def test_ident_already_suffixed_path_also_sanitised() -> None:
     """The already-suffixed branch (when ``_SESSION_TOKEN`` is already
     present in the database name) must apply the same scrub. Before

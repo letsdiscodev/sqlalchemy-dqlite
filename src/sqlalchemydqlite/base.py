@@ -22,6 +22,7 @@ from dqliteclient import CLOSE_TIMEOUT_FLOOR, CLOSE_TIMEOUT_FLOOR_RATIONALE, val
 from dqlitedbapi import FAILED_TO_CONNECT_PREFIX as _DBAPI_FAILED_TO_CONNECT_PREFIX
 from dqlitewire import (
     BARE_DATABASE_ERROR_CODES,
+    DEFAULT_MAX_CONTINUATION_FRAMES,
     DQLITE_PROTO,
     LEADER_ERROR_CODES,
     LEADER_LOST_DB_LOOKUP_SUBSTRING,
@@ -85,6 +86,24 @@ _SERVER_INTERFACEERROR_DISCONNECT_CODES: Final[frozenset[int]] = frozenset({DQLI
 # reuse, which is ping-specific and must not bleed into disconnect
 # classification on real-query paths).
 _BARE_DBE_DISCONNECT_CODES: Final[frozenset[int]] = BARE_DATABASE_ERROR_CODES
+
+# URL-time defense-in-depth cap on ``max_continuation_frames``: 10×
+# the wire-layer default. The wire-layer's
+# ``DEFAULT_MAX_CONTINUATION_FRAMES`` is the operator-facing budget
+# that bounds per-RPC continuation-frame decode work; without an
+# upper bound on the URL parser, a typo like
+# ``?max_continuation_frames=9999999999999999`` is accepted and the
+# defense-in-depth ceiling silently collapses. The factor `10` is
+# the operator-tunability budget — values up to 10× the default are
+# legitimate for high-fanout workloads; anything beyond is a typo
+# the URL parser should reject at engine construction. Tying the
+# cap to the wire constant via import keeps the relationship intact
+# if the wire team ever tunes the default; the prose rationale at
+# ``base.py:1340-1349`` documents the 10× choice.
+_URL_MAX_CONTINUATION_FRAMES_FACTOR: Final[int] = 10
+_URL_MAX_CONTINUATION_FRAMES_CAP: Final[int] = (
+    _URL_MAX_CONTINUATION_FRAMES_FACTOR * DEFAULT_MAX_CONTINUATION_FRAMES
+)
 # **Forward-compat note**: dqlitedbapi's ``_CODE_TO_EXCEPTION`` also
 # routes ``SQLITE_NOLFS`` (22), ``SQLITE_AUTH`` (23), ``SQLITE_NOTICE``
 # (27), and ``SQLITE_WARNING`` (28) to bare ``DatabaseError``. dqlite-
@@ -1344,9 +1363,15 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # literal token ``"none"`` (case-insensitive) → ``None`` to disable
     # the cap, mirroring the dbapi ``connect(max_total_rows=None)``
     # capability so URL-driven config (twelve-factor, env-var-driven
-    # engines) can express the same intent. The 1_000_000 frame
-    # ceiling is the dialect's own defense-in-depth cap; the dbapi /
-    # wire layers do not enforce a hard ceiling.
+    # engines) can express the same intent. The continuation-frames
+    # ceiling is the dialect's own defense-in-depth cap derived from
+    # the wire-layer default — see
+    # ``_URL_MAX_CONTINUATION_FRAMES_CAP`` (= 10 ×
+    # ``DEFAULT_MAX_CONTINUATION_FRAMES``); the dbapi / wire layers
+    # do not enforce a hard ceiling. The ``max_total_rows`` upper
+    # of ``2**31 - 1`` is a uint32 protocol invariant (the row-id
+    # wire field) rather than a default-derived cap — kept as a hard
+    # literal because it tracks the protocol, not a tunable.
     # Full set of dbapi.connect kwargs the dialect forwards. The URL
     # query path is restricted to the subset in ``_URL_QUERY_ALLOWED``
     # below (typed conversion + range validation); the
@@ -1370,6 +1395,16 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             "close_timeout",
             "dial_timeout",
             "attempt_timeout",
+            # ``dial_func`` is the dbapi-layer hook for caller-supplied
+            # async dialer overrides (per-test process namespaces, IPC
+            # sockets, etc.). Accepting it on the ``connect_args=``
+            # path lets engine callers inject the hook through SA's
+            # standard wiring. The URL-query path is deliberately
+            # closed for ``dial_func`` because URL strings cannot
+            # carry a callable — typing one in a connection URL is
+            # always a typo, so it stays out of ``_URL_QUERY_ALLOWED``
+            # below.
+            "dial_func",
         }
     )
 
@@ -1405,9 +1440,16 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             ),
         ),
         "max_continuation_frames": (
-            lambda s: _parse_url_int_or_none("max_continuation_frames", s, upper=1_000_000),
+            lambda s: _parse_url_int_or_none(
+                "max_continuation_frames", s, upper=_URL_MAX_CONTINUATION_FRAMES_CAP
+            ),
             lambda v: (
-                v is None or (isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 1_000_000)
+                v is None
+                or (
+                    isinstance(v, int)
+                    and not isinstance(v, bool)
+                    and 0 < v <= _URL_MAX_CONTINUATION_FRAMES_CAP
+                )
             ),
         ),
         "trust_server_heartbeat": (
@@ -1932,6 +1974,35 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                     exc_info=True,
                 )
 
+    def do_executemany(
+        self,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any = None,
+    ) -> None:
+        """Drift-defence override of ``DefaultDialect.do_executemany``.
+
+        SA's default at ``engine/default.py:948-952`` is a one-line
+        pass-through ``cursor.executemany(statement, parameters)``.
+        pysqlite and aiosqlite inherit it; this dialect overrides
+        EXPLICITLY for the same drift-defence rationale that pins
+        ``supports_sane_multi_rowcount = True`` and
+        ``insert_executemany_returning = True`` on this class — every
+        other rowcount / executemany flag is pinned locally. An
+        upstream SA refactor that introduces, for example, per-
+        parameter-set serialised iteration in
+        ``DefaultDialect.do_executemany`` (to support a DBAPI quirk
+        on another driver) would otherwise silently change executemany
+        semantics for the dqlite dialect while the surrounding flags
+        keep claiming the original contract. The body MUST stay byte-
+        equivalent to SA's default — no paramstyle conversion, no
+        per-parameter unrolling; if SA ever extends the default in a
+        way the dqlite dialect needs, that addition must be made
+        deliberately here rather than inherited silently.
+        """
+        cursor.executemany(statement, parameters)
+
     # Patterns are matched case-insensitively at the comparison site.
     # Stored in lower-case so the single ``.lower()`` at each
     # ``is_disconnect`` call normalises both sides; the previous
@@ -2097,11 +2168,18 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # ``OperationalError``-only check.
         #
         # Read ``raw_message`` first: the dbapi truncates the displayed
-        # ``message`` argument at 1024 chars (``_MAX_DISPLAY_MESSAGE``)
-        # at construction time for log hygiene, and preserves the full
-        # server text on ``raw_message``. A disconnect substring past
-        # byte 1024 would otherwise be invisible to ``str(cause)``
-        # (which returns the truncated ``args[0]``).
+        # ``message`` argument at ``_DEFAULT_MAX_RAW_MESSAGE`` (4 KiB,
+        # the wire-layer SSOT) at construction time — the same cap it
+        # applies to ``raw_message``. The client layer applies a
+        # stricter 1 KiB ``_MAX_DISPLAY_MESSAGE`` cap on its own
+        # user-facing message but that cap is invisible to this
+        # classifier path because the substring scan reads from the
+        # dbapi-level exception SA hands us. A disconnect substring
+        # past byte 4096 in the original server text would otherwise
+        # be invisible to ``str(cause)`` (which returns the truncated
+        # ``args[0]``); the priority-read of ``raw_message`` covers
+        # the full server text within the wire-layer FailureResponse
+        # limit (~64 KiB), bounded by the 4 KiB ``raw_message`` budget.
         # Restrict the substring scan to (a) ``OperationalError`` (the
         # historical surface — wire-decode/transport failures) and (b)
         # bare ``DatabaseError`` with codes 11/24/26 (CORRUPT / FORMAT /
@@ -2221,9 +2299,12 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             # OperationalErrors carry user-controlled message text and
             # must NOT trip disconnect classification on a benign
             # RAISE that happens to contain a transport-style
-            # substring. Use ``raw_message`` first so a >1024-char
+            # substring. Use ``raw_message`` first so a >4096-char
             # server message whose disconnect substring sits past the
-            # truncation boundary is still classified.
+            # dbapi's ``_DEFAULT_MAX_RAW_MESSAGE`` truncation boundary
+            # is still classified — the raw_message slot carries the
+            # full server text up to the wire-layer FailureResponse
+            # limit (~64 KiB).
             if isinstance(cause, _dbapi_exc.OperationalError):
                 cause_code = getattr(cause, "code", None)
                 applies_substring = cause_code is None

@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import types
 import weakref
@@ -1934,6 +1935,34 @@ class DqliteDialect_aio(DqliteDialect):
         contract above.
         """
         creator_fn = cparams.pop("async_creator_fn", None)
+        # Pre-flight shape check on ``async_creator_fn``: the hook is
+        # called SYNCHRONOUSLY (``creator_fn(*cargs, **cparams)``) and
+        # the returned object's ``connect()`` is then awaited via
+        # ``await_only(raw_conn.connect())``. A user mistake of writing
+        # ``async def my_creator(...)`` returns a coroutine from the
+        # synchronous call, not the expected ``AsyncConnection``-shape
+        # object; the subsequent ``raw_conn.connect()`` would raise
+        # ``AttributeError: 'coroutine' object has no attribute
+        # 'connect'`` far from the user's ``connect_args={
+        # "async_creator_fn": ...}`` line, with a leaked
+        # ``RuntimeWarning: coroutine '...' was never awaited``.
+        # Surface the misuse with ``ArgumentError`` at connect time so
+        # the diagnostic points at the configuration site.
+        # ``inspect.iscoroutinefunction`` on Python 3.12+ recognises
+        # ``functools.partial`` wrappers around an ``async def`` (a
+        # legitimate user pattern). The check mirrors SA's overall
+        # trust-the-creator discipline while catching the single most
+        # common user mistake.
+        if creator_fn is not None and inspect.iscoroutinefunction(creator_fn):
+            raise ArgumentError(
+                "async_creator_fn must be a regular (sync) callable that "
+                "returns an AsyncConnection-shape object exposing a "
+                "coroutine-shaped .connect() method. Got an async def "
+                "(or async-coroutine wrapper); the SA dialect calls the "
+                "creator synchronously and then awaits .connect() on the "
+                "returned object. See the contract in DqliteDialect_aio."
+                "connect's docstring."
+            )
         self._validate_connect_kwargs(cparams)
         # Cover the construction itself with the same try frame so a
         # ``BaseException`` (KeyboardInterrupt / SystemExit) delivered

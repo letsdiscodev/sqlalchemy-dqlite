@@ -114,17 +114,31 @@ def _remap_loop_state_runtime_error(error: BaseException) -> None:
        the close-arm's inline rationale and adjusting the
        ``has_terminate`` discipline.
     """
+    # Chain ``from hop`` (the matched discriminator), NOT ``from error``
+    # (the outer scope) — PEP 3134 §"The ``from`` clause" makes the
+    # immediate ``__cause__`` exactly what follows ``from``. Bounded-
+    # depth chain walkers (SIEM / log forwarders that defensively
+    # inspect only ``exc.__cause__``) need the loop-state shape at
+    # depth 1 to discriminate this remap from the surrounding wrap
+    # layers. Mirrors the ``from e`` discipline at the sibling remap
+    # sites (``cursor.py::_call_client``, connect-time arms). The
+    # outer ``error`` remains reachable via Python's implicit
+    # ``__context__`` chain because the helper is invoked from within
+    # an ``except BaseException as error`` block (callers:
+    # ``AsyncAdaptedConnection._handle_exception`` and
+    # ``DqliteDialect_aio.connect`` eager-connect arm). Any future
+    # remap arm added here MUST follow the same ``from hop`` rule.
     for hop in _walk_cause_chain(error):
         if not isinstance(hop, (RuntimeError, ProgrammingError)):
             continue
         msg = str(hop)
         msg_lower = msg.lower()
         if "different loop" in msg_lower or "different event loop" in msg_lower:
-            raise OperationalError(f"event-loop mismatch: {msg}", code=None) from error
+            raise OperationalError(f"event-loop mismatch: {msg}", code=None) from hop
         if "event loop is closed" in msg_lower:
-            raise OperationalError(f"event loop closed: {msg}", code=None) from error
+            raise OperationalError(f"event loop closed: {msg}", code=None) from hop
         if "loop is already running" in msg_lower:
-            raise OperationalError(f"event loop already running: {msg}", code=None) from error
+            raise OperationalError(f"event loop already running: {msg}", code=None) from hop
 
 
 class AsyncAdaptedCursor:

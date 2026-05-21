@@ -174,12 +174,19 @@ _TRANSPORT_CLASS_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
     OSError,
 )
 
-# Tail-suppression set for the ``do_close`` fallback leg's
-# ``force_close_transport`` call. Strictly wider than
-# ``_TRANSPORT_CLASS_EXCEPTIONS`` because by the time the fallback fires
-# the first close already failed, the transport is in an unknown state,
-# and the only invariant left for the dialect to honour is "do_close
-# never raises". Two extra classes vs. the first-close set:
+# Suppression set used on BOTH arms of ``do_close``: the first arm's
+# ``except _FORCE_CLOSE_TAIL_EXCEPTIONS:`` (so a first-close raise of
+# ``RuntimeError("Event loop is closed")`` or ``ReferenceError`` is
+# routed through the fallback rather than escaping ``do_close``) and
+# the fallback leg's ``contextlib.suppress(*_FORCE_CLOSE_TAIL_EXCEPTIONS)``
+# guarding the ``force_close_transport`` call (so the second close
+# cannot break the "do_close never raises" invariant either).
+# Strictly wider than ``_TRANSPORT_CLASS_EXCEPTIONS``: on the first
+# arm the wider tuple keeps loop-state / dead-proxy shapes inside the
+# graceful-then-fallback discipline; on the fallback arm the wider
+# tuple is the last line of defence for the must-not-raise contract
+# when the transport is in an unknown state after the first close
+# already failed. Two extra classes vs. the first-close set:
 #
 # * ``RuntimeError`` — surfaced as ``RuntimeError("Event loop is
 #   closed")`` from the dbapi's writer-close machinery during cross-loop

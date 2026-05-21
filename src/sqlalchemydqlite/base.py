@@ -2478,13 +2478,17 @@ class DqliteDialect(SQLiteDialect_pysqlite):
 
         On a transport-class close failure (``OperationalError``,
         ``InterfaceError``, ``DqliteConnectionError``, ``OSError`` —
-        which covers ``TimeoutError`` / ``ConnectionResetError``),
-        fall back to ``force_close_transport()`` so the slot still
-        releases — the graceful path tried, the operator gets a DEBUG
-        log line, and the pool stays drainable. Programmer bugs
-        (``AttributeError``, ``TypeError`` from a refactor) propagate
-        through the narrowed except so they are not silently
-        swallowed into the fallback.
+        which covers ``TimeoutError`` / ``ConnectionResetError``) or
+        on the documented cross-loop / dead-proxy raises from the
+        dbapi's own close() machinery (``RuntimeError("Event loop is
+        closed")`` / ``ReferenceError`` — both reachable on
+        ``engine.dispose()``), fall back to
+        ``force_close_transport()`` so the slot still releases — the
+        graceful path tried, the operator gets a DEBUG log line, and
+        the pool stays drainable. Programmer bugs (``AttributeError``,
+        ``TypeError`` from a refactor) propagate through the
+        narrowed except so they are not silently swallowed into the
+        fallback.
 
         Happy-path mirrors ``aio.py``'s
         ``AsyncAdaptedConnection.close`` — both invoke the dbapi's
@@ -2498,19 +2502,38 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         public alias is the documented sync-teardown surface for
         exactly this leg.
 
-        The fallback's suppress tuple is ``_FORCE_CLOSE_TAIL_EXCEPTIONS``,
-        not the narrower ``_TRANSPORT_CLASS_EXCEPTIONS`` used on the
-        first-close arm. The wider tuple adds ``RuntimeError`` (for
-        cross-loop ``RuntimeError("Event loop is closed")`` from the
-        dbapi's writer-close machinery on a defunct loop) and
-        ``ReferenceError`` (for dead-proxy weakref on a half-collected
-        ``AsyncAdaptedConnection``). Both are reachable on
-        ``engine.dispose()`` paths and would otherwise abort SA's pool
-        finalize.
+        Both the first-close ``except`` and the fallback's
+        ``contextlib.suppress`` use ``_FORCE_CLOSE_TAIL_EXCEPTIONS``
+        (the wider tuple defined at module scope). An earlier shape
+        used the narrower ``_TRANSPORT_CLASS_EXCEPTIONS`` on the
+        first arm — but that narrower tuple omitted ``RuntimeError``
+        (cross-loop ``RuntimeError("Event loop is closed")`` from
+        the dbapi's writer-close machinery on a defunct loop) and
+        ``ReferenceError`` (dead-proxy weakref on a half-collected
+        ``AsyncAdaptedConnection``), both of which the wider tuple's
+        docstring documents as reachable on ``engine.dispose()``
+        paths. With the wider tuple on the first arm too, a
+        ``RuntimeError("Event loop is closed")`` raised by the first
+        ``close()`` itself (not just by ``force_close_transport``)
+        is routed through the same fallback rather than escaping
+        ``do_close`` and aborting SA's pool finalize.
         """
         try:
             dbapi_connection.close()
-        except _TRANSPORT_CLASS_EXCEPTIONS:
+        except _FORCE_CLOSE_TAIL_EXCEPTIONS:
+            # Use the wider tail tuple here (same as the fallback's
+            # ``contextlib.suppress``) so a first-close raise of
+            # ``RuntimeError("Event loop is closed")`` or
+            # ``ReferenceError`` (both documented at
+            # ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` as reachable from the
+            # dbapi's own close() machinery during ``engine.dispose()``)
+            # lands on the fallback rather than escaping
+            # ``do_close``. The narrower first-arm tuple used to be
+            # ``_TRANSPORT_CLASS_EXCEPTIONS``; that left the
+            # "do_close never raises" invariant honoured only on the
+            # second-close path. Programmer-bug classes
+            # (``AttributeError`` / ``TypeError``) remain outside the
+            # tuple so a refactor regression still surfaces.
             logger.debug(
                 "do_close: graceful close raised transport-class error; "
                 "falling back to force_close_transport",

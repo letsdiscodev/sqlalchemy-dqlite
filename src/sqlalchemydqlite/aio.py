@@ -1435,18 +1435,27 @@ class AsyncAdaptedConnection(AdaptedConnection):
         on a single supported method instead of walking three layers
         of private attributes.
 
-        Idempotent. Never raises — a missing hook (older dbapi
-        version) or a writer.close() failure is silently absorbed.
-        The two ``getattr`` reads on ``self._connection`` sit INSIDE
-        the try frame so a ``ReferenceError`` from a dead
-        ``weakref.proxy`` (the post-``_release_inner_strong_ref``
-        state) is absorbed with the same swallow-
-        and-log discipline as a hook-side failure — the docstring
-        contract "Never raises" holds at the boundary the inherited
-        ``DqliteDialect.do_close`` fallback's
-        ``contextlib.suppress(*_TRANSPORT_CLASS_EXCEPTIONS)`` relies
-        on (``ReferenceError`` is intentionally NOT in that tuple
-        because it is a GC-lifecycle hazard, not a transport class).
+        Idempotent. Absorbs every ``Exception`` and
+        ``asyncio.CancelledError`` from the hook call — a missing
+        hook (older dbapi version), a dead ``weakref.proxy``
+        ``ReferenceError`` (the post-``_release_inner_strong_ref``
+        state), or a writer.close() failure is silently swallowed
+        and logged. Does NOT catch ``BaseException`` shapes that
+        signal cooperative interpreter shutdown —
+        ``KeyboardInterrupt`` and ``SystemExit`` (and any other
+        non-``Exception`` ``BaseException``) propagate so a
+        signal-handler-driven ``engine.dispose()`` cannot mask
+        them. Mirrors the discipline ``DqliteDialect.do_terminate``
+        documents at ``base.py``.
+
+        The two ``getattr`` reads on ``self._connection`` sit
+        INSIDE the try frame so a ``ReferenceError`` from a dead
+        ``weakref.proxy`` is absorbed with the same swallow-and-log
+        discipline as a hook-side failure — the boundary the
+        inherited ``DqliteDialect.do_close`` fallback's
+        ``contextlib.suppress(*_FORCE_CLOSE_TAIL_EXCEPTIONS)``
+        relies on (``ReferenceError`` is in that wider tuple, but
+        absorbing here means the suppress never even fires).
         """
         peer: object | None = None
         try:

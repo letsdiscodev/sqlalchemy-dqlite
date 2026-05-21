@@ -19,6 +19,7 @@ from sqlalchemy.exc import ArgumentError
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
 from dqliteclient import CLOSE_TIMEOUT_FLOOR, CLOSE_TIMEOUT_FLOOR_RATIONALE, validate_timeout
+from dqlitedbapi import FAILED_TO_CONNECT_PREFIX as _DBAPI_FAILED_TO_CONNECT_PREFIX
 from dqlitewire import (
     BARE_DATABASE_ERROR_CODES,
     DQLITE_PROTO,
@@ -1914,7 +1915,11 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # and the pool must invalidate.
         "event loop closed",
         "timed out",
-        "failed to connect",
+        # Derived from the dbapi-layer ``FAILED_TO_CONNECT_PREFIX``
+        # constant so a future wording change on either side stays
+        # in lockstep. The matcher compares case-insensitively
+        # against the lowercase, colon-trimmed form of the prefix.
+        _DBAPI_FAILED_TO_CONNECT_PREFIX.rstrip(": ").lower(),
         "not connected",
         # Wire-layer desync: ProtocolError / DecodeError surface here
         # via the dbapi wrap at ``cursor._call_client`` that routes

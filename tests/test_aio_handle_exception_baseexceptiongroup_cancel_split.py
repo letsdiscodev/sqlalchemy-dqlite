@@ -31,19 +31,63 @@ def _make_adapter() -> AsyncAdaptedConnection:
 
 
 def test_handle_exception_cancel_only_group_propagates_as_group() -> None:
+    """The cancel-only group propagates as a group AND ``from None``
+    sets ``__suppress_context__ = True`` so SA's display layer
+    elides the implicit context chain in tracebacks.
+
+    Note: under Python's auto-context machinery, ``from None`` only
+    affects ``__suppress_context__`` (display) — ``__context__`` is
+    still set to whatever exception was active at the raise site.
+    Production callers invoke ``_handle_exception`` from inside
+    ``except BaseException as error: self._handle_exception(error)``,
+    so ``__context__`` is populated. ``from None`` correctly
+    suppresses its display via ``__suppress_context__``. See the
+    production-shape test below for the load-bearing assertion.
+    """
     adapter = _make_adapter()
     eg = BaseExceptionGroup("cancel-only", [asyncio.CancelledError()])
-    with pytest.raises(BaseExceptionGroup) as excinfo:
-        adapter._handle_exception(eg)
+    # Drive the helper from inside an active ``except`` so Python's
+    # auto-context machinery has a candidate to attach — mirrors the
+    # production call shape from ``AsyncAdaptedConnection`` flows.
+    try:
+        raise eg
+    except BaseExceptionGroup as caught_eg:
+        with pytest.raises(BaseExceptionGroup) as excinfo:
+            adapter._handle_exception(caught_eg)
     inner = excinfo.value.exceptions
     assert any(isinstance(c, asyncio.CancelledError) for c in inner)
-    # ``raise cancel_group from None`` suppresses the implicit
-    # ``__context__`` chain so the cancel forwarded to the caller's
-    # structured-concurrency parent is unweighted by the original
-    # ``BaseExceptionGroup`` that triggered the split. Mirrors the
-    # dbapi-layer cursor.py / connection.py cancel-class arms.
-    assert excinfo.value.__context__ is None
-    assert excinfo.value.__cause__ is None
+    # ``raise cancel_group from None`` sets __suppress_context__ for
+    # display, NOT __context__ — the latter is populated by Python's
+    # auto-context machinery because the call site was inside an
+    # active ``except`` block (mirroring the production shape).
+    # __cause__ IS cleared by ``from None``.
+    assert excinfo.value.__suppress_context__ is True, (
+        "``from None`` must set __suppress_context__ = True so SA's "
+        "traceback layer elides the implicit context chain"
+    )
+    assert excinfo.value.__cause__ is None, "``from None`` must clear __cause__"
+
+
+def test_handle_exception_production_shape_preserves_context_link() -> None:
+    """Load-bearing production-shape pin: when invoked from inside
+    an active ``except`` block (as the live ``AsyncAdaptedConnection``
+    callers do), the propagated cancel group's ``__context__``
+    points back to the caught group for forensic traceback walkers.
+    The display layer suppresses it via ``__suppress_context__``,
+    but the link is preserved.
+    """
+    adapter = _make_adapter()
+    eg = BaseExceptionGroup("cancel-only", [asyncio.CancelledError("c")])
+    try:
+        raise eg
+    except BaseExceptionGroup as caught_eg:
+        with pytest.raises(BaseExceptionGroup) as excinfo:
+            adapter._handle_exception(caught_eg)
+        assert excinfo.value.__context__ is caught_eg, (
+            "Python's auto-context machinery must link the propagated "
+            "group to the caught group; only display is suppressed"
+        )
+        assert excinfo.value.__suppress_context__ is True
 
 
 def test_handle_exception_mixed_group_with_loop_state_child_still_propagates_cancel() -> None:

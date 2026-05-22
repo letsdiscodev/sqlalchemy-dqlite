@@ -2407,6 +2407,25 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 message = raw.lower()
                 if "connection is closed" in message or "cursor is closed" in message:
                     return True
+                # The dbapi raises ``InterfaceError("DqliteConnection
+                # is bound to a closed event loop. ...")`` (via
+                # ``dqliteclient.connection`` line 2207) when the
+                # original asyncio loop the connection was bound to
+                # has been GC'd. The slot is permanently dead — the
+                # weakref-bound loop cannot be revived. SA's pool
+                # MUST invalidate so the next acquire rebuilds in
+                # the current live loop. Symmetric raise at
+                # ``dqliteclient.connection`` line 2212 surfaces
+                # ``InterfaceError("DqliteConnection is bound to a
+                # different event loop. ...")`` when a still-bound
+                # slot is reused from a different loop in the same
+                # thread (e.g., after a prior ``asyncio.run(...)``
+                # returned and a fresh loop was started). Both
+                # signals are slot-killing; classify as disconnect
+                # so the pool drops the bound-but-unusable
+                # connection.
+                if "closed event loop" in message or "different event loop" in message:
+                    return True
                 # The dbapi raises ``InterfaceError("Connection
                 # invalidated (id=...); reconnect before retrying
                 # commit / rollback. ...")`` with ``code=None`` from

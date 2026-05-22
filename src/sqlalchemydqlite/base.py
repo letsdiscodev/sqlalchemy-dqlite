@@ -2433,9 +2433,23 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 # thread (e.g., after a prior ``asyncio.run(...)``
                 # returned and a fresh loop was started). Both
                 # signals are slot-killing; classify as disconnect
-                # so the pool drops the bound-but-unusable
-                # connection.
-                if "closed event loop" in message or "different event loop" in message:
+                # so the pool drops the bound-but-unusable connection.
+                # Anchor to the canonical raise-site qualifier
+                # ``"is bound to a"`` so user-supplied InterfaceError
+                # messages mentioning event loops in a non-disconnect
+                # context (e.g., "Cannot reuse a different event loop
+                # topology in this driver", or an OTel trace message
+                # mentioning "different event loop") do NOT false-
+                # positive into disconnect classification. The
+                # qualifier follows the canonical phrase verbatim at
+                # dqliteclient/connection.py:2207, 2212 without
+                # coupling to the ``DqliteConnection`` class name
+                # (so a future class rename keeps the classification
+                # correct).
+                if (
+                    "is bound to a closed event loop" in message
+                    or "is bound to a different event loop" in message
+                ):
                     return True
                 # The dbapi raises ``InterfaceError("Connection
                 # invalidated (id=...); reconnect before retrying

@@ -64,11 +64,51 @@ def test_is_disconnect_recognises_bound_to_different_event_loop_interface_error(
 def test_is_disconnect_does_not_false_positive_on_event_loop_substring(
     dialect: DqliteDialect,
 ) -> None:
-    """Defence: the two substrings ("closed event loop" / "different
-    event loop") are dialect-specific phrases. A user-raised
-    ``InterfaceError("event loop")`` alone (without the canonical
-    "closed" / "different" qualifier) should NOT trip disconnect
-    classification.
+    """Defence: the canonical raise-site phrases carry ``"is bound to a"``.
+    A user-raised ``InterfaceError("event loop")`` alone (no
+    qualifier) should NOT trip disconnect classification.
     """
     err = InterfaceError("event loop", code=None)
+    assert dialect.is_disconnect(err, None, None) is False
+
+
+def test_is_disconnect_does_not_false_positive_on_different_event_loop_topology(
+    dialect: DqliteDialect,
+) -> None:
+    """Defence: a user-raised ``InterfaceError`` mentioning
+    ``"different event loop"`` in a non-disconnect context
+    (e.g. ``"Cannot reuse a different event loop topology in this
+    driver"``) must NOT trip. The tightened ``"is bound to a"``
+    anchor prevents false-positive slot invalidation.
+    """
+    err = InterfaceError(
+        "Cannot reuse a different event loop topology in this driver",
+        code=None,
+    )
+    assert dialect.is_disconnect(err, None, None) is False
+
+
+def test_is_disconnect_does_not_false_positive_on_closed_event_loop_sentinel(
+    dialect: DqliteDialect,
+) -> None:
+    """Defence: an operator-policy InterfaceError mentioning
+    ``"closed event loop"`` in a non-disconnect sentinel context
+    must NOT trip.
+    """
+    err = InterfaceError(
+        "policy: this hop requires a closed event loop sentinel",
+        code=None,
+    )
+    assert dialect.is_disconnect(err, None, None) is False
+
+
+def test_is_disconnect_does_not_false_positive_on_otel_trace_message(
+    dialect: DqliteDialect,
+) -> None:
+    """Defence: an OTel-style trace message mentioning
+    ``"different event loop"`` must NOT trip. The canonical raise
+    sites carry the ``"is bound to a"`` qualifier which this
+    user-wording does not.
+    """
+    err = InterfaceError("trace: different event loop seen at hop 3", code=None)
     assert dialect.is_disconnect(err, None, None) is False

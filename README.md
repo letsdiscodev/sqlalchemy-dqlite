@@ -103,6 +103,22 @@ a load balancer or DNS round-robin in front of the cluster, or rotate
 the URL host across deployments. Multi-address bootstrap is not
 exposed at the dialect URL surface.
 
+## STRICT-table DDL is unavailable through SA's compiler
+
+SA's SQLite dialect gates STRICT-table compilation on
+`server_version_info >= (3, 37)` (`sqlalchemy/dialects/sqlite/base.py`).
+The dqlite dbapi pins `sqlite_version_info = (3, 35, 0)` as the
+documented floor (see
+`python-dqlite-dbapi/src/dqlitedbapi/_constants.py`) to avoid silently
+rejecting connections to older-server clusters that ship SQLite below
+the floor. As a consequence, SA's compiler will NOT emit
+`CREATE TABLE ... STRICT` DDL through this dialect, even when the
+cluster ships SQLite 3.37 or newer.
+
+If your cluster supports STRICT tables and you want STRICT semantics,
+emit the DDL via raw SQL (`engine.execute(text("CREATE TABLE ...
+STRICT"))`) rather than SA's `Table` / `Column` model.
+
 ## Cross-version semantic shift: NULL in BOOLEAN/DATETIME columns
 
 Upstream dqlite commit `f30fc99` (`query: preserve SQLITE_NULL type

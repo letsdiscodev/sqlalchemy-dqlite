@@ -2226,9 +2226,20 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # has a running loop on the same thread (asyncio rejects
         # nested loop entry). The async adapter's ``_handle_exception``
         # remaps to ``OperationalError("event loop already running:
-        # ...")``; the substring ``"loop is already running"``
-        # matches the remapped wording without overlapping the other
-        # loop-class entries.
+        # <appended str(hop)>")``. Both substrings are kept for
+        # refactor-safety:
+        # - ``"event loop already running"`` matches the remap's
+        #   emitted prefix verbatim. This is the load-bearing match
+        #   for any future refactor that drops / sanitises the
+        #   appended ``str(hop)`` cause text — without this entry, a
+        #   wording-only refactor of the remap would silently break
+        #   disconnect classification with no test catching it.
+        # - ``"loop is already running"`` matches the appended
+        #   ``str(hop)`` cause text from the original
+        #   ``RuntimeError("This event loop is already running")``
+        #   for forward-compat with third-party RuntimeErrors that
+        #   leak this wording through other code paths.
+        "event loop already running",
         "loop is already running",
     )
 

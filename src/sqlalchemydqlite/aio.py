@@ -1285,7 +1285,13 @@ class AsyncAdaptedConnection(AdaptedConnection):
             )
             if cancel_group is not None:
                 raise cancel_group
-            assert remainder is not None
+            # Defensive narrowing via ``if`` instead of ``assert`` so
+            # the subsequent ``remainder.exceptions`` access doesn't
+            # surface ``AttributeError`` under ``python -O``.
+            # Logically unreachable under the BaseExceptionGroup.split
+            # contract.
+            if remainder is None:
+                raise error
             child_classes = {type(c).__name__ for c in remainder.exceptions}
             raise OperationalError(
                 f"aggregate {type(remainder).__name__} with "

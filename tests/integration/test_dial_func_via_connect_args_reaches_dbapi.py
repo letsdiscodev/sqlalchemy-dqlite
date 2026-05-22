@@ -1,0 +1,77 @@
+"""Pin: ``dial_func`` passed via SA ``connect_args=`` reaches the
+dbapi layer and is invoked on the dial.
+
+``_CONNECT_KWARG_ALLOWED`` (base.py) lists ``dial_func`` explicitly,
+but no end-to-end test verified the kwarg actually flows through the
+dialect's ``create_connect_args`` into the dbapi connect path. A
+custom dialer is the canonical way to inject TLS / unix-socket /
+test-only transport into the dial; a regression that drops it from
+the allowlist (or fails to forward it) would land silently.
+
+URL-side ``dial_func`` is correctly rejected at URL parse — covered
+by exclusion in existing URL-kwarg tests.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from dqliteclient._dial import open_connection_with_keepalive
+
+
+def test_sync_dial_func_via_connect_args_routed_to_dbapi(engine_url: str) -> None:
+    """Sync dialect: pass a custom ``dial_func`` that delegates to the
+    default dialer but records its invocation; verify the dialer was
+    actually called during ``engine.connect()``.
+    """
+    invocations: list[str] = []
+
+    async def recording_dialer(address: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        invocations.append(address)
+        host, port_str = address.rsplit(":", 1)
+        return await open_connection_with_keepalive(host, int(port_str))
+
+    engine = create_engine(
+        engine_url,
+        connect_args={"dial_func": recording_dialer},
+    )
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1")).scalar()
+        assert invocations, (
+            "custom dial_func passed via connect_args did NOT reach "
+            "the dbapi layer; SA dialect's create_connect_args must "
+            "forward the kwarg verbatim"
+        )
+    finally:
+        engine.dispose()
+
+
+def test_async_dial_func_via_connect_args_routed_to_dbapi(async_engine_url: str) -> None:
+    """Async dialect mirror."""
+    invocations: list[str] = []
+
+    async def recording_dialer(address: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        invocations.append(address)
+        host, port_str = address.rsplit(":", 1)
+        return await open_connection_with_keepalive(host, int(port_str))
+
+    async def _run() -> None:
+        engine = create_async_engine(
+            async_engine_url,
+            connect_args={"dial_func": recording_dialer},
+        )
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+    assert invocations, (
+        "custom dial_func passed via connect_args did NOT reach the "
+        "dbapi layer on the async dialect"
+    )

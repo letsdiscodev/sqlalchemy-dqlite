@@ -1263,22 +1263,17 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # change silently bypass one of the three sites — a hazard the
         # ``done/sa-async-close-rollback-arm-missing-loop-is-already-
         # running-remap.md`` near-miss documents.
-        _remap_loop_state_runtime_error(error)
-        # PEP 654 cancel-class split. ``_remap_loop_state_runtime_error``
-        # only raises when a loop-state RuntimeError / ProgrammingError
-        # is found; otherwise we fall through here. If ``error`` is a
-        # ``BaseExceptionGroup`` (from a future TaskGroup-using user
-        # codepath that bubbles through the cursor-level ``except
-        # BaseException as error`` arm), the SA pool's downstream
-        # ``isinstance(e, dbapi.Error)`` gate would miss the group
-        # entirely — the slot stays live and the raw group propagates
-        # to the user. Mirror the dbapi-layer cursor / connect
-        # discipline: split out ``CancelledError`` /
-        # ``KeyboardInterrupt`` / ``SystemExit`` children and re-raise
-        # them on their own group; wrap the ``Exception``-class
-        # remainder as ``OperationalError`` so SA's classifier engages
-        # (is_disconnect can then walk the cause chain into the
-        # children).
+        # PEP 654 cancel-class split must run BEFORE
+        # ``_remap_loop_state_runtime_error`` so a
+        # ``BaseExceptionGroup`` containing BOTH a CancelledError
+        # AND a loop-state RuntimeError (the canonical mixed shape
+        # from a cross-loop ``TaskGroup``) propagates the cancel
+        # rather than firing the loop-state remap on the
+        # RuntimeError hop. Without this precedence, the remap
+        # walks the group's children via ``_walk_cause_chain``,
+        # finds the loop-state hop, raises ``OperationalError``,
+        # and the cancel-class child is silently dropped — exactly
+        # the failure mode the split was added to prevent.
         if isinstance(error, BaseExceptionGroup):
             cancel_group, remainder = error.split(
                 lambda e: isinstance(e, (asyncio.CancelledError, KeyboardInterrupt, SystemExit))
@@ -1298,6 +1293,14 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # contract.
             if remainder is None:
                 raise error
+            # Pure-Exception remainder: route through the loop-state
+            # remap so a group of e.g. ``RuntimeError("different
+            # event loop")`` still surfaces as ``OperationalError``
+            # via the canonical helper. ``_remap_loop_state_runtime_error``
+            # walks the group children via ``_walk_cause_chain`` and
+            # raises from the matched hop; if no hop matches, falls
+            # through to the wrap below.
+            _remap_loop_state_runtime_error(remainder)
             child_classes = {type(c).__name__ for c in remainder.exceptions}
             raise OperationalError(
                 f"aggregate {type(remainder).__name__} with "
@@ -1305,6 +1308,11 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 f"of class(es) {sorted(child_classes)}",
                 code=None,
             ) from remainder
+        # Non-group errors take the original remap path.
+        # ``_remap_loop_state_runtime_error`` raises ``OperationalError``
+        # from the matched hop if any loop-state wording is found;
+        # otherwise returns and we re-raise the original.
+        _remap_loop_state_runtime_error(error)
         raise error
 
     def commit(self) -> None:

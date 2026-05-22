@@ -46,6 +46,49 @@ def test_handle_exception_cancel_only_group_propagates_as_group() -> None:
     assert excinfo.value.__cause__ is None
 
 
+def test_handle_exception_mixed_group_with_loop_state_child_still_propagates_cancel() -> None:
+    """Precedence: a group containing BOTH a CancelledError AND a
+    loop-state RuntimeError (the canonical mixed-shape from a
+    cross-loop ``TaskGroup``) must propagate the CancelledError
+    rather than fire ``_remap_loop_state_runtime_error`` on the
+    loop-state hop.
+
+    Without the cancel-class split running first, the remap walks
+    the group, finds the loop-state child, raises
+    ``OperationalError`` from that hop, and the cancel-class child
+    is silently dropped — exactly the failure mode the cancel-class
+    split was added to prevent.
+    """
+    adapter = _make_adapter()
+    eg = BaseExceptionGroup(
+        "mixed-with-loop-state",
+        [asyncio.CancelledError(), RuntimeError("different event loop")],
+    )
+    with pytest.raises(BaseExceptionGroup) as excinfo:
+        adapter._handle_exception(eg)
+    inner = excinfo.value.exceptions
+    assert any(isinstance(c, asyncio.CancelledError) for c in inner)
+    # Group must contain the cancel partition only; the loop-state
+    # RuntimeError remains accessible via the original group on
+    # __context__ for diagnostic walks if the consumer chooses.
+
+
+def test_handle_exception_loop_state_only_group_still_remaps_to_operational_error() -> None:
+    """Negative pin: a group with NO cancel-class child but a
+    loop-state RuntimeError must still surface as
+    ``OperationalError`` via ``_remap_loop_state_runtime_error``.
+    The reorder must not regress the original remap behaviour on
+    pure loop-state groups.
+    """
+    adapter = _make_adapter()
+    eg = BaseExceptionGroup(
+        "pure-loop-state",
+        [RuntimeError("different event loop")],
+    )
+    with pytest.raises(OperationalError):
+        adapter._handle_exception(eg)
+
+
 def test_handle_exception_mixed_group_propagates_cancel_partition() -> None:
     adapter = _make_adapter()
     eg = BaseExceptionGroup(

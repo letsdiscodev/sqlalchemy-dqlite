@@ -1284,7 +1284,13 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 lambda e: isinstance(e, (asyncio.CancelledError, KeyboardInterrupt, SystemExit))
             )
             if cancel_group is not None:
-                raise cancel_group
+                # ``raise ... from None`` so the cancel forwarded to
+                # the caller's structured-concurrency parent is
+                # unweighted by the original ``BaseExceptionGroup``
+                # on ``__context__``. Matches the dbapi-layer
+                # discipline at cursor.py:_call_client and
+                # connection.py's connect-path arms.
+                raise cancel_group from None
             # Defensive narrowing via ``if`` instead of ``assert`` so
             # the subsequent ``remainder.exceptions`` access doesn't
             # surface ``AttributeError`` under ``python -O``.

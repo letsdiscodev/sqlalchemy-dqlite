@@ -37,6 +37,13 @@ def test_handle_exception_cancel_only_group_propagates_as_group() -> None:
         adapter._handle_exception(eg)
     inner = excinfo.value.exceptions
     assert any(isinstance(c, asyncio.CancelledError) for c in inner)
+    # ``raise cancel_group from None`` suppresses the implicit
+    # ``__context__`` chain so the cancel forwarded to the caller's
+    # structured-concurrency parent is unweighted by the original
+    # ``BaseExceptionGroup`` that triggered the split. Mirrors the
+    # dbapi-layer cursor.py / connection.py cancel-class arms.
+    assert excinfo.value.__context__ is None
+    assert excinfo.value.__cause__ is None
 
 
 def test_handle_exception_mixed_group_propagates_cancel_partition() -> None:

@@ -13,8 +13,9 @@ from sqlalchemy import types as sqltypes
 from sqlalchemy.dialects.sqlite.base import SQLiteCompiler
 from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
 from sqlalchemy.engine import URL
-from sqlalchemy.engine.interfaces import DBAPIConnection, IsolationLevel
+from sqlalchemy.engine.interfaces import BindTyping, DBAPIConnection, IsolationLevel
 from sqlalchemy.exc import ArgumentError
+from sqlalchemy.sql.compiler import InsertmanyvaluesSentinelOpts
 
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
@@ -1018,6 +1019,12 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # the async-side parity argument.
     driver = "dqlitedbapi"
 
+    # Drift-defence pin matching the async sibling's
+    # ``is_async = True`` at aio.py. ``DefaultDialect.is_async = False``
+    # is inherited but pinning explicitly surfaces the sync/async
+    # split as a documented class-level attribute.
+    is_async = False
+
     # ``paramstyle`` (qmark) inherited transitively: ``dqlitedbapi.paramstyle``
     # is "qmark", which SA's ``DefaultDialect.__init__`` reads via
     # ``self.dbapi.paramstyle`` and assigns to the dialect instance
@@ -1223,6 +1230,27 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     use_insertmanyvalues = True
     supports_default_values = True
     insert_null_pk_still_autoincrements = True
+    # Sibling drift-defence pins for the rest of SA 2.x's
+    # insertmanyvalues machinery and the surrounding `bind_typing` /
+    # `supports_for_update_of` flags. DefaultDialect's current values
+    # (sqlalchemy/engine/default.py:239-255):
+    #   - use_insertmanyvalues_wo_returning = False
+    #   - insertmanyvalues_implicit_sentinel = NOT_SUPPORTED
+    #   - supports_for_update_of = False
+    #   - bind_typing = BindTyping.NONE
+    # `insert_executemany_returning_sort_by_parameter_order` is a
+    # `util.memoized_property` derived from
+    # `insert_returning and use_insertmanyvalues`; with our pins it
+    # evaluates to True. Pinning the value explicitly converts the
+    # memoized property to a class attribute, surfacing a maintainer-
+    # readable contract without changing behaviour (the memoized
+    # property cache stores the value on first read; the explicit
+    # class attribute is observationally identical).
+    use_insertmanyvalues_wo_returning = False
+    insertmanyvalues_implicit_sentinel = InsertmanyvaluesSentinelOpts.NOT_SUPPORTED
+    supports_for_update_of = False
+    insert_executemany_returning_sort_by_parameter_order = True
+    bind_typing = BindTyping.NONE
     # NOTE: ``supports_default_metavalue = True``,
     # ``default_metavalue_token = "NULL"``, ``tuple_in_values = True``,
     # ``update_returning_multifrom = True``, ``supports_alter = False``,

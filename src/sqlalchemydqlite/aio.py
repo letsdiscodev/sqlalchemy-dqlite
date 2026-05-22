@@ -1264,6 +1264,35 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # ``done/sa-async-close-rollback-arm-missing-loop-is-already-
         # running-remap.md`` near-miss documents.
         _remap_loop_state_runtime_error(error)
+        # PEP 654 cancel-class split. ``_remap_loop_state_runtime_error``
+        # only raises when a loop-state RuntimeError / ProgrammingError
+        # is found; otherwise we fall through here. If ``error`` is a
+        # ``BaseExceptionGroup`` (from a future TaskGroup-using user
+        # codepath that bubbles through the cursor-level ``except
+        # BaseException as error`` arm), the SA pool's downstream
+        # ``isinstance(e, dbapi.Error)`` gate would miss the group
+        # entirely — the slot stays live and the raw group propagates
+        # to the user. Mirror the dbapi-layer cursor / connect
+        # discipline: split out ``CancelledError`` /
+        # ``KeyboardInterrupt`` / ``SystemExit`` children and re-raise
+        # them on their own group; wrap the ``Exception``-class
+        # remainder as ``OperationalError`` so SA's classifier engages
+        # (is_disconnect can then walk the cause chain into the
+        # children).
+        if isinstance(error, BaseExceptionGroup):
+            cancel_group, remainder = error.split(
+                lambda e: isinstance(e, (asyncio.CancelledError, KeyboardInterrupt, SystemExit))
+            )
+            if cancel_group is not None:
+                raise cancel_group
+            assert remainder is not None
+            child_classes = {type(c).__name__ for c in remainder.exceptions}
+            raise OperationalError(
+                f"aggregate {type(remainder).__name__} with "
+                f"{len(remainder.exceptions)} child(ren) "
+                f"of class(es) {sorted(child_classes)}",
+                code=None,
+            ) from remainder
         raise error
 
     def commit(self) -> None:

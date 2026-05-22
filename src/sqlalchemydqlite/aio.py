@@ -1285,6 +1285,25 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # on ``__context__``. Matches the dbapi-layer
                 # discipline at cursor.py:_call_client and
                 # connection.py's connect-path arms.
+                #
+                # Cancellation-precedence trade-off in the mixed
+                # group case (cancel + loop-state RuntimeError, e.g.
+                # from a cross-loop ``TaskGroup``): ``remainder``
+                # carries the loop-state child which would normally
+                # be routed through ``_remap_loop_state_runtime_error``
+                # → ``OperationalError`` and trip disconnect
+                # classification. Here it is discarded so the cancel
+                # propagates cleanly, honouring structured-concurrency.
+                # Self-heal path: the slot stays bound until the
+                # next acquire; that acquire re-fires the same
+                # underlying loop-state RuntimeError, this time
+                # WITHOUT a sibling CancelledError. The second pass
+                # has only the loop-state member, ``_handle_exception``
+                # routes it through the remap, and the
+                # ``OperationalError`` then trips disconnect
+                # classification, invalidating the slot. One wasted
+                # retry per cross-loop-cancel race, but no permanent
+                # slot-poison.
                 raise cancel_group from None
             # Defensive narrowing via ``if`` instead of ``assert`` so
             # the subsequent ``remainder.exceptions`` access doesn't

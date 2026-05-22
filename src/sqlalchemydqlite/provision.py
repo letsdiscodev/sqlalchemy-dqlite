@@ -81,11 +81,23 @@ _LOG_TRUNCATE_MAX_CHARS: Final[int] = 200
 def _safe_for_log(value: str) -> str:
     """Sanitize + truncate ``value`` for log-line embedding.
 
-    Composes ``sanitize_for_log`` (the wire-layer helper that strips
-    C0 / C1, U+2028 / U+2029, full bidi block, ZW chars, BOM) with a
-    cap so the resulting log record is bounded regardless of the
-    server-supplied input size. Mirrors ``base._safe_for_log``;
-    defined locally to avoid the provision → base import direction.
+    Composes the wire-layer ``sanitize_for_log`` helper (strips C0 /
+    C1, U+2028 / U+2029, full bidi block, ZW chars, BOM AND escapes
+    LF / TAB so journald / syslog cannot interpret either as a
+    record boundary) with a local 200-char truncate cap so the
+    resulting log record is bounded regardless of server-supplied
+    input size.
+
+    **Stronger than ``base._safe_for_log``**, which uses
+    ``_sanitize_server_text`` (strips controls but does NOT escape
+    LF / TAB — appropriate for exception-message embedding where
+    LF aids readability). Provision call sites embed
+    server-supplied identifier strings (table names from
+    ``sqlite_master``, etc.) into ``logger.debug`` records where a
+    forged LF / TAB would split the record; the stronger escape is
+    load-bearing here.
+
+    Defined locally to avoid the provision → base import direction.
     """
     sanitised = _sanitize_for_log(value)
     if len(sanitised) <= _LOG_TRUNCATE_MAX_CHARS:

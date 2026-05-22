@@ -2377,6 +2377,27 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 # ``(id=``) does NOT trip disconnect classification.
                 if "connection invalidated (id=" in message:
                     return True
+                # The dbapi raises ``InterfaceError("Connection used
+                # after fork; reconstruct from configuration in the
+                # target process. ...")`` (and the aio twin
+                # ``AsyncConnection used after fork; ...``) from
+                # every method when the cached creator-pid no longer
+                # matches the current process. The fork-inherited
+                # slot is permanently dead — the parent's asyncio
+                # loop / asyncio.Lock state is unusable in the child.
+                # Match the canonical phrase ``"used after fork"`` so
+                # SA's pool invalidates and the next acquire re-builds.
+                # Fork-based deployments (gunicorn preload mode,
+                # Celery prefork, multiprocessing.Pool) inheriting
+                # engine slots from the parent rely on this
+                # classifier to self-heal. The substring is
+                # consistent across all raise sites in
+                # ``dqlitedbapi.connection`` and
+                # ``dqlitedbapi.aio.connection`` and is unlikely to
+                # collide with user-raised wording (the bare token
+                # "fork" would, "used after fork" does not).
+                if "used after fork" in message:
+                    return True
             # Leader-change code on either OperationalError shape —
             # checked before the substring scan so a coded leader-flip
             # is not gated out by the OE-arm code-is-None restriction

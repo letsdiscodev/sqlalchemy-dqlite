@@ -70,6 +70,30 @@ from sqlalchemy.testing.provision import (
 
 from dqlitewire import sanitize_for_log as _sanitize_for_log
 
+# Match the discipline used by ``_safe_for_log`` in ``base.py``:
+# sanitize control / bidi / invisible characters AND truncate so a
+# server-controlled value (e.g. a table name read from ``sqlite_master``
+# in a multi-tenant cluster, or an error message bubbling up from the
+# wire) cannot allocate an unbounded log record.
+_LOG_TRUNCATE_MAX_CHARS: Final[int] = 200
+
+
+def _safe_for_log(value: str) -> str:
+    """Sanitize + truncate ``value`` for log-line embedding.
+
+    Composes ``sanitize_for_log`` (the wire-layer helper that strips
+    C0 / C1, U+2028 / U+2029, full bidi block, ZW chars, BOM) with a
+    cap so the resulting log record is bounded regardless of the
+    server-supplied input size. Mirrors ``base._safe_for_log``;
+    defined locally to avoid the provision → base import direction.
+    """
+    sanitised = _sanitize_for_log(value)
+    if len(sanitised) <= _LOG_TRUNCATE_MAX_CHARS:
+        return sanitised
+    overflow = len(sanitised) - _LOG_TRUNCATE_MAX_CHARS
+    return f"{sanitised[:_LOG_TRUNCATE_MAX_CHARS]}... [truncated, {overflow} chars]"
+
+
 # Per-session unique database-name suffix. dqlite has no
 # ``DROP DATABASE``: reusing the cluster's ``default`` database across
 # pytest sessions would leak prior-session schema (every table the
@@ -328,14 +352,14 @@ def _drop_user_tables(eng: Any) -> None:
                     # same discipline.
                     logger.debug(
                         "drop_user_tables: %s on DROP TABLE %s",
-                        _sanitize_for_log(str(e)),
-                        _sanitize_for_log(str(name)),
+                        _safe_for_log(str(e)),
+                        _safe_for_log(str(name)),
                     )
             conn.commit()
     except Exception as e:
         logger.debug(
             "drop_user_tables: %s during connect/exec",
-            _sanitize_for_log(str(e)),
+            _safe_for_log(str(e)),
         )
 
 
@@ -414,8 +438,8 @@ def _dqlite_run_reap_dbs(url: str | sa_url.URL, idents: list[str]) -> None:
             # site in this package applies the same discipline.
             logger.debug(
                 "reap_dbs ident=%s: %s",
-                _sanitize_for_log(str(ident)),
-                _sanitize_for_log(str(e)),
+                _safe_for_log(str(ident)),
+                _safe_for_log(str(e)),
             )
 
 

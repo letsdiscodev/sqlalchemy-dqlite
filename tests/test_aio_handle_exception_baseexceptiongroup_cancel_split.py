@@ -68,6 +68,41 @@ def test_handle_exception_cancel_only_group_propagates_as_group() -> None:
     assert excinfo.value.__cause__ is None, "``from None`` must clear __cause__"
 
 
+def test_raise_from_none_sets_suppress_context_on_non_split_group() -> None:
+    """Load-bearing pin for ``raise cancel_group from None``: drive a
+    handcrafted ``BaseExceptionGroup`` that has NEVER passed through
+    ``BaseExceptionGroup.split()`` so the only source of
+    ``__suppress_context__ = True`` on the re-raise is ``from None``
+    itself.
+
+    Why this matters: ``BaseExceptionGroup.split(isinstance_predicate)``
+    pre-sets ``__suppress_context__ = True`` on the returned partition.
+    The sibling production-shape test passes equally with OR without
+    ``from None`` on the production raise (the split has already set
+    the flag). This handcrafted variant isolates the ``from None``
+    semantics — if a future maintainer drops ``from None`` from
+    ``aio.py:1288``'s ``raise cancel_group from None``, this test
+    fires.
+    """
+    eg = BaseExceptionGroup("handcrafted", [asyncio.CancelledError("c")])
+    # The handcrafted group's flag is the default (False) — confirms
+    # the isolation precondition.
+    assert eg.__suppress_context__ is False
+    try:
+        raise RuntimeError("outer")
+    except RuntimeError:
+        # Mirror the production line verbatim. Without `from None`,
+        # __suppress_context__ stays False on the propagated `eg`.
+        try:
+            raise eg from None
+        except BaseExceptionGroup as got:
+            assert got.__suppress_context__ is True, (
+                "``raise eg from None`` MUST set __suppress_context__ = True. "
+                "Without this assertion, a maintainer who drops `from None` "
+                "would only be caught by the __cause__ pin."
+            )
+
+
 def test_handle_exception_production_shape_preserves_context_link() -> None:
     """Load-bearing production-shape pin: when invoked from inside
     an active ``except`` block (as the live ``AsyncAdaptedConnection``

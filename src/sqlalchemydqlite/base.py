@@ -1464,6 +1464,13 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             "timeout",
             "max_total_rows",
             "max_continuation_frames",
+            # ``max_message_size`` is the wire-layer cap on inbound
+            # frame size (default 64 MiB). Accepting on both the
+            # ``connect_args=`` and ``_URL_QUERY_ALLOWED`` paths so
+            # operators can tune the cap from either SA surface;
+            # validation lives at the wire layer (positive int,
+            # non-bool — passed through verbatim).
+            "max_message_size",
             "trust_server_heartbeat",
             "close_timeout",
             "dial_timeout",
@@ -1523,6 +1530,21 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                     and not isinstance(v, bool)
                     and 0 < v <= _URL_MAX_CONTINUATION_FRAMES_CAP
                 )
+            ),
+        ),
+        # ``max_message_size``: wire-layer inbound frame cap.
+        # ``None`` is accepted as the dbapi sentinel (= wire-default
+        # 64 MiB). The validator's int range mirrors
+        # ``max_total_rows`` — positive 32-bit signed; the wire
+        # layer revalidates against its own upper bound. Per the
+        # reviewer's note, no SA-side cap is imposed beyond the
+        # int-shape check: a SA cap would mask legitimate larger
+        # values; the protocol layer's existing ValueError is the
+        # source of truth.
+        "max_message_size": (
+            lambda s: _parse_url_int_or_none("max_message_size", s, upper=2**31 - 1),
+            lambda v: (
+                v is None or (isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 2**31 - 1)
             ),
         ),
         "trust_server_heartbeat": (

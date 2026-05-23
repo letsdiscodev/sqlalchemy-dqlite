@@ -1962,8 +1962,16 @@ class DqliteDialect_aio(DqliteDialect):
         try:
             cur = dbapi_connection._connection.cursor()
             try:
+                # Execute alone proves the round-trip — matches the
+                # sync sibling ``DqliteDialect.do_ping`` (base.py) and
+                # SA's ``DefaultDialect.do_ping`` (engine/default.py).
+                # The earlier extra ``await cur.fetchone()`` doubled
+                # ping latency without adding liveness signal: dqlite
+                # delivers row data in the execute response so the
+                # fetch was buffer-side, and no caller of ``do_ping``
+                # consumes the cursor's description / rowcount after
+                # the call.
                 await cur.execute(self._dialect_specific_select_one)
-                await cur.fetchone()
             finally:
                 # Mirror the sibling cursor-close discipline in
                 # ``AsyncAdaptedCursor.execute`` (this module, search

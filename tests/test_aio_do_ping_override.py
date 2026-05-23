@@ -25,7 +25,13 @@ def test_aio_dialect_overrides_do_ping_locally() -> None:
 
 
 async def test_do_ping_select_1_returns_true_on_healthy_connection() -> None:
-    """Healthy path: ``SELECT 1`` succeeds, ``do_ping`` returns True."""
+    """Healthy path: ``SELECT 1`` succeeds, ``do_ping`` returns True.
+
+    Execute alone proves the RTT — matching the sync sibling
+    ``DqliteDialect.do_ping`` and SA's ``DefaultDialect.do_ping``.
+    The fetchone() round-trip was dropped to halve ping latency
+    without losing the liveness signal.
+    """
     dialect = DqliteDialect_aio()
 
     cursor = MagicMock()
@@ -42,7 +48,7 @@ async def test_do_ping_select_1_returns_true_on_healthy_connection() -> None:
     result = await greenlet_spawn(dialect.do_ping, dbapi_connection)
     assert result is True
     cursor.execute.assert_awaited_once_with("SELECT 1")
-    cursor.fetchone.assert_awaited_once()
+    cursor.fetchone.assert_not_awaited()
     cursor.close.assert_called_once()
 
 

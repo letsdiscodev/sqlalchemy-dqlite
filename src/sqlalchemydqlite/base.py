@@ -2628,14 +2628,25 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 # and matches the docstring intent above.
                 applies_substring = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
             elif isinstance(cause, _dbapi_exc.InterfaceError):
-                # Server-emitted ``DQLITE_PROTO`` (1001) carries a
-                # transport-style server message the substring
-                # scanner should classify as disconnect.
-                # ``SQLITE_RANGE`` (25) and ``SQLITE_MISUSE`` (21)
-                # are caller-side bugs and MUST NOT trigger pool
-                # invalidation — retrying them against a fresh
-                # connection re-runs the same broken caller code.
-                # Restrict the substring scan to the explicit
+                # The dedicated-phrase arm at the top of this loop
+                # (lines 2461-2539) already handles the
+                # client-emitted InterfaceError shapes (closed
+                # handle, event-loop binding faults, "connection
+                # invalidated (id=", "used after fork") and
+                # returns True directly on match. We only reach
+                # here if none of those phrases matched, i.e. the
+                # cause is most likely a server-emitted
+                # InterfaceError carrying a transport-style
+                # message under one of the disconnect-eligible
+                # codes (``DQLITE_PROTO`` = 1001). The substring
+                # scan below classifies on
+                # ``_dqlite_disconnect_messages`` patterns that
+                # are DISJOINT from the dedicated-phrase set, so
+                # this is not a double scan — it is the second
+                # half of a two-pass classifier. ``SQLITE_RANGE``
+                # (25) / ``SQLITE_MISUSE`` (21) etc. are caller-
+                # side bugs and MUST NOT trigger pool invalidation,
+                # so restrict the substring scan to the explicit
                 # disconnect-eligible code set.
                 applies_substring = (
                     getattr(cause, "code", None) in _SERVER_INTERFACEERROR_DISCONNECT_CODES

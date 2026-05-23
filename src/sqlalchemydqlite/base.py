@@ -2562,9 +2562,17 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                     isinstance(cause, err_class)
                     and getattr(cause, "code", None) == _SQLITE_NOTFOUND
                 ):
-                    msg_lc = (
+                    # ``msg_lc`` actually lower-case (matching the
+                    # variable name) — defends against a future
+                    # upstream wording capitalisation change that
+                    # would silently break the leader-flip classifier
+                    # arm. ``LEADER_LOST_DB_LOOKUP_SUBSTRING`` is
+                    # already lowercase by convention (the wire
+                    # layer's SSOT pins it).
+                    raw = (
                         getattr(cause, "raw_message", None) or getattr(cause, "message", None) or ""
                     )
+                    msg_lc = raw.lower()
                     if msg_lc.startswith(LEADER_LOST_DB_LOOKUP_SUBSTRING):
                         return True
             # Substring scan — restricted to OperationalError(code=None)

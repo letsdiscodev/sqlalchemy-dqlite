@@ -2343,17 +2343,14 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # from ``ClusterError`` so the policy branch must be checked
         # first to short-circuit.
         # OS-level transport failures (socket RST, broken pipe, DNS,
-        # connect refused, connection timeout). ``ConnectionError``,
-        # ``BrokenPipeError``, and ``TimeoutError`` are all ``OSError``
-        # subclasses, so the single ``OSError`` check covers every
-        # stdlib transport-error shape (including ConnectionResetError
-        # / ConnectionAbortedError / ConnectionRefusedError /
-        # socket.gaierror that a narrower enumeration would miss).
-        # Check on the bare exception before the walk: if ``e`` itself
-        # is an OSError that's enough.
-        if isinstance(e, OSError):
-            return True
-
+        # connect refused, connection timeout) are classified by the
+        # cause-chain walk below. ``_walk_cause_chain`` yields ``e``
+        # at depth 0, so a bare OSError is caught by the walk's
+        # per-node ``isinstance(cause, OSError)`` arm without a
+        # separate early-return here. Keeping the walk as the single
+        # gate also handles ``BaseExceptionGroup`` containing OSError
+        # children — a case the prior early-return missed because
+        # groups are not OSError instances.
         # Single cause-chain walk applying every classification per
         # node. Order within the loop body matters: ClusterPolicyError
         # short-circuits before its parent ClusterError; the leader-

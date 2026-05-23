@@ -35,31 +35,48 @@ from dqlitewire import sanitize_for_log as _sanitize_for_log
 from dqlitewire import sanitize_server_text as _sanitize_server_text
 
 
-def _validate_close_timeout_url(value: float) -> bool:
-    """URL-time `close_timeout` validator.
+def _make_timeout_url_validator(
+    field_name: str,
+    *,
+    min_value: float | None = None,
+    min_value_rationale: str | None = None,
+) -> Callable[[float], bool]:
+    """Build a URL-time timeout validator that delegates to the
+    client-layer ``validate_timeout`` SSOT.
 
-    Delegates to the client-layer `validate_timeout` so the
-    FIN-flush / TIME_WAIT rationale appended by the floor-rejection
-    diagnostic reaches the operator who pinned `?close_timeout=...`
-    in the SA connection URL — same operator-facing surface as
-    direct `DqliteConnection` / `ConnectionPool` callers and the
-    dbapi-layer `connect_args=` path.
-
-    Returns `True` on success (truthy so the URL dispatcher accepts
-    the value). Translates `ValueError` / `TypeError` from the
-    client validator to `ArgumentError` so the SA URL-parse contract
-    (URL-time errors surface as `ArgumentError`) is preserved.
+    Routes every URL-parse-time timeout check through the same
+    invariants the direct ``DqliteConnection`` / ``ConnectionPool``
+    callers and the dbapi-layer ``connect_args=`` path use, so any
+    future tightening at the client layer flows through automatically
+    instead of leaving the SA URL surface as the asymmetric arm.
+    Returns ``True`` on success (truthy so the URL dispatcher accepts
+    the value). Translates ``ValueError`` / ``TypeError`` from the
+    client validator to ``ArgumentError`` so the SA URL-parse contract
+    (URL-time errors surface as ``ArgumentError``) is preserved.
     """
-    try:
-        validate_timeout(
-            value,
-            name="close_timeout",
-            min_value=CLOSE_TIMEOUT_FLOOR,
-            min_value_rationale=CLOSE_TIMEOUT_FLOOR_RATIONALE,
-        )
-    except (TypeError, ValueError) as e:
-        raise ArgumentError(str(e)) from e
-    return True
+
+    def validator(value: float) -> bool:
+        try:
+            kwargs: dict[str, Any] = {"name": field_name}
+            if min_value is not None:
+                kwargs["min_value"] = min_value
+            if min_value_rationale is not None:
+                kwargs["min_value_rationale"] = min_value_rationale
+            validate_timeout(value, **kwargs)
+        except (TypeError, ValueError) as e:
+            raise ArgumentError(str(e)) from e
+        return True
+
+    return validator
+
+
+_validate_close_timeout_url = _make_timeout_url_validator(
+    "close_timeout",
+    min_value=CLOSE_TIMEOUT_FLOOR,
+    min_value_rationale=CLOSE_TIMEOUT_FLOOR_RATIONALE,
+)
+_validate_dial_timeout_url = _make_timeout_url_validator("dial_timeout")
+_validate_attempt_timeout_url = _make_timeout_url_validator("attempt_timeout")
 
 
 # InterfaceError codes that originate server-side and may carry a
@@ -1569,27 +1586,13 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         "close_timeout": (float, _validate_close_timeout_url),
         # go-dqlite parity knobs: dial_timeout / attempt_timeout
         # mirror Config.DialTimeout / Config.AttemptTimeout on the
-        # client layer. Reuse the same float-positive-finite shape
-        # as ``timeout`` — neither knob gates FIN-flush, so the
-        # 0.01s close_timeout floor's rationale does not apply.
-        "dial_timeout": (
-            float,
-            lambda v: (
-                not isinstance(v, bool)
-                and isinstance(v, int | float)
-                and math.isfinite(v)
-                and v > 0
-            ),
-        ),
-        "attempt_timeout": (
-            float,
-            lambda v: (
-                not isinstance(v, bool)
-                and isinstance(v, int | float)
-                and math.isfinite(v)
-                and v > 0
-            ),
-        ),
+        # client layer. Route the URL-time validator through the same
+        # ``validate_timeout`` SSOT used by close_timeout so any future
+        # client-layer constraint (upper bound, etc.) flows through
+        # automatically. Neither knob gates FIN-flush, so the close_
+        # timeout floor's rationale does not apply.
+        "dial_timeout": (float, _validate_dial_timeout_url),
+        "attempt_timeout": (float, _validate_attempt_timeout_url),
     }
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:

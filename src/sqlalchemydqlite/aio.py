@@ -2176,6 +2176,13 @@ class DqliteDialect_aio(DqliteDialect):
         # legitimate user pattern). The check mirrors SA's overall
         # trust-the-creator discipline while catching the single most
         # common user mistake.
+        if creator_fn is not None and not callable(creator_fn):
+            raise ArgumentError(
+                f"async_creator_fn must be callable; got "
+                f"{type(creator_fn).__name__}. The SA dialect calls the "
+                f"creator synchronously to obtain an AsyncConnection-shape "
+                f"object whose .connect() coroutine is then awaited."
+            )
         if creator_fn is not None and inspect.iscoroutinefunction(creator_fn):
             raise ArgumentError(
                 "async_creator_fn must be a regular (sync) callable that "

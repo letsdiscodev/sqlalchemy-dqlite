@@ -324,7 +324,14 @@ def _dqlite_create_db(cfg: Any, eng: Any, ident: str) -> None:
     ``follower_url_from_main``) auto-creates the database on the
     cluster. Nothing to provision up front.
     """
-    logger.info("dqlite create_db: no-op for ident=%r", ident)
+    # Sanitise ``ident`` through ``_safe_for_log`` (strict variant —
+    # escapes LF/TAB and strips U+2028/U+2029/bidi controls) so a
+    # forged ident produced by a third-party follower_ident_fn cannot
+    # splice the operator log. Sibling ``reap_dbs`` site at the
+    # bottom of this module already routes through the same helper;
+    # this brings the three provision log sites into uniform
+    # discipline.
+    logger.info("dqlite create_db: no-op for ident=%s", _safe_for_log(str(ident)))
 
 
 def _drop_user_tables(eng: Any) -> None:
@@ -384,7 +391,8 @@ def _dqlite_drop_db(cfg: Any, eng: Any, ident: str) -> None:
     so the database is logically empty — the next test run that picks
     the same name sees a clean schema.
     """
-    logger.info("dqlite drop_db: dropping user tables for ident=%r", ident)
+    # See ``create_db`` for the ``_safe_for_log`` rationale.
+    logger.info("dqlite drop_db: dropping user tables for ident=%s", _safe_for_log(str(ident)))
     _drop_user_tables(eng)
 
 

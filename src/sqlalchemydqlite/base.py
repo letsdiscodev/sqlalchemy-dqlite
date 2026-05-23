@@ -2820,7 +2820,18 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         peer = _log_safe_peer(dbapi_connection)
         try:
             dbapi_connection.force_close_transport()
-        except Exception:  # terminate must not raise
+        except _FORCE_CLOSE_TAIL_EXCEPTIONS:
+            # Narrow tuple: covers every transport-class shape
+            # (OSError + dbapi.Error subclasses + DqliteConnectionError)
+            # so SA's ``has_terminate=True`` non-raising contract is
+            # upheld for the universe of failures terminate is
+            # actually meant to absorb. AttributeError / TypeError —
+            # i.e. cross-repo dbapi refactor breaks where
+            # ``force_close_transport`` was removed or renamed —
+            # propagate so the regression surfaces loudly rather than
+            # silent no-op on every pool.dispose(). Same discipline as
+            # ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` (see definition at
+            # base.py:211 + the comment block above it).
             logger.debug(
                 "do_terminate: force_close_transport raised on dispose for "
                 "peer=%s id=%s; proceeding (has_terminate=True non-raising "

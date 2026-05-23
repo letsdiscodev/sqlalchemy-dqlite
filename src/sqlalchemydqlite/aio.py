@@ -29,6 +29,7 @@ from dqlitedbapi import (
 from sqlalchemydqlite.base import (
     _AUTOCOMMIT_REJECTION_MSG,
     _BARE_DBE_DISCONNECT_CODES,
+    _FORCE_CLOSE_TAIL_EXCEPTIONS,
     _TRANSPORT_CLASS_EXCEPTIONS,
     DqliteDialect,
     _log_safe_peer,
@@ -1854,7 +1855,16 @@ class DqliteDialect_aio(DqliteDialect):
         peer = _log_safe_peer(dbapi_connection)
         try:
             dbapi_connection.terminate()
-        except Exception:  # terminate must not raise
+        except _FORCE_CLOSE_TAIL_EXCEPTIONS:
+            # Narrow tuple: covers every transport-class shape so the
+            # has_terminate=True non-raising contract holds for real
+            # transport failures (OSError, dbapi.Error subclasses,
+            # DqliteConnectionError). AttributeError / TypeError from
+            # cross-repo dbapi-package refactor breaks (where
+            # ``terminate()`` is removed or renamed) propagate so the
+            # regression surfaces loudly rather than silent no-op on
+            # every ``engine.dispose()``. Sync sibling at
+            # base.py::do_terminate uses the same tuple.
             logger.debug(
                 "do_terminate: terminate raised on dispose for peer=%s id=%s; "
                 "proceeding (has_terminate=True non-raising contract)",
@@ -1995,7 +2005,26 @@ class DqliteDialect_aio(DqliteDialect):
                     # ``AsyncCursor.close`` is sync — see its
                     # docstring. No await needed.
                     cur.close()
-                except (Exception, asyncio.CancelledError) as exc:
+                except (
+                    DatabaseError,
+                    InterfaceError,
+                    DqliteConnectionError,
+                    OSError,
+                    asyncio.CancelledError,
+                ) as exc:
+                    # Narrow to the same transport-class set the sync
+                    # sibling at ``base.py`` (``do_ping``) uses, plus
+                    # the async-specific ``asyncio.CancelledError``.
+                    # The prior ``except (Exception, CancelledError)``
+                    # silently DEBUG-logged programmer-bug shapes
+                    # (``AttributeError`` / ``TypeError`` /
+                    # ``ValueError`` from a refactor regression) that
+                    # the sync sibling would propagate — letting
+                    # those propagate matches the package-wide
+                    # discipline (cf.
+                    # ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` at base.py
+                    # which deliberately excludes programmer-bug
+                    # shapes for the same reason).
                     logger.debug(
                         "_async_ping cursor close (id=%s, peer=%s): %s; suppressed",
                         id(dbapi_connection),

@@ -165,10 +165,15 @@ async def test_async_ping_close_cancellederror_absorbed_and_logged(
 
 
 @pytest.mark.asyncio
-async def test_async_ping_close_exception_during_normal_path_is_swallowed() -> None:
-    """A plain ``RuntimeError`` from ``cur.close()`` on the happy
-    path is absorbed by the ``(Exception, asyncio.CancelledError)``
-    catch tuple so the ping returns success.
+async def test_async_ping_close_transport_class_exception_is_swallowed() -> None:
+    """A transport-class exception (``OSError`` /
+    ``DqliteConnectionError`` / dbapi.``DatabaseError``-tree) from
+    ``cur.close()`` on the happy path is absorbed by the narrow
+    catch tuple so the ping returns success. The earlier bare
+    ``RuntimeError`` test was relying on the over-broad
+    ``except Exception`` shape which has since been narrowed to
+    match the sync sibling — letting programmer-bug shapes
+    propagate. Use ``OSError`` (a real transport-class shape) here.
     """
     cursor = MagicMock()
 
@@ -179,7 +184,7 @@ async def test_async_ping_close_exception_during_normal_path_is_swallowed() -> N
         return (1,)
 
     def _close() -> None:
-        raise RuntimeError("close failed")
+        raise OSError("close failed: simulated transport teardown")
 
     cursor.execute = _execute
     cursor.fetchone = _fetchone
@@ -193,8 +198,7 @@ async def test_async_ping_close_exception_during_normal_path_is_swallowed() -> N
     dialect = DqliteDialect_aio.__new__(DqliteDialect_aio)
     dialect._dialect_specific_select_one = "SELECT 1"
 
-    # Must not raise — the close-arm RuntimeError is swallowed by
-    # ``contextlib.suppress(Exception)``.
+    # Must not raise — OSError is in the narrow tuple.
     await dialect._async_ping(adapted)
 
 

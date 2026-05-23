@@ -1781,6 +1781,23 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         iso_level = kwargs.get("isolation_level")
         if isinstance(iso_level, str) and iso_level.upper() == "AUTOCOMMIT":
             raise ArgumentError(_AUTOCOMMIT_REJECTION_MSG)
+        # Non-AUTOCOMMIT ``isolation_level`` in ``connect_args`` is
+        # also a real shape (a user typing ``connect_args={
+        # "isolation_level": "SERIALIZABLE"}``) — it falls through the
+        # generic allowlist below with a misleading "Check
+        # ``connect_args=`` for typos" message that points the user
+        # the wrong way. The dialect routes ``isolation_level`` only
+        # via the engine-level kwarg
+        # (``create_engine(isolation_level=...)``); make that explicit
+        # with a directional message symmetric with the AUTOCOMMIT
+        # arm above.
+        if "isolation_level" in kwargs:
+            raise ArgumentError(
+                "dqlite's SQLAlchemy dialect routes ``isolation_level`` "
+                "via ``create_engine(isolation_level=...)``, not "
+                "``connect_args``. Move the value to the engine-level "
+                "kwarg."
+            )
         unknown = set(kwargs) - self._CONNECT_KWARG_ALLOWED
         if unknown:
             raise ArgumentError(

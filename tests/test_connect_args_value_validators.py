@@ -105,21 +105,23 @@ def test_connect_args_isolation_level_autocommit_case_insensitive() -> None:
         )
 
 
-def test_connect_args_isolation_level_other_value_falls_through_to_generic() -> None:
-    """Only AUTOCOMMIT is special-cased; other ``isolation_level``
-    values are still unknown kwargs and fall through to the generic
-    allowlist rejection. Don't widen the allowlist."""
+def test_connect_args_isolation_level_other_value_directs_to_engine_level() -> None:
+    """``isolation_level`` is routed only via the engine-level kwarg
+    (``create_engine(isolation_level=...)``). connect_args carrying
+    SERIALIZABLE (or any non-AUTOCOMMIT value) gets a directional
+    message pointing at the right layer rather than the misleading
+    generic "Unknown kwarg" / "check for typos" rejection."""
     dialect = DqliteDialect()
-    with pytest.raises(ArgumentError, match="Unknown"):
+    with pytest.raises(ArgumentError, match="create_engine"):
         dialect._validate_connect_kwargs({"isolation_level": "SERIALIZABLE"})
 
 
-def test_connect_args_isolation_level_none_falls_through_to_generic() -> None:
-    """Engine-level guard requires ``isinstance(iso_level, str)``;
-    mirror that — ``None`` is not a string, so no special case fires
-    and the generic allowlist rejection runs."""
+def test_connect_args_isolation_level_none_directs_to_engine_level() -> None:
+    """``None`` is a legitimate stdlib ``isolation_level`` value (the
+    autocommit shape). It still belongs on the engine-level kwarg; the
+    directional message applies."""
     dialect = DqliteDialect()
-    with pytest.raises(ArgumentError, match="Unknown"):
+    with pytest.raises(ArgumentError, match="create_engine"):
         dialect._validate_connect_kwargs({"isolation_level": None})
 
 

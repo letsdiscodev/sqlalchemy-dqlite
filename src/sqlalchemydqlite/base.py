@@ -2102,11 +2102,18 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         finally:
             # Wrap close in a narrow defensive block so a transport-
             # class failure here (leader flip mid-BEGIN, dead socket
-            # post-BEGIN) does not mask the BEGIN-time exception. The
-            # close-time exception would replace the BEGIN one in
-            # Python's finally semantics; the BEGIN exception then
-            # only survives on ``__context__``, which SA's
-            # ``is_disconnect`` cause-walk does NOT consult.
+            # post-BEGIN) does not mask the BEGIN-time exception.
+            # Python's ``finally`` clause replaces the currently-
+            # propagating exception with any new exception raised
+            # inside the finally body — the BEGIN exception would
+            # be demoted to ``__context__`` of the close-time error.
+            # Although ``is_disconnect``'s ``_walk_cause_chain``
+            # at base.py:329-393 DOES walk ``__context__`` (and
+            # could in principle recover the BEGIN error), we do not
+            # want to depend on that recovery path: the BEGIN error
+            # must be the propagating exception so SA's exception
+            # wrapping sees it directly, not as a chained
+            # ``__context__``.
             try:
                 cursor.close()
             except _TRANSPORT_CLASS_EXCEPTIONS:

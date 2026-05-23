@@ -550,8 +550,20 @@ class _DqliteDateTime(sqltypes.DateTime):
             # through the result_processor still works (ISO8601 is
             # bidirectional) but cross-writer parity breaks for
             # applications with literal-string predicates.
+            #
+            # Pysqlite's ``_storage_format`` always includes the
+            # ``%(microsecond)06d`` fractional component -- the
+            # widened midnight datetime serialises as
+            # ``"2021-03-15 00:00:00.000000"`` (six trailing zeros),
+            # NOT ``"2021-03-15 00:00:00"``. dqlitedbapi's
+            # ``_iso8601_from_datetime`` omits the fractional component
+            # when ``microsecond == 0``, so going through that encoder
+            # would diverge from pysqlite by seven characters. Emit
+            # the formatted string directly to match cross-writer
+            # literal-string predicates that compare against pysqlite
+            # output bit-identically.
             if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
-                value = datetime.datetime.combine(value, datetime.time())
+                return f"{value.isoformat()} 00:00:00.000000"
             return value
 
         return process

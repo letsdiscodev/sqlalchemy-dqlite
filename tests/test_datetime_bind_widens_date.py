@@ -12,12 +12,18 @@ import datetime
 from sqlalchemydqlite.base import _DqliteDateTime
 
 
-def test_bind_date_widens_to_midnight_datetime() -> None:
+def test_bind_date_widens_to_midnight_datetime_with_microseconds() -> None:
+    """Pysqlite-parity: a bare ``datetime.date`` widens to the
+    canonical full-timestamp shape ``"YYYY-MM-DD 00:00:00.000000"``
+    (six trailing zeros in the fractional component) so cross-writer
+    literal-string predicates round-trip bit-identically against
+    sibling pysqlite writers. The bind_processor produces a string
+    directly because ``_iso8601_from_datetime`` would otherwise omit
+    the ``.000000`` when ``microsecond == 0``."""
     proc = _DqliteDateTime(timezone=False).bind_processor(None)
     assert proc is not None
     widened = proc(datetime.date(2021, 3, 15))
-    assert isinstance(widened, datetime.datetime)
-    assert widened == datetime.datetime(2021, 3, 15, 0, 0, 0)
+    assert widened == "2021-03-15 00:00:00.000000"
 
 
 def test_bind_datetime_passes_through_unchanged() -> None:

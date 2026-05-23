@@ -49,11 +49,14 @@ class TestDqliteDateTimeBindRejectsTimeOnlyPayload:
 
     def test_bare_date_still_widens_to_midnight(self) -> None:
         """The pysqlite-parity widen at the existing bind-side
-        branch must not regress."""
+        branch must not regress. Output is the formatted string
+        with explicit ``.000000`` fractional component so
+        cross-writer literal-string predicates match pysqlite
+        bit-identically."""
         proc = _DqliteDateTime(timezone=False).bind_processor(None)
         assert proc is not None
         d = datetime.date(2024, 1, 2)
-        assert proc(d) == datetime.datetime(2024, 1, 2, 0, 0, 0)
+        assert proc(d) == "2024-01-02 00:00:00.000000"
 
 
 class TestDqliteDateBindNarrowsDatetimeAndRejectsTime:

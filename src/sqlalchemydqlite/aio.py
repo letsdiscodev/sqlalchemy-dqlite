@@ -1690,13 +1690,23 @@ class AsyncAdaptedConnection(AdaptedConnection):
         it would escape the ``contextlib.suppress`` and the transport
         would leak.
 
-        The method delegates straight to :meth:`_force_close_transport`
-        which already encapsulates the sync teardown semantics (the
-        underscore variant remains the in-module call shape because
-        every internal call site and existing test pin references it
-        by that name).
+        Mirrors the adapter's :meth:`close` post-close
+        ``_release_inner_strong_ref`` discipline so the inner
+        ``AsyncConnection`` is released on every public-surface
+        teardown path -- including the dialect-level fallback that
+        bypasses the graceful ``close`` outer ``try/finally``.
+        Without the swap here, ``DqliteDialect.do_close``'s fallback
+        leg leaves the adapter holding a strong ref to the inner
+        connection past close, pinning attached cursors / pool slots
+        from GC. Tail ``Exception`` from the swap is suppressed: the
+        force-close cleanup must not raise back into the dialect's
+        fallback arm.
         """
-        self._force_close_transport()
+        try:
+            self._force_close_transport()
+        finally:
+            with contextlib.suppress(Exception):
+                self._release_inner_strong_ref()
 
     def terminate(self) -> None:
         """Force-close the underlying connection without rollback.

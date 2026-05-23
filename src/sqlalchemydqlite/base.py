@@ -2,6 +2,7 @@
 
 import contextlib
 import datetime
+import inspect
 import logging
 import math
 import types
@@ -1832,6 +1833,26 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         eager-connect step here.
         """
         creator_fn = cparams.pop("creator_fn", None)
+        if creator_fn is not None:
+            # Mirror the async sibling's discipline at ``aio.py``:
+            # reject non-callables and async-def shapes here with a
+            # precise ``ArgumentError`` rather than letting Python's
+            # call-protocol leak ``TypeError`` (non-callable) or
+            # silently returning a coroutine from ``connect()``
+            # (async-def). The async dialect rejects an async
+            # ``creator_fn`` analogously for the inverse mismatch
+            # (sync hook on the async URL form).
+            if not callable(creator_fn):
+                raise ArgumentError(
+                    f"connect_args['creator_fn'] must be callable; got {type(creator_fn).__name__}"
+                )
+            if inspect.iscoroutinefunction(creator_fn):
+                raise ArgumentError(
+                    "connect_args['creator_fn'] must NOT be async (the sync "
+                    "URL form ``dqlite://...`` requires a synchronous hook). "
+                    "Use the async URL form ``dqlite+aio://...`` with "
+                    "connect_args['async_creator_fn'] instead."
+                )
         self._validate_connect_kwargs(cparams)
         if creator_fn is not None:
             return creator_fn(*cargs, **cparams)

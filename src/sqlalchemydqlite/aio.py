@@ -267,19 +267,19 @@ class AsyncAdaptedCursor:
         not applicable here. The underlying ``AsyncCursor.arraysize``
         has the same deque-only semantic (the dbapi layer also
         eagerly buffers ``_rows`` from the wire response); both
-        defaults are ``1`` per PEP 249. Done finding 602 covers the
-        adapter-to-underlying propagation gap.
+        defaults are ``1`` per PEP 249.
 
-        Validation rejects ``bool``, non-int, and ``< 1`` so the
-        ``arraysize=0`` / ``arraysize=-1`` footguns are caught at the
-        assignment rather than silently turning every ``fetchmany``
-        call into ``[]`` (which makes ``while batch :=
-        cursor.fetchmany(): ...`` skip the entire result set).
+        Validation rejects ``bool`` and non-int (a dqlite-specific
+        footgun-prevention with no SA-reference sibling). ``0`` and
+        negative values are accepted to match SA's reference adapter
+        (``sqlalchemy/connectors/asyncio.py``) and stdlib
+        ``sqlite3.Cursor.arraysize`` which are both unvalidated. PEP
+        249 §6.2 sets no minimum; cross-driver porting code that uses
+        ``arraysize = 0`` as "use the underlying default" continues
+        to work.
         """
         if not isinstance(value, int) or isinstance(value, bool):
-            raise ProgrammingError(f"arraysize must be a positive integer, got {value!r}")
-        if value < 1:
-            raise ProgrammingError(f"arraysize must be >= 1, got {value}")
+            raise ProgrammingError(f"arraysize must be an int, got {value!r}")
         self._arraysize = value
 
     def close(self) -> None:

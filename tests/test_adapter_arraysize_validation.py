@@ -1,12 +1,10 @@
-"""``AsyncAdaptedCursor.arraysize`` rejects invalid values.
+"""``AsyncAdaptedCursor.arraysize`` rejects ``bool`` and non-int.
 
-Previously the bare slot let callers assign ``0`` or ``-1``, and
-``fetchmany(size=None)`` fell back to ``self.arraysize``; with
-``arraysize=0`` the slice ``min(0, len(self._rows)) = 0`` returned
-``[]`` on every call, so the idiomatic
-``while batch := cursor.fetchmany(): ...`` silently skipped the
-entire result set. Match ``dqlitedbapi.Cursor.arraysize``'s setter:
-reject ``bool``, non-int, and ``< 1``.
+Accepts any int including ``0`` and negatives, matching SA's
+reference adapter (``sqlalchemy/connectors/asyncio.py``) and stdlib
+``sqlite3.Cursor.arraysize`` (both unvalidated). PEP 249 §6.2 sets
+no minimum. Bool / non-int rejection remains as a dqlite-specific
+footgun-prevention with no SA-reference sibling.
 """
 
 from __future__ import annotations
@@ -27,23 +25,24 @@ def _make_cursor() -> AsyncAdaptedCursor:
     return cur
 
 
-@pytest.mark.parametrize("bad", [0, -1, -100])
-def test_rejects_zero_or_negative(bad: int) -> None:
+@pytest.mark.parametrize("value", [0, -1, -100])
+def test_accepts_zero_or_negative(value: int) -> None:
+    """SA-reference / stdlib parity: zero and negatives pass through."""
     cur = _make_cursor()
-    with pytest.raises(ProgrammingError, match=">= 1"):
-        cur.arraysize = bad
+    cur.arraysize = value
+    assert cur.arraysize == value
 
 
 @pytest.mark.parametrize("bad", [True, False])
 def test_rejects_bool(bad: bool) -> None:
     cur = _make_cursor()
-    with pytest.raises(ProgrammingError, match="positive integer"):
+    with pytest.raises(ProgrammingError, match="must be an int"):
         cur.arraysize = bad
 
 
 def test_rejects_non_int() -> None:
     cur = _make_cursor()
-    with pytest.raises(ProgrammingError, match="positive integer"):
+    with pytest.raises(ProgrammingError, match="must be an int"):
         cur.arraysize = "1"  # type: ignore[assignment]
 
 

@@ -315,7 +315,12 @@ class TestDqliteDialectAio:
         """Async dbapi module must expose PEP 249 attributes for SQLAlchemy."""
         dbapi = DqliteDialect_aio.import_dbapi()
         assert dbapi.apilevel == "2.0"
-        assert dbapi.threadsafety == 1
+        # threadsafety=2 = "threads may share the module AND
+        # connections" — the dbapi opts into Tier 2 once the user
+        # passes ``check_same_thread=False``. Cursors are NOT
+        # shareable per the documented contract. See
+        # ``dqlitedbapi.__init__:108-149`` for the full rationale.
+        assert dbapi.threadsafety == 2
 
     def test_create_async_engine(self) -> None:
         """create_async_engine must not raise during dialect initialization."""

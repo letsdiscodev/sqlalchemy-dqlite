@@ -96,20 +96,27 @@ def test_bare_databaseerror_with_disconnect_code_and_substring_does_classify(
     code: int,
 ) -> None:
     """Sanity: a BARE ``DatabaseError`` (not a subclass) with a code in
-    ``_BARE_DBE_DISCONNECT_CODES`` and a disconnect-style message DOES
-    classify as disconnect — pin the type-identity arm's positive
-    side too."""
+    ``_BARE_DBE_DISCONNECT_CODES`` classifies as disconnect — pin the
+    type-identity arm's positive side. After the substring-gate fix,
+    the disconnect-style message is no longer required (mirrors
+    do_ping's code-only classification)."""
     exc = DatabaseError("wire decode failed validation", code=code)
     dialect = _dialect()
     assert dialect.is_disconnect(exc, None, None) is True
 
 
 @pytest.mark.parametrize("code", list(_BARE_DBE_DISCONNECT_CODES))
-def test_bare_databaseerror_with_disconnect_code_no_substring_does_not_classify(
+def test_bare_databaseerror_with_disconnect_code_classifies_regardless_of_message(
     code: int,
 ) -> None:
-    """Sanity: bare ``DatabaseError`` with disconnect code but a
-    non-matching message does NOT classify (substring is required)."""
+    """Sanity: bare ``DatabaseError`` with disconnect code classifies
+    as disconnect regardless of message — the code is the load-bearing
+    signal. Pre-fix this returned False (the substring gate blocked
+    classification on the canonical engine wordings); post-fix it
+    short-circuits ``return True`` mirroring ``do_ping``'s arm at
+    base.py:2935-2945. See
+    ``test_is_disconnect_bare_dbe_short_circuits_on_slot_fatal_codes.py``
+    for the full parametrised coverage."""
     exc = DatabaseError("some unrelated server message", code=code)
     dialect = _dialect()
-    assert dialect.is_disconnect(exc, None, None) is False
+    assert dialect.is_disconnect(exc, None, None) is True

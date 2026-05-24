@@ -2646,7 +2646,29 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 # silently activate disconnect classification on
                 # caller bugs. ``type is`` makes the scope explicit
                 # and matches the docstring intent above.
-                applies_substring = getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES
+                if getattr(cause, "code", None) in _BARE_DBE_DISCONNECT_CODES:
+                    # Short-circuit ``return True`` mirrors ``do_ping``'s
+                    # classification at base.py:2935-2945. A bare
+                    # DatabaseError under one of the slot-fatal codes
+                    # IS slot-fatal regardless of the message text —
+                    # the substring scan exists for the
+                    # ``OperationalError`` arm above where ``code`` is
+                    # None and the message IS the load-bearing
+                    # classification signal. The canonical engine
+                    # wordings for CORRUPT / FORMAT / NOTADB
+                    # ("database disk image is malformed", "file is
+                    # not a database", "file is encrypted or is not a
+                    # database") are NOT in ``_dqlite_disconnect_
+                    # messages`` by design — those messages are caller
+                    # diagnostics, not transport-state signals. Without
+                    # this short-circuit, ``is_disconnect`` returned
+                    # False on a real CORRUPT response, SA's pool
+                    # returned the slot to the queue, and every
+                    # subsequent checkout re-tripped the same fault.
+                    # ``_BARE_DBE_DISCONNECT_CODES`` is the SSOT both
+                    # classifiers gate on.
+                    return True
+                applies_substring = False
             elif isinstance(cause, _dbapi_exc.InterfaceError):
                 # The dedicated-phrase arm at the top of this loop
                 # (lines 2461-2539) already handles the

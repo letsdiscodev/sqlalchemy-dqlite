@@ -27,14 +27,20 @@ def test_database_error_with_wire_decode_substring_classifies_as_disconnect() ->
     assert DqliteDialect().is_disconnect(e, None, None) is True
 
 
-def test_database_error_without_disconnect_substring_not_classified() -> None:
-    """Negative pin: a bare ``DatabaseError`` whose message does NOT
-    contain a disconnect substring must NOT be classified as a
-    disconnect — the widening only wires the substring branch to the
-    larger class hierarchy; it does not turn every ``DatabaseError``
-    into a disconnect."""
+def test_database_error_with_slot_fatal_code_classifies_even_without_substring() -> None:
+    """A bare ``DatabaseError`` carrying one of the slot-fatal codes
+    (CORRUPT=11 / FORMAT=24 / NOTADB=26) classifies as disconnect
+    regardless of message — pre-fix this returned False (the substring
+    gate blocked classification on the canonical engine wording);
+    post-fix the bare-DBE arm short-circuits ``return True`` for the
+    code set, mirroring ``do_ping``'s arm at base.py:2935-2945. See
+    ``test_is_disconnect_bare_dbe_short_circuits_on_slot_fatal_codes.py``
+    for the full pin set explaining the HIGH-severity hazard the
+    pre-fix behaviour created (without ``pool_pre_ping=True``, a slot
+    surfacing CORRUPT stayed in the pool and re-tripped on every
+    subsequent checkout)."""
     e = DatabaseError("database disk image is malformed", code=11)
-    assert DqliteDialect().is_disconnect(e, None, None) is False
+    assert DqliteDialect().is_disconnect(e, None, None) is True
 
 
 def test_database_error_via_cause_walk() -> None:

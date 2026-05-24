@@ -1523,6 +1523,19 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             # to ``dqlitedbapi.connect()`` which validates the
             # value (non-negative finite number, non-bool).
             "busy_timeout",
+            # ``check_same_thread`` (bool) — stdlib sqlite3 parity.
+            # Default ``True`` (dbapi side); set ``False`` to share
+            # a Connection across threads. The dialect pins
+            # ``pool.QueuePool``; SA's QueuePool checkout/checkin
+            # plus the ``_finalize_fairy`` weakref-finalizer (which
+            # runs from arbitrary GC threads) both produce cross-
+            # thread Connection access patterns. The pool self-
+            # heals via ``force_close_transport`` (no _check_thread)
+            # even today, but the GC-finalize raise produces a noisy
+            # ``logger.error("Exception during reset or similar")``
+            # line; passing ``check_same_thread=False`` quiets that
+            # and matches the established SA + sqlite3 pattern.
+            "check_same_thread",
         }
     )
 
@@ -1628,6 +1641,18 @@ class DqliteDialect(SQLiteDialect_pysqlite):
                 and math.isfinite(v)
                 and v >= 0
             ),
+        ),
+        # ``check_same_thread`` (bool) — stdlib sqlite3 parity. The
+        # URL parser uses ``_parse_url_bool`` (same as
+        # ``trust_server_heartbeat``) to accept ``true``/``false``/
+        # ``1``/``0``/``yes``/``no`` case-insensitive. The
+        # validator gate on the connect_args= path requires strict
+        # bool (rejecting int 0/1 explicitly because
+        # ``isinstance(True, int)`` is True and the dbapi-side
+        # strict-bool validation would otherwise silently re-fire).
+        "check_same_thread": (
+            lambda s: _parse_url_bool("check_same_thread", s),
+            lambda v: isinstance(v, bool),
         ),
     }
 

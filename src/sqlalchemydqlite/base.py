@@ -1515,6 +1515,14 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             # always a typo, so it stays out of ``_URL_QUERY_ALLOWED``
             # below.
             "dial_func",
+            # ``busy_timeout`` (seconds, float) — stdlib sqlite3
+            # parity. Default ``5.0`` matches sqlite3's C-library
+            # default; SA users can override via
+            # ``create_engine(connect_args={"busy_timeout": 30.0})``
+            # or via the URL form ``?busy_timeout=30.0``. Forwards
+            # to ``dqlitedbapi.connect()`` which validates the
+            # value (non-negative finite number, non-bool).
+            "busy_timeout",
         }
     )
 
@@ -1605,6 +1613,22 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # timeout floor's rationale does not apply.
         "dial_timeout": (float, _validate_dial_timeout_url),
         "attempt_timeout": (float, _validate_attempt_timeout_url),
+        # ``busy_timeout`` (seconds, float) — stdlib sqlite3 parity.
+        # Validator mirrors the dbapi-side ``Connection.__init__``
+        # check: non-negative (zero accepted, meaning "no retry"),
+        # finite, non-bool. The URL converter is ``float`` (per
+        # the same shape as ``timeout`` / ``close_timeout``); the
+        # validator's accept criterion is the canonical floor
+        # because connect_args= bypasses the converter.
+        "busy_timeout": (
+            float,
+            lambda v: (
+                not isinstance(v, bool)
+                and isinstance(v, int | float)
+                and math.isfinite(v)
+                and v >= 0
+            ),
+        ),
     }
 
     def create_connect_args(self, url: URL) -> tuple[list[Any], dict[str, Any]]:

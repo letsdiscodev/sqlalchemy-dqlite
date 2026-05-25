@@ -898,8 +898,60 @@ class _DqliteTime(sqltypes.Time):
                 )
         super().__init__(*args, **kwargs)
 
-    def bind_processor(self, dialect: Any) -> None:
-        return None
+    def bind_processor(self, dialect: Any) -> Callable[[Any], Any] | None:
+        def process(value: Any) -> Any:
+            if value is None:
+                return None
+            # Cross-type rejection (sibling parity with
+            # ``_DqliteDateTime`` / ``_DqliteDate``): the result
+            # processor narrows ``datetime.datetime`` lossily via
+            # ``.time()`` and would not handle a ``datetime.date``
+            # payload at all (returns it verbatim — wrong concrete
+            # type on the column). Pre-empt the silent-corruption
+            # / round-trip-self-rejection fork by raising at bind.
+            # ``isinstance(datetime.datetime)`` ordered before
+            # ``datetime.date`` because the former IS the latter.
+            if isinstance(value, datetime.datetime):
+                raise _dbapi_exc.DataError(
+                    f"Time column cannot bind datetime payload "
+                    f"{value!r}: the cell would encode as a full "
+                    f"ISO8601 timestamp; narrow to "
+                    f".time() / .timetz() at the call site."
+                )
+            if isinstance(value, datetime.date):
+                raise _dbapi_exc.DataError(
+                    f"Time column cannot bind date payload {value!r}: a date has no time component."
+                )
+            # Format ``datetime.time`` directly with the always-on
+            # six-digit microsecond suffix — pysqlite parity with
+            # ``TIME._storage_format = "...%(microsecond)06d"``
+            # (``sqlalchemy/dialects/sqlite/base.py``). Without this,
+            # ``time(12, 30, 0)`` reaches dqlitedbapi's
+            # ``_iso8601_from_time`` which omits the suffix when
+            # ``microsecond == 0`` — breaking cross-writer literal-
+            # string predicates against pysqlite-written cells.
+            # Mirrors the ``_DqliteDateTime.bind_processor`` widen-
+            # branch discipline.
+            if isinstance(value, datetime.time):
+                base = (
+                    f"{value.hour:02d}:{value.minute:02d}:{value.second:02d}"
+                    f".{value.microsecond:06d}"
+                )
+                if value.tzinfo is None:
+                    return base
+                offset = value.utcoffset()
+                if offset is None:
+                    raise _dbapi_exc.DataError(
+                        f"Time bind: tz-aware time {value!r} "
+                        f"returned None from utcoffset(); cannot "
+                        f"serialise without a resolvable offset."
+                    )
+                from dqlitedbapi.types import _format_utc_offset
+
+                return base + _format_utc_offset(offset)
+            return value
+
+        return process
 
     def literal_processor(self, dialect: Any) -> Callable[[Any], Any] | None:
         """Render an inline ``Time`` literal with always-on six

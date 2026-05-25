@@ -1,35 +1,41 @@
-"""Pin: ``_DqliteTime.bind_processor`` returns ``None`` (opt-out).
+"""Pin: ``_DqliteTime.bind_processor`` returns a callable that
+formats ``datetime.time`` with always-on six fractional digits.
 
-PEP 249 / SA's TypeEngine treats a ``None`` return from
-``bind_processor`` as the documented opt-out: the dialect's bind
-machinery short-circuits the per-value callable. Returning
-``lambda v: v`` would look functionally equivalent but disable that
-short-circuit AND interpose a TypeEngine boundary on every bound
-value. The result side has 8+ tests; the bind side had zero — this
-pins the intentional pass-through against an "obvious-looking"
-regression.
+The previous implementation returned ``None`` (SA bind-side opt-out)
+and relied on dqlitedbapi's ``_iso8601_from_time`` encoder. Two
+related defects motivated the override:
+
+* Cross-type confusion — a ``datetime.datetime`` or ``datetime.date``
+  bound to a Time column passed silently through the wire, then
+  surfaced as the wrong concrete type on read or was lossily
+  narrowed by the result processor.
+* Cross-writer parity — ``_iso8601_from_time`` omits the fractional
+  suffix when ``microsecond == 0``; pysqlite's
+  ``TIME._storage_format`` always emits six zeros, so cross-writer
+  literal-string predicates against pysqlite-written cells diverged
+  by seven characters.
+
+The new bind_processor raises ``DataError`` on the cross-type cases
+and formats ``datetime.time`` directly with the six-digit suffix.
 """
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 from unittest.mock import MagicMock
 
 from sqlalchemydqlite.base import _DqliteTime
 
 
-def test_bind_processor_returns_none_for_default_dialect() -> None:
-    dialect = MagicMock()
-    # ``bind_processor`` is annotated ``-> None`` (the documented
-    # opt-out) so mypy refuses to bind the return; cast to ``Any``
-    # and assert the runtime contract that drives SA's bind-side
-    # short-circuit.
-    proc = cast(Any, _DqliteTime().bind_processor(dialect))
-    assert proc is None
+def test_bind_processor_returns_callable_for_default_dialect() -> None:
+    """The override returns an actual callable; ``None`` was the
+    previous SA-opt-out and no longer applies."""
+    dialect: Any = MagicMock()
+    proc = _DqliteTime().bind_processor(dialect)
+    assert callable(proc)
 
 
-def test_bind_processor_returns_none_for_timezone_true_variant() -> None:
-    """Timezone-true ``Time`` also defers to the parent's bind side."""
-    dialect = MagicMock()
-    proc = cast(Any, _DqliteTime(timezone=True).bind_processor(dialect))
-    assert proc is None
+def test_bind_processor_returns_callable_for_timezone_true_variant() -> None:
+    dialect: Any = MagicMock()
+    proc = _DqliteTime(timezone=True).bind_processor(dialect)
+    assert callable(proc)

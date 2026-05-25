@@ -31,13 +31,22 @@ def test_drop_user_tables_per_drop_failure_sanitises_exception_and_name(
     forged_name = "evil\nFORGED: spoofed log line"
     forged_exc = "drop failed\nFORGED: spoofed exc"
 
-    select_result = MagicMock()
-    select_result.fetchall.return_value = [(forged_name,)]
-
-    def _exec(sql: str) -> Any:
-        if sql.startswith("SELECT"):
-            return select_result
-        raise RuntimeError(forged_exc)
+    def _exec(sql: str, *args: Any) -> Any:
+        if sql.startswith("SELECT name") and args:
+            (params,) = args
+            result = MagicMock()
+            if params[0] == "table":
+                result.fetchall.return_value = [(forged_name,)]
+            else:
+                result.fetchall.return_value = []
+            return result
+        if sql.startswith("SELECT count"):
+            result = MagicMock()
+            result.scalar.return_value = 0
+            return result
+        if sql.startswith("DROP"):
+            raise RuntimeError(forged_exc)
+        return MagicMock()
 
     conn = MagicMock()
     conn.exec_driver_sql.side_effect = _exec
@@ -50,7 +59,7 @@ def test_drop_user_tables_per_drop_failure_sanitises_exception_and_name(
     with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.provision"):
         provision._drop_user_tables(eng)
 
-    matching = [rec for rec in caplog.records if "on DROP TABLE" in rec.getMessage()]
+    matching = [rec for rec in caplog.records if "on DROP" in rec.getMessage()]
     assert matching, "per-drop DEBUG log record not emitted"
     msg = matching[0].getMessage()
     assert "\n" not in msg, f"raw LF leaked into DEBUG log record (CWE-117): {msg!r}"

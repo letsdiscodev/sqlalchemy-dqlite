@@ -41,6 +41,7 @@ the test fixture's docker-compose. So:
   driver string.
 """
 
+import contextlib
 import logging
 import os
 import re
@@ -339,50 +340,120 @@ def _dqlite_create_db(cfg: Any, eng: Any, ident: str) -> None:
     logger.info("dqlite create_db: no-op for ident=%s", _safe_for_log(str(ident)))
 
 
+# Object-type drop order: triggers reference tables/views; views
+# reference tables; indexes are auto-dropped with their tables, but a
+# standalone or shadow-table-attached index is explicitly handled to
+# match the SQLite documentation contract. Tables drop last so the
+# child-before-parent FK ordering need not be explicitly computed.
+# Format string templates use ``{q}`` for the already-quoted ident.
+_DROP_ORDER: Final[tuple[tuple[str, str], ...]] = (
+    ("trigger", "DROP TRIGGER IF EXISTS {q}"),
+    ("view", "DROP VIEW IF EXISTS {q}"),
+    ("index", "DROP INDEX IF EXISTS {q}"),
+    ("table", "DROP TABLE IF EXISTS {q}"),
+)
+
+
 def _drop_user_tables(eng: Any) -> None:
-    """Best-effort drop of every user-visible table in the dialect's
-    default schema.
+    """Best-effort drop of every user-visible schema object in the
+    dialect's default schema — triggers, views, indexes, and tables.
 
     dqlite has no ``DROP DATABASE``; this is the closest equivalent.
-    Used by ``drop_db`` and ``run_reap_dbs``. Errors are swallowed
-    (logged at debug) because individual drops can fail under
-    cross-test schema drift; the next run's ``CREATE TABLE IF NOT
-    EXISTS`` semantics absorb residual state. The cluster fixture is
-    expected to be the authoritative reset boundary.
+    Used by ``drop_db``, ``drop_all_schema_objects_post_tables``, and
+    ``run_reap_dbs``. The cluster fixture is the authoritative
+    reset boundary; this helper makes the per-database state
+    logically empty between runs.
+
+    Three behavioural disciplines the prior implementation lacked:
+
+    * Foreign-key enforcement is turned off for the cleanup window
+      (``PRAGMA foreign_keys = OFF``) and restored in a ``finally``.
+      Without this, ``DROP TABLE parent`` while ``child`` still
+      holds an FK reference raises and the per-drop swallow turns
+      the FK violation into a DEBUG log — the parent leaks.
+    * Each successful DROP is committed individually. The previous
+      single ``conn.commit()`` at the bottom rolled back every prior
+      successful DROP whenever a single failure poisoned the
+      autobegin transaction (and the outer ``except`` then
+      DEBUG-logged the commit failure, hiding the cascade).
+    * The ``sqlite_master.type`` filter covers triggers / views /
+      indexes / tables in dependency order — the previous helper
+      filtered ``type='table'`` only and the module docstring's
+      "every user-visible schema object" promise was broken for
+      the other three types. The ``drop_all_schema_objects_post_tables``
+      SA hook that delegates here is now functional rather than a
+      no-op.
+
+    A survivor probe runs after the loop: if any user-visible object
+    survives, log at WARNING (NOT DEBUG) so operators see the
+    cleanup-incomplete signal.
     """
     try:
         with eng.connect() as conn:
-            tables = conn.exec_driver_sql(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            ).fetchall()
-            for (name,) in tables:
-                # SQLite escapes ``"`` inside a delimited identifier as
-                # ``""``. A peer / test creating a table named
-                # ``foo"bar`` would otherwise render as
-                # ``DROP TABLE IF EXISTS "foo"bar"`` — a syntax error
-                # that the per-drop swallow below would mask, silently
-                # half-completing the docstring's "drop every user-
-                # visible table" contract.
-                quoted = '"' + name.replace('"', '""') + '"'
-                try:
-                    conn.exec_driver_sql(f"DROP TABLE IF EXISTS {quoted}")
-                except Exception as e:
-                    # CWE-117: both the bubbled-up exception text and
-                    # the table ``name`` from ``sqlite_master`` can
-                    # carry peer-supplied LF/CR. Route both through
-                    # ``sanitize_for_log`` so journald/syslog cannot
-                    # interpret forged LF as a record boundary. The
-                    # sibling ``_dqlite_run_reap_dbs`` arm applies the
-                    # same discipline.
-                    logger.debug(
-                        "drop_user_tables: %s on DROP TABLE %s",
-                        _safe_for_log(str(e)),
-                        _safe_for_log(str(name)),
+            # Cleanup-window FK pragma flip; restored in finally even
+            # if a DROP loop raises mid-way.
+            conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+            try:
+                for obj_type, drop_tmpl in _DROP_ORDER:
+                    rows = conn.exec_driver_sql(
+                        "SELECT name FROM sqlite_master WHERE type=? AND name NOT LIKE 'sqlite_%'",
+                        (obj_type,),
+                    ).fetchall()
+                    for (name,) in rows:
+                        # SQLite escapes ``"`` inside a delimited
+                        # identifier as ``""``. A peer / test creating
+                        # an object named ``foo"bar`` would otherwise
+                        # render as a syntax error that the per-drop
+                        # swallow would mask, silently breaking the
+                        # docstring's "drop every user-visible
+                        # schema object" contract.
+                        quoted = '"' + name.replace('"', '""') + '"'
+                        try:
+                            conn.exec_driver_sql(drop_tmpl.format(q=quoted))
+                            # Commit per-drop: a later failure must
+                            # not roll back earlier successes via the
+                            # autobegin transaction. Pairs with the
+                            # rollback in the per-drop except below.
+                            conn.commit()
+                        except Exception as e:
+                            # CWE-117: both the bubbled-up exception
+                            # text and the object ``name`` from
+                            # ``sqlite_master`` can carry peer-supplied
+                            # LF/CR. Route both through
+                            # ``sanitize_for_log`` so journald/syslog
+                            # cannot interpret forged LF as a record
+                            # boundary.
+                            logger.debug(
+                                "drop_user_objects: %s on DROP %s %s",
+                                _safe_for_log(str(e)),
+                                obj_type,
+                                _safe_for_log(str(name)),
+                            )
+                            # Rollback failure on the cleanup path is
+                            # itself non-fatal — the next-drop's
+                            # autobegin fires afresh against a fresh
+                            # transaction state once the connection
+                            # sees the next exec_driver_sql.
+                            with contextlib.suppress(Exception):
+                                conn.rollback()
+                # Survivor probe: a non-empty residual signals the
+                # cleanup left work undone. Operator-visible WARNING
+                # (not DEBUG) so the gap is observable.
+                remaining = conn.exec_driver_sql(
+                    "SELECT count(*) FROM sqlite_master "
+                    "WHERE name NOT LIKE 'sqlite_%' "
+                    "AND type IN ('table','view','trigger','index')"
+                ).scalar()
+                if remaining:
+                    logger.warning(
+                        "drop_user_objects: %d user-visible object(s) survived cleanup",
+                        remaining,
                     )
-            conn.commit()
+            finally:
+                conn.exec_driver_sql("PRAGMA foreign_keys = ON")
     except Exception as e:
         logger.debug(
-            "drop_user_tables: %s during connect/exec",
+            "drop_user_objects: %s during connect/exec",
             _safe_for_log(str(e)),
         )
 

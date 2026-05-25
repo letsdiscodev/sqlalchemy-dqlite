@@ -1,19 +1,26 @@
 """Pin: ``_drop_user_tables`` + ``_dqlite_run_reap_dbs`` invariants.
 
 dqlite has no ``DROP DATABASE`` primitive, so the provisioning hooks
-implement a "drop every user table" workaround. Several load-bearing
-invariants were unpinned:
+implement a "drop every user-visible schema object" workaround. Load-
+bearing invariants:
 
 1. The ``sqlite_master`` WHERE clause uses ``NOT LIKE 'sqlite_%'`` —
    underscore-anchored, NOT ``sqlite%`` which would also spare
    user-named ``sqlitefoo``.
-2. Per-drop failures are swallowed inside the loop so a single
-   failing DROP does not abort the entire reap.
-3. ``connect`` failures are debug-logged and do NOT propagate.
-4. ``run_reap_dbs`` force-rewrites a ``dqlite+aio://`` input to the
+2. The cleanup wraps the loop in ``PRAGMA foreign_keys=OFF`` /
+   ``PRAGMA foreign_keys=ON`` so an FK-graph drop in arbitrary
+   ``sqlite_master`` order does not leave a parent leaked.
+3. Each successful DROP is committed individually; a per-drop
+   failure rolls back to a clean state so the next iteration
+   does not inherit a poisoned autobegin transaction.
+4. The four ``sqlite_master.type`` values (trigger / view / index /
+   table) are all queried; the module docstring's "every user-
+   visible schema object" promise covers more than just tables.
+5. ``connect`` failures are debug-logged and do NOT propagate.
+6. ``run_reap_dbs`` force-rewrites a ``dqlite+aio://`` input to the
    bare sync drivername; otherwise ``create_engine`` would route to
    the async dialect that needs ``create_async_engine``.
-5. ``run_reap_dbs`` disposes the engine in ``finally`` so a
+7. ``run_reap_dbs`` disposes the engine in ``finally`` so a
    ``_drop_user_tables`` failure does not leak the engine.
 """
 
@@ -30,22 +37,29 @@ from sqlalchemy.engine import url as sa_url
 import sqlalchemydqlite.provision as provision
 
 
-def _make_engine_with_tables(table_names: list[str]) -> MagicMock:
-    """Build a mock engine whose ``connect()`` context manager yields a
-    connection where ``exec_driver_sql(SELECT...).fetchall()`` returns
-    a row per table name.
-    """
-
-    select_result = MagicMock()
-    select_result.fetchall.return_value = [(n,) for n in table_names]
+def _make_engine_with_objects(
+    objects_by_type: dict[str, list[str]],
+) -> MagicMock:
+    """Build a mock engine whose ``connect()`` context manager yields
+    a connection where ``exec_driver_sql(SELECT...)`` returns rows
+    matching the requested type (filtered via the second positional
+    argument)."""
 
     conn = MagicMock()
-    sql_calls: list[str] = []
+    sql_calls: list[tuple[str, Any]] = []
 
-    def _exec(sql: str) -> Any:
-        sql_calls.append(sql)
-        if sql.startswith("SELECT"):
-            return select_result
+    def _exec(sql: str, *args: Any) -> Any:
+        sql_calls.append((sql, args))
+        if sql.startswith("SELECT name") and args:
+            (params,) = args
+            obj_type = params[0]
+            result = MagicMock()
+            result.fetchall.return_value = [(n,) for n in objects_by_type.get(obj_type, [])]
+            return result
+        if sql.startswith("SELECT count"):
+            result = MagicMock()
+            result.scalar.return_value = 0
+            return result
         return MagicMock()
 
     conn.exec_driver_sql.side_effect = _exec
@@ -62,50 +76,70 @@ def _make_engine_with_tables(table_names: list[str]) -> MagicMock:
 
 
 def test_drops_each_listed_user_table() -> None:
-    eng = _make_engine_with_tables(["foo", "bar"])
+    eng = _make_engine_with_objects({"table": ["foo", "bar"]})
     provision._drop_user_tables(eng)
 
-    sqls = eng._conn._sql_calls
-    select = [s for s in sqls if s.startswith("SELECT")]
-    drops = [s for s in sqls if s.startswith("DROP TABLE")]
-    assert len(select) == 1
-    assert drops == ['DROP TABLE IF EXISTS "foo"', 'DROP TABLE IF EXISTS "bar"']
-    eng._conn.commit.assert_called_once_with()
+    sqls = [call[0] for call in eng._conn._sql_calls]
+    drops = [s for s in sqls if s.startswith("DROP")]
+    assert 'DROP TABLE IF EXISTS "foo"' in drops
+    assert 'DROP TABLE IF EXISTS "bar"' in drops
+    # FK pragma flip wraps the loop.
+    assert any("PRAGMA foreign_keys = OFF" in s for s in sqls)
+    assert any("PRAGMA foreign_keys = ON" in s for s in sqls)
 
 
 def test_select_uses_underscore_anchored_sqlite_filter() -> None:
-    """Pin the exact WHERE clause: ``NOT LIKE 'sqlite_%'``. Without
-    the underscore, the filter would spare user tables named
-    ``sqlitefoo`` AND drop internal ``sqlite_master``-class tables.
-    """
-    eng = _make_engine_with_tables([])
+    """Pin the WHERE clause shape on the per-type SELECT: ``type=?``
+    and ``NOT LIKE 'sqlite_%'``. Without the underscore, the filter
+    would spare user tables named ``sqlitefoo`` AND drop internal
+    ``sqlite_master``-class tables."""
+    eng = _make_engine_with_objects({})
     provision._drop_user_tables(eng)
-    sql = eng._conn._sql_calls[0]
-    assert "FROM sqlite_master" in sql
-    assert "type='table'" in sql
-    assert "NOT LIKE 'sqlite_%'" in sql
+    selects = [call for call in eng._conn._sql_calls if call[0].startswith("SELECT name")]
+    assert selects, "expected per-type SELECT(s)"
+    # Per-type SELECTs use a parameterised type filter — pin both
+    # the WHERE clause shape and that all four obj_types were
+    # queried in dependency order.
+    for sql, _args in selects:
+        assert "type=?" in sql
+        assert "NOT LIKE 'sqlite_%'" in sql
+    queried_types = [args[0][0] for _sql, args in selects]
+    assert queried_types == ["trigger", "view", "index", "table"]
 
 
 def test_per_drop_failure_does_not_abort_loop() -> None:
-    """A DROP that raises is debug-logged; subsequent drops still
-    run and the outer ``commit`` still fires.
-    """
+    """A DROP that raises is debug-logged; subsequent drops still run
+    and the per-drop commit / rollback cycle keeps the connection
+    state clean."""
 
-    select_result = MagicMock()
-    select_result.fetchall.return_value = [("first",), ("second",)]
+    conn = MagicMock()
+    sql_calls: list[str] = []
+    rollback_count = [0]
 
-    drop_calls: list[str] = []
-
-    def _exec(sql: str) -> Any:
-        if sql.startswith("SELECT"):
-            return select_result
-        drop_calls.append(sql)
-        if "first" in sql:
+    def _exec(sql: str, *args: Any) -> Any:
+        sql_calls.append(sql)
+        if sql.startswith("SELECT name") and args:
+            (params,) = args
+            obj_type = params[0]
+            result = MagicMock()
+            if obj_type == "table":
+                result.fetchall.return_value = [("first",), ("second",)]
+            else:
+                result.fetchall.return_value = []
+            return result
+        if sql.startswith("SELECT count"):
+            result = MagicMock()
+            result.scalar.return_value = 0
+            return result
+        if sql.startswith("DROP TABLE") and "first" in sql:
             raise RuntimeError("first drop failed")
         return MagicMock()
 
-    conn = MagicMock()
+    def _rollback() -> None:
+        rollback_count[0] += 1
+
     conn.exec_driver_sql.side_effect = _exec
+    conn.rollback.side_effect = _rollback
     cm = MagicMock()
     cm.__enter__.return_value = conn
     cm.__exit__.return_value = None
@@ -114,19 +148,21 @@ def test_per_drop_failure_does_not_abort_loop() -> None:
 
     provision._drop_user_tables(eng)
 
-    assert drop_calls == [
+    drops = [s for s in sql_calls if s.startswith("DROP TABLE")]
+    assert drops == [
         'DROP TABLE IF EXISTS "first"',
         'DROP TABLE IF EXISTS "second"',
     ]
-    conn.commit.assert_called_once_with()
+    # Failed first drop triggered exactly one rollback to clear the
+    # autobegin transaction.
+    assert rollback_count[0] == 1
 
 
 def test_connect_failure_swallowed_and_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """If ``eng.connect`` raises, the helper logs at DEBUG and
-    returns; the exception does NOT propagate.
-    """
+    returns; the exception does NOT propagate."""
     eng = MagicMock()
     eng.connect.side_effect = RuntimeError("connect failed")
 
@@ -143,8 +179,7 @@ def test_run_reap_dbs_forces_sync_drivername_when_input_is_aio(
     """``dqlite+aio://...`` input must be rewritten to the bare
     ``dqlite://`` drivername before ``create_engine`` is called;
     otherwise SA would route to the async dialect that requires
-    ``create_async_engine`` and crash.
-    """
+    ``create_async_engine`` and crash."""
     captured_urls: list[sa_url.URL] = []
 
     def _fake_create_engine(rewritten_url: Any) -> Any:
@@ -159,7 +194,6 @@ def test_run_reap_dbs_forces_sync_drivername_when_input_is_aio(
     provision._dqlite_run_reap_dbs("dqlite+aio://h:9001/db", ["w0"])
 
     assert captured_urls, "create_engine never called"
-    # Force-sync rewrite: the drivername never carries ``+aio``.
     assert captured_urls[0].drivername == "dqlite"
 
 
@@ -167,8 +201,7 @@ def test_run_reap_dbs_disposes_engine_when_drop_user_tables_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Engine ``dispose()`` runs in ``finally`` so a failing
-    ``_drop_user_tables`` does not leak the engine.
-    """
+    ``_drop_user_tables`` does not leak the engine."""
     eng = MagicMock()
     eng.dispose = MagicMock()
 
@@ -188,8 +221,7 @@ def test_run_reap_dbs_continues_to_next_ident_on_per_ident_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A per-ident failure (e.g. ``create_engine`` raising for one
-    follower) lands in DEBUG; subsequent idents still get processed.
-    """
+    follower) lands in DEBUG; subsequent idents still get processed."""
     create_attempts: list[Any] = []
 
     def _fake_create_engine(rewritten_url: Any) -> Any:
@@ -206,3 +238,64 @@ def test_run_reap_dbs_continues_to_next_ident_on_per_ident_failure(
     provision._dqlite_run_reap_dbs("dqlite:///db", ["w0", "w1"])
 
     assert len(create_attempts) == 2
+
+
+def test_drops_triggers_views_indexes_and_tables_in_dependency_order() -> None:
+    """The four sqlite_master object types are queried and dropped in
+    trigger → view → index → table order so referential dependencies
+    are unwound cleanly even with FK enforcement off."""
+    eng = _make_engine_with_objects(
+        {
+            "trigger": ["trg1"],
+            "view": ["v_summary"],
+            "index": ["ix_x"],
+            "table": ["t_data"],
+        }
+    )
+    provision._drop_user_tables(eng)
+
+    drops = [call[0] for call in eng._conn._sql_calls if call[0].startswith("DROP")]
+    # Each verb appears with its matching object name.
+    assert 'DROP TRIGGER IF EXISTS "trg1"' in drops
+    assert 'DROP VIEW IF EXISTS "v_summary"' in drops
+    assert 'DROP INDEX IF EXISTS "ix_x"' in drops
+    assert 'DROP TABLE IF EXISTS "t_data"' in drops
+    # Trigger before view before index before table.
+    trigger_pos = drops.index('DROP TRIGGER IF EXISTS "trg1"')
+    view_pos = drops.index('DROP VIEW IF EXISTS "v_summary"')
+    index_pos = drops.index('DROP INDEX IF EXISTS "ix_x"')
+    table_pos = drops.index('DROP TABLE IF EXISTS "t_data"')
+    assert trigger_pos < view_pos < index_pos < table_pos
+
+
+def test_survivor_probe_emits_warning_when_objects_leak(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-empty survivor count after the loop fires a WARNING-tier
+    record so operators can spot a cleanup gap."""
+    conn = MagicMock()
+
+    def _exec(sql: str, *args: Any) -> Any:
+        if sql.startswith("SELECT name"):
+            result = MagicMock()
+            result.fetchall.return_value = []
+            return result
+        if sql.startswith("SELECT count"):
+            result = MagicMock()
+            result.scalar.return_value = 3
+            return result
+        return MagicMock()
+
+    conn.exec_driver_sql.side_effect = _exec
+    cm = MagicMock()
+    cm.__enter__.return_value = conn
+    cm.__exit__.return_value = None
+    eng = MagicMock()
+    eng.connect.return_value = cm
+
+    with caplog.at_level(logging.WARNING, logger="sqlalchemydqlite.provision"):
+        provision._drop_user_tables(eng)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "expected WARNING on cleanup-incomplete survivor count"
+    assert "3" in warnings[0].getMessage()

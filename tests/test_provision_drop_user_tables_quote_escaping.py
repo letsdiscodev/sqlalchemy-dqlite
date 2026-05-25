@@ -24,16 +24,26 @@ import sqlalchemydqlite.provision as provision
 
 
 def _make_engine_with_tables(table_names: list[str]) -> MagicMock:
-    select_result = MagicMock()
-    select_result.fetchall.return_value = [(n,) for n in table_names]
+    """Build a mock engine: only the ``type='table'`` SELECT returns
+    rows (the helper now queries trigger/view/index/table in turn)."""
 
     conn = MagicMock()
     sql_calls: list[str] = []
 
-    def _exec(sql: str) -> Any:
+    def _exec(sql: str, *args: Any) -> Any:
         sql_calls.append(sql)
-        if sql.startswith("SELECT"):
-            return select_result
+        if sql.startswith("SELECT name") and args:
+            (params,) = args
+            result = MagicMock()
+            if params[0] == "table":
+                result.fetchall.return_value = [(n,) for n in table_names]
+            else:
+                result.fetchall.return_value = []
+            return result
+        if sql.startswith("SELECT count"):
+            result = MagicMock()
+            result.scalar.return_value = 0
+            return result
         return MagicMock()
 
     conn.exec_driver_sql.side_effect = _exec

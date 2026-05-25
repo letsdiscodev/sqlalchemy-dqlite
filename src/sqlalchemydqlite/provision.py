@@ -63,6 +63,7 @@ from sqlalchemy.testing.provision import (
     drop_db,
     follower_url_from_main,
     generate_driver_url,
+    post_configure_engine,
     run_reap_dbs,
     stop_test_class_outside_fixtures,
     temp_table_keyword_args,
@@ -597,6 +598,43 @@ def _dqlite_temp_table_keyword_args(cfg: Any, eng: Any) -> dict[str, Any]:
     runs.
     """
     return {"prefixes": ["TEMPORARY"]}
+
+
+@post_configure_engine.for_db("dqlite")
+def _dqlite_post_configure_engine(url: Any, engine: Any, follower_ident: Any) -> None:
+    """SA post-configure hook: attach an FK-pragma connect listener
+    so the SA compliance suite's FK-enforcement battery runs against
+    a connection where ``PRAGMA foreign_keys=ON``.
+
+    The production dialect intentionally leaves FK enforcement to
+    the user (``DqliteDialect.on_connect`` is a no-op; the
+    documented stance at ``base.py`` is that applications attach
+    their own ``@event.listens_for(engine, "connect")`` recipe).
+    Without the listener registered HERE, the compliance suite's
+    ``FKConstraintTest`` / ``FKActionTest`` / ``ExceptionTest::
+    test_integrity_error`` batteries would run against an
+    FK-disabled connection — INSERT rows that violate a declared
+    FK would silently succeed and ``IntegrityError`` assertions
+    would never fire. Pysqlite's compliance fixture attaches the
+    same listener (``sqlalchemy/dialects/sqlite/provision.py``);
+    this mirror gives the suite the same FK posture without
+    changing the production-time on_connect contract.
+
+    Coordinated with ``_drop_user_tables`` which toggles
+    ``PRAGMA foreign_keys=OFF`` for its cleanup window — the
+    suite's listener and the cleanup helper's local override
+    cooperate per-connection so the cleanup path is not blocked
+    by FK enforcement.
+    """
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _enable_foreign_keys(dbapi_connection: Any, _connection_record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
 
 
 @upsert.for_db("dqlite")

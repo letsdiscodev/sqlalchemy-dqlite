@@ -1678,18 +1678,25 @@ class AsyncAdaptedConnection(AdaptedConnection):
         on a single supported method instead of walking three layers
         of private attributes.
 
-        Idempotent. Absorbs every ``Exception`` and
-        ``asyncio.CancelledError`` from the hook call — a missing
-        hook (older dbapi version), a dead ``weakref.proxy``
-        ``ReferenceError`` (the post-``_release_inner_strong_ref``
-        state), or a writer.close() failure is silently swallowed
-        and logged. Does NOT catch ``BaseException`` shapes that
-        signal cooperative interpreter shutdown —
-        ``KeyboardInterrupt`` and ``SystemExit`` (and any other
-        non-``Exception`` ``BaseException``) propagate so a
-        signal-handler-driven ``engine.dispose()`` cannot mask
-        them. Mirrors the discipline ``DqliteDialect.do_terminate``
-        documents at ``base.py``.
+        Idempotent. Absorbs every ``Exception`` from the hook call
+        — a missing hook (older dbapi version), a dead
+        ``weakref.proxy`` ``ReferenceError`` (the post-
+        ``_release_inner_strong_ref`` state), or a writer.close()
+        failure is silently swallowed and logged. Does NOT catch
+        ``asyncio.CancelledError`` (a ``BaseException`` subclass
+        since 3.8): asyncio's structured-concurrency contract
+        requires the cancel signal to reach the parent
+        ``TaskGroup`` / ``asyncio.timeout`` so the parent's wait
+        completes with cancelled status. Callers that need to run
+        the force-close on a cancel path catch ``CancelledError``
+        themselves and re-raise after invoking this helper (see the
+        close-arm at the ``except asyncio.CancelledError`` site and
+        the terminate-arm's symmetric handler). Also does NOT catch
+        ``KeyboardInterrupt`` / ``SystemExit`` (and any other
+        non-``Exception`` ``BaseException``) so a signal-handler-
+        driven ``engine.dispose()`` cannot mask them. Mirrors the
+        discipline ``DqliteDialect.do_terminate`` documents at
+        ``base.py``.
 
         The two ``getattr`` reads on ``self._connection`` sit
         INSIDE the try frame so a ``ReferenceError`` from a dead
@@ -1724,13 +1731,21 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 id(self),
                 peer,
             )
-        except (Exception, asyncio.CancelledError) as exc:  # pragma: no cover - defensive
-            # Narrow to ``(Exception, asyncio.CancelledError)`` so a
-            # greenlet-level cancel from SA's pool-dispose path is
-            # still absorbed (``CancelledError`` is a ``BaseException``
-            # subclass since 3.8) but ``KeyboardInterrupt`` /
-            # ``SystemExit`` propagate. Mirrors the sibling cursor-
-            # close discipline upstream in this module.
+        except Exception as exc:  # pragma: no cover - defensive
+            # Narrow to ``Exception`` only — ``asyncio.CancelledError``
+            # (a ``BaseException`` subclass since 3.8) must propagate
+            # so an outer ``asyncio.TaskGroup`` / ``asyncio.timeout``
+            # / ``anyio.create_task_group`` parent that issued the
+            # cancel sees the child complete with cancelled status.
+            # Absorbing the cancel here would leave the parent
+            # waiting indefinitely on its ``__aexit__`` for a
+            # cancel-acknowledgement that never arrives. The
+            # close-arm and terminate-arm call sites catch
+            # ``CancelledError`` externally, invoke this helper, and
+            # then re-raise — that pattern preserves the cancel
+            # without requiring this helper to swallow it.
+            # ``KeyboardInterrupt`` / ``SystemExit`` propagate by the
+            # same ``BaseException`` rule.
             logger.debug(
                 "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
                 "best-effort sync close raised (%s); ignoring",

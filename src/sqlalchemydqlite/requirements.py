@@ -116,17 +116,21 @@ class Requirements(SuiteRequirements):
 
     @property
     def skip_autocommit_rollback(self) -> compound:
-        """The dialect implements ``detect_autocommit_setting`` (returns
-        False unconditionally; see :meth:`DqliteDialect.detect_autocommit_setting`)
-        and inherits SA's default ``do_rollback``. Per SA's marker
-        docstring ("target dialect supports the
-        detect_autocommit_setting() method and uses the default
-        implementation of do_rollback()"), this enables the SA
-        compliance suite tests for the autocommit-rollback fast-path
-        optimisation. Without the explicit ``open()``, those tests are
-        skipped silently (SA default is ``exclusions.closed()``), so a
-        regression in ``detect_autocommit_setting`` would not surface
-        from compliance runs.
+        """Open so the SA compliance suite's autocommit-rollback
+        fast-path tests run; the dialect's ``detect_autocommit_setting``
+        returns False unconditionally (see
+        :meth:`DqliteDialect.detect_autocommit_setting` at
+        ``base.py``), so the fast-path itself never fires through
+        this dialect. Opening the requirement exercises SA's
+        surrounding skip-detection machinery (the fast-path tests
+        run no-op-equivalent against our slow-path) for cross-
+        version SA compatibility coverage.
+
+        Regression-catch for ``detect_autocommit_setting`` itself
+        — a future change wrongly returning True would silently
+        break SA-managed transactional atomicity — is NOT in scope
+        here; pinned by the dedicated unit test
+        ``tests/test_detect_autocommit_setting.py``.
         """
         return exclusions.open()
 

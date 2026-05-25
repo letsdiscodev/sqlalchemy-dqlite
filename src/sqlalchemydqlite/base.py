@@ -586,12 +586,36 @@ class _DqliteDateTime(sqltypes.DateTime):
             # NOT ``"2021-03-15 00:00:00"``. dqlitedbapi's
             # ``_iso8601_from_datetime`` omits the fractional component
             # when ``microsecond == 0``, so going through that encoder
-            # would diverge from pysqlite by seven characters. Emit
-            # the formatted string directly to match cross-writer
-            # literal-string predicates that compare against pysqlite
-            # output bit-identically.
+            # would diverge from pysqlite by seven characters. The same
+            # asymmetry survived on the non-widen ``datetime`` path
+            # below (``return value`` routed plain
+            # ``datetime(..., microsecond=0)`` through the encoder and
+            # lost the suffix). Both branches now emit the formatted
+            # string directly so cross-writer literal-string predicates
+            # comparing against pysqlite output match bit-identically.
             if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
-                return f"{value.isoformat()} 00:00:00.000000"
+                value = datetime.datetime.combine(value, datetime.time())
+            if isinstance(value, datetime.datetime):
+                base = (
+                    f"{value.year:04d}-{value.month:02d}-{value.day:02d} "
+                    f"{value.hour:02d}:{value.minute:02d}:{value.second:02d}"
+                    f".{value.microsecond:06d}"
+                )
+                if value.tzinfo is None:
+                    return base
+                # Reuse the dbapi-layer offset formatter so the suffix
+                # rendering stays in lockstep with the wire codec
+                # (whole-minute / ±HH:MM:SS sub-minute handling lives
+                # there as a single source of truth).
+                offset = value.utcoffset()
+                if offset is None:
+                    raise _dbapi_exc.DataError(
+                        f"DateTime bind: tzinfo {value.tzinfo!r} returned "
+                        f"None from utcoffset(); cannot serialise."
+                    )
+                from dqlitedbapi.types import _format_utc_offset
+
+                return base + _format_utc_offset(offset)
             return value
 
         return process

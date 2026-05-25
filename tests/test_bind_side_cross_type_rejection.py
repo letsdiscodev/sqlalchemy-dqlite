@@ -42,10 +42,15 @@ class TestDqliteDateTimeBindRejectsTimeOnlyPayload:
             proc(datetime.time(12, 30, 0, tzinfo=datetime.UTC))
 
     def test_well_formed_datetime_still_passes(self) -> None:
+        """A well-formed ``datetime`` is now formatted directly with
+        six fractional digits so cross-writer literal-string
+        predicates match pysqlite bit-identically. The previous
+        identity pass-through routed through dqlitedbapi's encoder
+        which omits the suffix when microseconds are zero."""
         proc = _DqliteDateTime(timezone=False).bind_processor(None)
         assert proc is not None
         dt = datetime.datetime(2024, 1, 2, 3, 4, 5)
-        assert proc(dt) == dt
+        assert proc(dt) == "2024-01-02 03:04:05.000000"
 
     def test_bare_date_still_widens_to_midnight(self) -> None:
         """The pysqlite-parity widen at the existing bind-side

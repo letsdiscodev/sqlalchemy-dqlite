@@ -26,19 +26,29 @@ def test_bind_date_widens_to_midnight_datetime_with_microseconds() -> None:
     assert widened == "2021-03-15 00:00:00.000000"
 
 
-def test_bind_datetime_passes_through_unchanged() -> None:
+def test_bind_datetime_formats_with_six_fractional_digits() -> None:
+    """Naive ``datetime`` is formatted directly with six fractional
+    digits so a ``microsecond == 0`` value still emits
+    ``"...nn.000000"`` — pysqlite-parity. The previous identity
+    pass-through routed through dqlitedbapi's encoder which omits
+    the suffix when microseconds are zero, breaking cross-writer
+    literal-string predicates."""
     proc = _DqliteDateTime(timezone=False).bind_processor(None)
     assert proc is not None
     dt = datetime.datetime(2021, 3, 15, 12, 30, 45)
-    assert proc(dt) is dt
+    assert proc(dt) == "2021-03-15 12:30:45.000000"
 
 
-def test_bind_aware_datetime_preserves_tz() -> None:
+def test_bind_aware_datetime_formats_with_offset_suffix() -> None:
+    """Tz-aware ``datetime`` is formatted with six fractional digits
+    AND the ``±HH:MM`` offset suffix. The dbapi-layer
+    ``_format_utc_offset`` helper renders the suffix so whole-minute
+    vs sub-minute handling stays in lockstep with the wire codec."""
     proc = _DqliteDateTime(timezone=True).bind_processor(None)
     assert proc is not None
     tz = datetime.timezone(datetime.timedelta(hours=5))
     dt = datetime.datetime(2021, 3, 15, 12, 30, 45, tzinfo=tz)
-    assert proc(dt) is dt  # unchanged object identity
+    assert proc(dt) == "2021-03-15 12:30:45.000000+05:00"
 
 
 def test_bind_none_passes_through() -> None:

@@ -14,6 +14,7 @@ from sqlalchemy import types as sqltypes
 from sqlalchemy.dialects.sqlite.base import SQLiteCompiler
 from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
 from sqlalchemy.engine import URL
+from sqlalchemy.engine import characteristics as _sa_characteristics
 from sqlalchemy.engine.interfaces import BindTyping, DBAPIConnection, IsolationLevel
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.sql.compiler import InsertmanyvaluesSentinelOpts
@@ -1166,6 +1167,92 @@ class DqliteCompiler(SQLiteCompiler):
         return super().visit_function(func, add_to_result_map, **kwargs)
 
 
+class DqliteSessionModeCharacteristic(_sa_characteristics.ConnectionCharacteristic):
+    """Per-connection ``dqlite_session_mode`` characteristic.
+
+    Mirrors PG's ``PGReadOnlyConnectionCharacteristic`` / SA's
+    ``IsolationLevelCharacteristic`` — registered in
+    ``DqliteDialect.connection_characteristics`` so SA wires it into
+    every ``Connection.execution_options(dqlite_session_mode=…)``,
+    ``Engine.execution_options(...)``, and
+    ``Session.execution_options(...)`` call site automatically.
+
+    The characteristic stores the mode on the underlying dqlitedbapi
+    connection (NOT on SA's wrapper) so the dbapi-side ``do_begin``
+    reader and the cursor BEGIN-rewrite intercept both pick it up.
+    For async, the dqlitedbapi conn lives at
+    ``AsyncAdaptedConnection._connection`` — the dialect's
+    ``_unwrap_dqlite_connection`` helper hides that.
+
+    ``transactional = True`` so mid-transaction toggles raise
+    ``InvalidRequestError`` via SA's ``_set_connection_characteristics``
+    guard. Matches ``isolation_level`` and ``postgresql_readonly``.
+
+    PRAGMA query_only emission discipline:
+
+    - ``set_characteristic`` emits ``PRAGMA query_only = N`` ONLY
+      when the read-only boundary is crossed (current mode ↔
+      "read_only"). Same-mode set is a no-op (no wire RTT).
+    - ``reset_characteristic`` restores the connection's
+      construct-time default stored on
+      ``_dqlite_session_mode_default`` (immutable after __init__).
+    - PRAGMA emit happens BEFORE the live attribute is updated,
+      so an asyncio cancel mid-emission leaves the attribute and
+      wire state consistent (both still on the prior mode).
+    - If the PRAGMA emit raises (transport blip, leader flip),
+      ``force_close_transport()`` is called so the poisoned slot
+      cannot be returned to the pool. The raised exception
+      propagates so SA invalidates the SA Connection on the
+      surface side.
+    """
+
+    transactional: ClassVar[bool] = True
+
+    def get_characteristic(self, dialect: Any, dbapi_conn: Any) -> str:
+        target = dialect._unwrap_dqlite_connection(dbapi_conn)
+        return getattr(target, "_dqlite_session_mode", "immediate")
+
+    def set_characteristic(self, dialect: Any, dbapi_conn: Any, value: Any) -> None:
+        target = dialect._unwrap_dqlite_connection(dbapi_conn)
+        requested = dialect._validate_dqlite_session_mode(value)
+        current = getattr(target, "_dqlite_session_mode", "immediate")
+        if current == requested:
+            return
+        need_query_only = 1 if requested == "read_only" else 0
+        was_query_only = 1 if current == "read_only" else 0
+        try:
+            if need_query_only != was_query_only:
+                # Emit PRAGMA on the SA-side dbapi cursor (which on
+                # async routes through the AsyncAdapt cursor adapter
+                # under greenlet_spawn — set_characteristic is itself
+                # invoked under greenlet on the async path).
+                cur = dbapi_conn.cursor()
+                try:
+                    cur.execute(f"PRAGMA query_only = {need_query_only}")
+                finally:
+                    cur.close()
+        except BaseException:
+            # Reset / set failure: do NOT return a poisoned slot to
+            # the pool. force_close_transport is idempotent on both
+            # sync and async dqlitedbapi connections. Suppress its
+            # own exceptions so the originating exception propagates
+            # and SA invalidates the SA Connection.
+            with contextlib.suppress(Exception):
+                target.force_close_transport()
+            raise
+        target._dqlite_session_mode = requested
+
+    def reset_characteristic(self, dialect: Any, dbapi_conn: Any) -> None:
+        # SA's ``ConnectionCharacteristic`` ABC does NOT pass a
+        # "before" value to reset; we restore to the connection's
+        # construct-time intrinsic default stored on
+        # ``_dqlite_session_mode_default``. The default is
+        # captured ONCE in Connection.__init__ and never reassigned.
+        target = dialect._unwrap_dqlite_connection(dbapi_conn)
+        default = getattr(target, "_dqlite_session_mode_default", "immediate")
+        self.set_characteristic(dialect, dbapi_conn, default)
+
+
 class DqliteDialect(SQLiteDialect_pysqlite):
     """SQLAlchemy dialect for dqlite.
 
@@ -1252,6 +1339,22 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # ``initialize()`` path would set this slot to the same value
     # — the explicit pin is defensive drift defence.
     default_isolation_level = "SERIALIZABLE"
+
+    # Register the dqlite-specific ``dqlite_session_mode``
+    # ConnectionCharacteristic alongside the inherited
+    # ``isolation_level`` / ``logging_token`` entries. SA's
+    # ``_set_connection_characteristics`` discovers options by name
+    # from this dict; registration here is what makes
+    # ``execution_options(dqlite_session_mode=…)`` work at engine,
+    # connection, and session scope, and what installs the
+    # finalize_callback for pool checkin (re-applying the
+    # connection's intrinsic default).
+    connection_characteristics = util.immutabledict(
+        {
+            **SQLiteDialect_pysqlite.connection_characteristics,
+            "dqlite_session_mode": DqliteSessionModeCharacteristic(),
+        }
+    )
 
     @classmethod
     def get_pool_class(cls, url: URL) -> type[pool.Pool]:
@@ -1787,18 +1890,20 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             # line; passing ``check_same_thread=False`` quiets that
             # and matches the established SA + sqlite3 pattern.
             "check_same_thread",
-            # ``begin_immediate`` (bool) — when ``True`` (the dbapi
-            # default), bare ``BEGIN`` is rewritten to
-            # ``BEGIN IMMEDIATE`` so the writer-lock is acquired up
-            # front and the SELECT-then-INSERT pattern can't race a
-            # concurrent committer (``SQLITE_BUSY_SNAPSHOT``).
-            # Disable with ``connect_args={"begin_immediate": False}``
-            # for engines that mostly hold read-only transactions
-            # (cuts the writer-lock serialization tax) — but the
-            # idiomatic per-session opt-out is the
-            # ``dqlite_begin_mode`` execution-option, see
-            # ``DqliteDialect.do_begin`` below.
-            "begin_immediate",
+            # ``session_mode`` (str: ``"immediate"`` / ``"deferred"``
+            # / ``"exclusive"`` / ``"read_only"``) — controls the
+            # connection's BEGIN-form rewrite and read-only PRAGMA
+            # emission. Default ``"immediate"`` (the dbapi default)
+            # is writer-safe: bare ``BEGIN`` is rewritten to
+            # ``BEGIN IMMEDIATE`` so the SELECT-then-INSERT pattern
+            # can't race a concurrent committer
+            # (``SQLITE_BUSY_SNAPSHOT``). ``"read_only"`` additionally
+            # emits ``PRAGMA query_only = 1`` so writes are refused
+            # at PREPARE. The idiomatic per-session form is the
+            # ``dqlite_session_mode`` execution-option (see
+            # ``DqliteDialect.do_begin`` below); this connect_args
+            # kwarg sets the engine-wide default.
+            "session_mode",
         }
     )
 
@@ -1917,13 +2022,18 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             lambda s: _parse_url_bool("check_same_thread", s),
             lambda v: isinstance(v, bool),
         ),
-        # ``begin_immediate`` (bool) — see ``_CONNECT_KWARGS_ALLOWED``
+        # ``session_mode`` (str) — see ``_CONNECT_KWARGS_ALLOWED``
         # entry above for the rationale. URL form
-        # ``?begin_immediate=false`` matches the same bool-parsing
-        # contract as ``check_same_thread`` / ``trust_server_heartbeat``.
-        "begin_immediate": (
-            lambda s: _parse_url_bool("begin_immediate", s),
-            lambda v: isinstance(v, bool),
+        # ``?session_mode=read_only`` (or ``immediate`` / ``deferred``
+        # / ``exclusive``). Validator gates on the same set the dbapi
+        # validates; we lowercase to canonical form before storing
+        # so callers can write either case in the URL.
+        "session_mode": (
+            lambda s: s.lower(),
+            lambda v: (
+                isinstance(v, str)
+                and v.lower() in {"immediate", "deferred", "exclusive", "read_only"}
+            ),
         ),
     }
 
@@ -2441,23 +2551,40 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         """
         return False
 
-    # ``dqlite_begin_mode`` execution-option plumbing.
+    # ``dqlite_session_mode`` execution-option plumbing.
     #
-    # SA's ``Connection.execution_options(dqlite_begin_mode=X)`` /
-    # ``Engine.execution_options(dqlite_begin_mode=X)`` route through
-    # the dialect's ``set_connection_execution_options`` /
-    # ``set_engine_execution_options`` hooks below. Both stash the
-    # mode on the underlying dbapi connection so the subsequent
-    # ``do_begin`` call (which only receives the dbapi connection,
-    # not the SA Connection) can read it.
+    # SA's ``Connection.execution_options(dqlite_session_mode=X)`` /
+    # ``Engine.execution_options(dqlite_session_mode=X)`` /
+    # ``Session.execution_options(dqlite_session_mode=X)`` all route
+    # through ``DqliteSessionModeCharacteristic`` registered in
+    # ``connection_characteristics`` below. The characteristic
+    # implements the standard SA ``ConnectionCharacteristic`` shape
+    # (mirrors ``isolation_level`` and PG's
+    # ``PGReadOnlyConnectionCharacteristic``), which:
+    #
+    # - Walks through SA's ``_set_connection_characteristics`` on
+    #   every checkout (engine-level option) and one-shot
+    #   (connection-level option), so all three scopes "just work".
+    # - Registers a ``finalize_callback`` for pool checkin that
+    #   re-applies the connection's intrinsic default. We capture
+    #   that default at construct time in
+    #   ``conn._dqlite_session_mode_default`` (read-only after
+    #   ``__init__``).
+    # - Honours ``transactional = True`` so toggling mid-transaction
+    #   raises ``InvalidRequestError`` — matches isolation_level's
+    #   guard.
     #
     # Accepted values: ``"immediate"`` (default, writer-safe),
     # ``"deferred"`` (legacy DEFERRED — vulnerable to SNAPSHOT,
-    # opt-in for read-only sessions), ``"exclusive"`` (stronger
-    # lock — blocks readers too). Other values raise at
-    # ``do_begin`` time.
-    _VALID_DQLITE_BEGIN_MODES: ClassVar[frozenset[str]] = frozenset(
-        {"immediate", "deferred", "exclusive"}
+    # opt-in for read-only sessions that want to avoid the
+    # writer-lock serialisation tax), ``"exclusive"`` (stronger
+    # lock — blocks other readers too), ``"read_only"`` (engine
+    # refuses every write at PREPARE via ``PRAGMA query_only = 1``).
+    # Unknown values raise ``ArgumentError`` at first connection
+    # checkout (the characteristic's ``set_characteristic`` hook
+    # validates and refuses).
+    _VALID_DQLITE_SESSION_MODES: ClassVar[frozenset[str]] = frozenset(
+        {"immediate", "deferred", "exclusive", "read_only"}
     )
 
     @staticmethod
@@ -2469,61 +2596,32 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         Connection (has ``__dict__``). For async engines,
         ``dbapi_connection`` is ``AsyncAdaptedConnection`` which uses
         ``__slots__`` and wraps the real connection at
-        ``._connection``. Tooling that wants to stash a flag for the
-        dialect to read later (here: ``_dqlite_begin_mode``) needs to
-        target the dqlitedbapi side so the flag actually has a place
-        to live and the dbapi-layer ``do_begin`` reader sees it.
+        ``._connection``. The dialect's per-checkout state
+        (``_dqlite_session_mode``) lives on the dqlitedbapi side, so
+        every get / set / reset of the characteristic must unwrap
+        first.
         """
         inner = getattr(dbapi_connection, "_connection", None)
         return inner if inner is not None else dbapi_connection
 
-    def _validate_dqlite_begin_mode(self, mode: object) -> str:
-        """Coerce + validate the ``dqlite_begin_mode`` execution-option
-        value, returning the canonical lowercase form. Raise
-        ``ArgumentError`` for anything outside the accepted set so
-        misuse surfaces at ``execution_options(...)`` call time
-        rather than at the first ``do_begin`` after a long-running
-        engine has been built."""
-        from sqlalchemy.exc import ArgumentError
-
+    def _validate_dqlite_session_mode(self, mode: object) -> str:
+        """Coerce + validate the ``dqlite_session_mode`` execution-
+        option value, returning the canonical lowercase form. Raises
+        ``ArgumentError`` for anything outside the accepted set.
+        Called from ``DqliteSessionModeCharacteristic.set_characteristic``
+        on first connection checkout, so misuse surfaces at first
+        ``engine.connect()`` rather than at the first ``do_begin``
+        against a leased connection.
+        """
         if not isinstance(mode, str):
-            raise ArgumentError(f"dqlite_begin_mode must be a str, got {type(mode).__name__}")
+            raise ArgumentError(f"dqlite_session_mode must be a str, got {type(mode).__name__}")
         normalised = mode.lower()
-        if normalised not in self._VALID_DQLITE_BEGIN_MODES:
+        if normalised not in self._VALID_DQLITE_SESSION_MODES:
             raise ArgumentError(
-                f"Invalid dqlite_begin_mode {mode!r}; "
-                f"valid values are {sorted(self._VALID_DQLITE_BEGIN_MODES)}"
+                f"Invalid dqlite_session_mode {mode!r}; "
+                f"valid values are {sorted(self._VALID_DQLITE_SESSION_MODES)}"
             )
         return normalised
-
-    def set_connection_execution_options(self, connection: Any, opts: Any) -> None:
-        """Apply per-connection execution options. Extends the parent
-        hook to honour the ``dqlite_begin_mode`` knob by stashing the
-        value on the underlying dqlitedbapi Connection (where the
-        dbapi-layer ``do_begin`` reader picks it up). All other
-        options route through the inherited implementation."""
-        super().set_connection_execution_options(connection, opts)
-        mode = opts.get("dqlite_begin_mode")
-        if mode is not None:
-            normalised = self._validate_dqlite_begin_mode(mode)
-            target = self._unwrap_dqlite_connection(connection.connection.dbapi_connection)
-            target._dqlite_begin_mode = normalised
-
-    def set_engine_execution_options(self, engine: Any, opts: Any) -> None:
-        """Apply engine-wide execution options. Extends the parent
-        hook to register an ``engine_connect`` listener that stashes
-        the ``dqlite_begin_mode`` on every checked-out connection.
-        Mirrors SA's own ``connection_characteristics`` pattern."""
-        super().set_engine_execution_options(engine, opts)
-        mode = opts.get("dqlite_begin_mode")
-        if mode is not None:
-            normalised = self._validate_dqlite_begin_mode(mode)
-            from sqlalchemy import event as _sa_event
-
-            @_sa_event.listens_for(engine, "engine_connect")
-            def _stash_dqlite_begin_mode(conn: Any) -> None:
-                target = self._unwrap_dqlite_connection(conn.connection.dbapi_connection)
-                target._dqlite_begin_mode = normalised
 
     # do_rollback / do_commit are intentionally left inherited from the
     # parent dialect. The "cannot commit/rollback — no transaction is
@@ -2553,24 +2651,29 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # contract callers expect. dqlite-upstream's VFS itself
     # recommends ``BEGIN IMMEDIATE`` for write-bearing transactions.
     #
-    # Per-session opt-out for explicitly read-only transactions: SA
-    # users set the ``dqlite_begin_mode`` execution-option via
-    # ``engine.execution_options(dqlite_begin_mode="deferred")`` or
+    # Per-session opt-out: SA users set the ``dqlite_session_mode``
+    # execution-option via
+    # ``engine.execution_options(dqlite_session_mode="deferred")`` or
     # the per-connection equivalent. Accepted values:
     #
     #   - ``"immediate"`` (default — writer-safe, see above)
     #   - ``"deferred"`` (legacy SQLite semantics — read-snapshot
     #     opened lazily, vulnerable to SNAPSHOT under contention)
     #   - ``"exclusive"`` (stronger lock — blocks other readers too)
+    #   - ``"read_only"`` (DEFERRED + ``PRAGMA query_only = 1`` so
+    #     writes are refused at PREPARE with SQLITE_READONLY)
     #
-    # ``do_begin`` reads the option from the SA Connection that owns
-    # the begin call (via ``dbapi_connection.info``), substitutes the
-    # explicit literal, and emits it. Explicit literals
+    # The option is routed through SA's ``ConnectionCharacteristic``
+    # protocol (see ``DqliteSessionModeCharacteristic``): SA calls
+    # ``set_characteristic`` to publish the value onto the underlying
+    # dbapi Connection and ``reset_characteristic`` to restore the
+    # construction-time default on pool-checkin. ``do_begin`` then
+    # reads ``_dqlite_session_mode`` from the dbapi Connection and
+    # substitutes the explicit BEGIN literal. Explicit literals
     # (``BEGIN IMMEDIATE`` / ``BEGIN EXCLUSIVE``) bypass the dbapi
-    # rewrite. The dbapi off-switch
-    # (``connect_args={"begin_immediate": False}``) disables the
-    # rewrite for the engine wholesale — for callers who prefer the
-    # legacy DEFERRED default.
+    # rewrite. The dbapi-layer engine-wide default is set via
+    # ``connect_args={"session_mode": "deferred"}`` (or
+    # ``?session_mode=...`` URL query).
     #
     # Errors propagate unwrapped — SA's Connection._begin_impl wraps the
     # call in _handle_dbapi_exception, so is_disconnect classification
@@ -2590,15 +2693,18 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # exception). The asymmetry is intentional; do NOT mirror this
     # raw-cursor shape to the savepoint family.
     def do_begin(self, dbapi_connection: DBAPIConnection) -> None:
-        # ``_dqlite_begin_mode`` is stashed on the underlying
+        # ``_dqlite_session_mode`` is published onto the underlying
         # dqlitedbapi Connection by
-        # ``set_connection_execution_options`` /
-        # ``set_engine_execution_options`` above when the SA user sets
-        # ``execution_options(dqlite_begin_mode="...")``. Missing or
+        # ``DqliteSessionModeCharacteristic.set_characteristic`` when
+        # the SA user sets
+        # ``execution_options(dqlite_session_mode="...")``. Missing or
         # ``"immediate"`` (the default) emits bare ``BEGIN`` which the
         # dbapi cursor rewrites to ``BEGIN IMMEDIATE``. ``"deferred"``
         # / ``"exclusive"`` emit the explicit literal which passes
         # through the dbapi rewrite unchanged (caller intent).
+        # ``"read_only"`` emits bare ``BEGIN`` — the SQLite engine
+        # interprets it as DEFERRED, and the ``PRAGMA query_only = 1``
+        # already in effect (set at connect time) blocks writes.
         target = self._unwrap_dqlite_connection(dbapi_connection)
         # Read the per-connection mode hint. Only honour a known str
         # literal; any other shape (MagicMock auto-spawn in unit-test
@@ -2607,9 +2713,14 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # "immediate". The strict ArgumentError validation already
         # ran at execution_options time; do_begin is the wrong place
         # to surface late misuse.
-        raw_mode = getattr(target, "_dqlite_begin_mode", "immediate")
+        raw_mode = getattr(target, "_dqlite_session_mode", "immediate")
         mode = raw_mode.lower() if isinstance(raw_mode, str) and raw_mode else "immediate"
-        if mode == "deferred":
+        if mode == "deferred" or mode == "read_only":
+            # ``read_only`` rides the DEFERRED form too — bare BEGIN
+            # would be rewritten to IMMEDIATE only when session_mode
+            # is "immediate" at the dbapi layer, but we emit the
+            # explicit literal here so the contract is visible at
+            # the SA layer too.
             begin_sql = "BEGIN DEFERRED"
         elif mode == "exclusive":
             begin_sql = "BEGIN EXCLUSIVE"
@@ -2618,9 +2729,10 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             # fall here so a future un-validated typo still produces
             # a working BEGIN rather than a hard error from inside
             # ``do_begin``. Bare BEGIN — the dbapi cursor's rewrite
-            # (default on) turns this into ``BEGIN IMMEDIATE`` over
-            # the wire. If the dbapi-side rewrite is disabled
-            # (``connect_args={"begin_immediate": False}``), bare
+            # (default on for ``session_mode="immediate"``) turns
+            # this into ``BEGIN IMMEDIATE`` over the wire. If the
+            # dbapi-side default is set to a different mode (via
+            # ``connect_args={"session_mode": "deferred"}``), bare
             # ``BEGIN`` is sent verbatim — restoring the legacy
             # DEFERRED semantics across the whole engine.
             begin_sql = "BEGIN"

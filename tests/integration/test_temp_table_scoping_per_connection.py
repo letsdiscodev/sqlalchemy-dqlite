@@ -30,11 +30,11 @@ pytestmark = pytest.mark.integration
 
 
 def test_temp_table_scoping_is_per_connection(engine_url: str) -> None:
-    # Use ``dqlite_begin_mode="deferred"`` so the two parallel
+    # Use ``dqlite_session_mode="deferred"`` so the two parallel
     # connections each opening an implicit tx don't serialize at
     # the writer-lock — this test exercises temp-table scoping,
     # not write contention.
-    eng = create_engine(engine_url).execution_options(dqlite_begin_mode="deferred")
+    eng = create_engine(engine_url).execution_options(dqlite_session_mode="deferred")
     try:
         with eng.connect() as conn_a, eng.connect() as conn_b:
             conn_a.exec_driver_sql("CREATE TEMPORARY TABLE _dqlite_scope_check (x INT)")

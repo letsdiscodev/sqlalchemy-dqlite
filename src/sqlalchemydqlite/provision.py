@@ -316,8 +316,8 @@ def _format_url(url: sa_url.URL, driver: str | None, ident: str | None) -> sa_ur
     # ``integer_round_trip`` invokes ``metadata.create_all`` on a
     # fresh engine connection while the SA Connection fixture
     # already holds an open tx). Under the dbapi's default
-    # ``begin_immediate=True`` (writer-safe), the fixture-side BEGIN
-    # acquires the writer-lock; the create_all on the second
+    # ``session_mode="immediate"`` (writer-safe), the fixture-side
+    # BEGIN acquires the writer-lock; the create_all on the second
     # connection then BUSY-blocks for the full ``busy_timeout``
     # budget and the test times out. The compliance suite was
     # designed against SQLite's DEFERRED-by-default semantics; opt
@@ -327,7 +327,7 @@ def _format_url(url: sa_url.URL, driver: str | None, ident: str | None) -> sa_ur
     # keep the writer-safe default — the opt-out is scoped to the
     # SA-provision plugin's compliance-test engines.
     rewritten_query = dict(url.query)
-    rewritten_query.setdefault("begin_immediate", "false")
+    rewritten_query.setdefault("session_mode", "deferred")
     return url.set(drivername=new_drivername, database=database, query=rewritten_query)
 
 

@@ -584,6 +584,17 @@ def _dqlite_temp_table_keyword_args(cfg: Any, eng: Any) -> dict[str, Any]:
     dqlite's wire passes through to SQLite; ``TEMP TABLE`` semantics
     apply per-connection. The compliance suite's temp-table tests
     use this hook to choose the correct DDL prefix.
+
+    The per-connection scoping is load-bearing for ``xdist`` runs:
+    parallel workers sharing a cluster each issue
+    ``CREATE TEMPORARY TABLE`` and the
+    ``temp_table_reflection`` requirement assumes each worker's
+    temp schema is isolated. Verified live by
+    ``tests/integration/test_temp_table_scoping_per_connection.py``
+    against the cluster — a future leader-side connection-pooling
+    refactor that broke the 1:1 wire-connection / SQLite-connection
+    mapping would fail that test before silently corrupting xdist
+    runs.
     """
     return {"prefixes": ["TEMPORARY"]}
 

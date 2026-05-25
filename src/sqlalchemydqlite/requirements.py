@@ -139,13 +139,23 @@ class Requirements(SuiteRequirements):
         the two scopes segregated. The pysqlite reflection methods
         we inherit from ``SQLiteDialect_pysqlite`` implement both
         correctly and dqlite serves both relations identically to
-        SQLite (verified: ``sqlite_temp_master`` and
-        ``PRAGMA temp.table_info`` work end-to-end against the
-        cluster). The full ``ComponentReflectionTest`` battery —
-        single-table temp reflection plus the temp-scope
-        ``test_get_multi_*`` parametrize variants — passes when
-        this is opened together with ``temp_table_names`` and
-        ``has_temp_table`` (see overrides below)."""
+        SQLite — verified at two levels:
+
+        * SQL-surface: ``sqlite_temp_master`` and
+          ``PRAGMA temp.table_info`` work end-to-end against the
+          cluster.
+        * Scoping (load-bearing for xdist): TEMP TABLE creates are
+          per-connection, NOT shared across wire connections — see
+          ``tests/integration/test_temp_table_scoping_per_connection.py``
+          for the live cross-connection isolation pin. Without that
+          scoping, parallel xdist workers would corrupt each
+          other's ``sqlite_temp_master`` reflection.
+
+        The full ``ComponentReflectionTest`` battery — single-table
+        temp reflection plus the temp-scope ``test_get_multi_*``
+        parametrize variants — passes when this is opened together
+        with ``temp_table_names`` and ``has_temp_table`` (see
+        overrides below)."""
         return exclusions.open()
 
     # --- Baseline declarations mirroring SQLite behavior ------------

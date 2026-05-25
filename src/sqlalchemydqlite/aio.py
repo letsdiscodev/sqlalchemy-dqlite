@@ -2227,11 +2227,17 @@ class DqliteDialect_aio(DqliteDialect):
         # ``RuntimeWarning: coroutine '...' was never awaited``.
         # Surface the misuse with ``ArgumentError`` at connect time so
         # the diagnostic points at the configuration site.
-        # ``inspect.iscoroutinefunction`` on Python 3.12+ recognises
+        # ``inspect.iscoroutinefunction`` recognises
         # ``functools.partial`` wrappers around an ``async def`` (a
-        # legitimate user pattern). The check mirrors SA's overall
-        # trust-the-creator discipline while catching the single most
-        # common user mistake.
+        # legitimate user pattern). That unwrap behaviour was added in
+        # CPython 3.12 (cpython#101174). The project's
+        # ``pyproject.toml`` pins ``requires-python = ">=3.13"`` so
+        # the partial-detection path is structurally guaranteed; any
+        # future relaxation of the requires-python floor below 3.12
+        # would silently leave the partial-wrapper case undetected
+        # and must re-evaluate this gate. The check mirrors SA's
+        # overall trust-the-creator discipline while catching the
+        # single most common user mistake.
         if creator_fn is not None and not callable(creator_fn):
             raise ArgumentError(
                 f"async_creator_fn must be callable; got "

@@ -261,6 +261,33 @@ def _format_url(url: sa_url.URL, driver: str | None, ident: str | None) -> sa_ur
     # already-suffixed guard below, the session token gets appended
     # twice, producing ``db_sa_<pid>_<ts>_sa_<pid>_<ts>_gw0``. Detect
     # the prior suffix and only append the missing pieces.
+    #
+    # The ``in`` substring check (rather than ``==`` /
+    # ``.endswith()``) is load-bearing across two distinct caller
+    # populations:
+    #
+    # 1. Same-process re-entry — the controller / fork-inherited
+    #    worker calls ``_format_url`` twice with the SAME
+    #    ``_SESSION_TOKEN``; ``substring`` and ``equality`` both
+    #    match.
+    # 2. Cross-process ``--reap-dbs`` — the reaper CLI is a freshly
+    #    spawned process; its ``_SESSION_TOKEN`` is NEW (different
+    #    pid + monotonic_ns). The reaper's ``_SESSION_TOKEN in
+    #    database`` check against the ORIGINAL session's
+    #    token-in-database returns False → bottom branch → re-suffix
+    #    with the reaper's token. This is the correct behaviour:
+    #    the reaper operates on its own scratch namespace and
+    #    leaves the original session's databases untouched.
+    #
+    # A future "correctness" refactor tightening this to ``==`` /
+    # ``.endswith()`` / regex-extract-and-compare-exact would
+    # silently break case (2) — the reaper would never match an
+    # original-session DB and the reap cascade would append a fresh
+    # token per invocation, producing un-cleanable
+    # ``db_<reaper1>_<reaper2>_...`` chains. Keep the substring
+    # check; the fork-note block at the top of this module documents
+    # the fork surface, this comment documents the cross-process
+    # reap surface.
     if _SESSION_TOKEN in database:
         # Prior pass already attached the session token. Append the
         # follower ident only.

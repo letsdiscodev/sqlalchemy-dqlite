@@ -620,6 +620,35 @@ class _DqliteDateTime(sqltypes.DateTime):
 
         return process
 
+    def literal_processor(self, dialect: Any) -> Callable[[Any], Any] | None:
+        """Render an inline ``DateTime`` literal with always-on six
+        fractional digits, mirroring pysqlite's
+        ``_storage_format = "...%(microsecond)06d"``
+        (``sqlalchemy/dialects/sqlite/base.py``) byte-for-byte.
+
+        The inherited ``sqltypes.DateTime`` literal renderer delegates
+        to ``_RenderISO8601NoT`` whose body calls
+        ``value.isoformat().replace("T", " ")``; ``datetime.isoformat``
+        omits the fractional component when ``microsecond == 0``.
+        Pysqlite inherits ``_DateTimeMixin.literal_processor`` which
+        builds the literal from the bind processor's storage-format
+        string and always emits the suffix. A SQL literal of the form
+        ``WHERE col = 'YYYY-MM-DD HH:MM:SS.000000'`` written by a
+        pysqlite sibling does NOT match the ``'YYYY-MM-DD HH:MM:SS'``
+        form rendered by the inherited path here — the same seven-
+        character divergence the bind-side widen-branch fix closed
+        for the wire codec.
+        """
+        bind = self.bind_processor(dialect)
+        assert bind is not None
+
+        def process(value: Any) -> str:
+            if value is None:
+                return "NULL"
+            return f"'{bind(value)}'"
+
+        return process
+
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         want_timezone = self.timezone
         # One-shot WARNING gate per processor instance. A SELECT
@@ -869,6 +898,48 @@ class _DqliteTime(sqltypes.Time):
 
     def bind_processor(self, dialect: Any) -> None:
         return None
+
+    def literal_processor(self, dialect: Any) -> Callable[[Any], Any] | None:
+        """Render an inline ``Time`` literal with always-on six
+        fractional digits, mirroring pysqlite's
+        ``TIME._storage_format = "...%(microsecond)06d"``
+        (``sqlalchemy/dialects/sqlite/base.py``) byte-for-byte.
+
+        The inherited ``sqltypes.Time`` literal renderer delegates to
+        ``_RenderISO8601NoT`` whose body calls
+        ``value.isoformat().split("T")[-1]``; ``time.isoformat`` omits
+        the fractional component when ``microsecond == 0``. Pysqlite
+        inherits ``_DateTimeMixin.literal_processor`` which builds the
+        literal from the storage format string and always emits the
+        suffix. A SQL literal ``WHERE col = 'HH:MM:SS.000000'`` written
+        by a pysqlite sibling does NOT match the ``'HH:MM:SS'`` form
+        rendered by the inherited path here — the same seven-character
+        divergence the DateTime sibling fix closes.
+
+        Tz-aware ``time`` values render via the offset suffix the
+        wire codec uses (``dqlitedbapi._iso8601_from_time``) for
+        round-trip parity with how the bind/wire path serialises
+        the same value.
+        """
+
+        def process(value: Any) -> str:
+            if value is None:
+                return "NULL"
+            if not isinstance(value, datetime.time):
+                return f"'{value!s}'"
+            base = f"{value.hour:02d}:{value.minute:02d}:{value.second:02d}.{value.microsecond:06d}"
+            if value.tzinfo is None:
+                return f"'{base}'"
+            # Use the dbapi-layer offset formatter so the suffix
+            # rendering stays in lockstep with the wire codec.
+            offset = value.utcoffset()
+            if offset is None:
+                return f"'{base}'"
+            from dqlitedbapi.types import _format_utc_offset
+
+            return f"'{base + _format_utc_offset(offset)}'"
+
+        return process
 
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         want_timezone = self.timezone

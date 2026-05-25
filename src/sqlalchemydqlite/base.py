@@ -649,16 +649,18 @@ class _DqliteDateTime(sqltypes.DateTime):
 
         return process
 
+    # ClassVar one-shot gate: fires once per process per type-class so
+    # processor churn (SA statement-cache rebuilds, ORM cache
+    # evictions, per-query ``text()`` execution) does not re-arm the
+    # WARNING. Mirrors the ``_max_total_rows_disabled_warning_emitted``
+    # ClassVar pattern on ``DqliteDialect`` (flipped via
+    # ``type(self).<attr> = True``). Per-class (not module-global) so
+    # a malformed DateTime cell does not silence a malformed Date /
+    # Time warning.
+    _unparseable_iso_warning_emitted: ClassVar[bool] = False
+
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         want_timezone = self.timezone
-        # One-shot WARNING gate per processor instance. A SELECT
-        # against a corrupted column would otherwise emit one WARNING
-        # per row (up to ``max_total_rows``), drowning operator log
-        # pipelines. Mirrors the
-        # ``_max_total_rows_disabled_warning_emitted`` one-shot
-        # class-var-flag pattern in ``DqliteDialect``. Subsequent bad rows
-        # in the same processor instance demote to DEBUG.
-        warned: list[bool] = [False]
 
         def process(value: Any) -> Any:
             if value is None:
@@ -669,11 +671,11 @@ class _DqliteDateTime(sqltypes.DateTime):
                 try:
                     value = datetime.datetime.fromisoformat(value)
                 except ValueError as e:
-                    if not warned[0]:
-                        warned[0] = True
+                    if not type(self)._unparseable_iso_warning_emitted:
+                        type(self)._unparseable_iso_warning_emitted = True
                         logger.warning(
                             "DateTime processor received unparseable ISO8601 string %r: %s "
-                            "(further unparseable rows in this processor demoted to DEBUG)",
+                            "(further unparseable rows in this process demoted to DEBUG)",
                             _safe_for_log(value),
                             _safe_for_log(str(e)),
                         )
@@ -803,10 +805,10 @@ class _DqliteDate(sqltypes.Date):
 
         return process
 
-    def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
-        # One-shot WARNING gate; see _DqliteDateTime.result_processor.
-        warned: list[bool] = [False]
+    # ClassVar one-shot gate; see ``_DqliteDateTime`` for rationale.
+    _unparseable_iso_warning_emitted: ClassVar[bool] = False
 
+    def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         def process(value: Any) -> Any:
             if value is None:
                 return None
@@ -830,11 +832,11 @@ class _DqliteDate(sqltypes.Date):
                 try:
                     return datetime.date.fromisoformat(value)
                 except ValueError as e:
-                    if not warned[0]:
-                        warned[0] = True
+                    if not type(self)._unparseable_iso_warning_emitted:
+                        type(self)._unparseable_iso_warning_emitted = True
                         logger.warning(
                             "Date processor received unparseable ISO8601 string %r: %s "
-                            "(further unparseable rows in this processor demoted to DEBUG)",
+                            "(further unparseable rows in this process demoted to DEBUG)",
                             _safe_for_log(value),
                             _safe_for_log(str(e)),
                         )
@@ -941,10 +943,11 @@ class _DqliteTime(sqltypes.Time):
 
         return process
 
+    # ClassVar one-shot gate; see ``_DqliteDateTime`` for rationale.
+    _unparseable_iso_warning_emitted: ClassVar[bool] = False
+
     def result_processor(self, dialect: Any, coltype: Any) -> Callable[[Any], Any] | None:
         want_timezone = self.timezone
-        # One-shot WARNING gate; see _DqliteDateTime.result_processor.
-        warned: list[bool] = [False]
 
         def process(value: Any) -> Any:
             if value is None:
@@ -998,11 +1001,11 @@ class _DqliteTime(sqltypes.Time):
                 try:
                     return datetime.time.fromisoformat(value)
                 except ValueError as e:
-                    if not warned[0]:
-                        warned[0] = True
+                    if not type(self)._unparseable_iso_warning_emitted:
+                        type(self)._unparseable_iso_warning_emitted = True
                         logger.warning(
                             "Time processor received unparseable ISO8601 string %r: %s "
-                            "(further unparseable rows in this processor demoted to DEBUG)",
+                            "(further unparseable rows in this process demoted to DEBUG)",
                             _safe_for_log(value),
                             _safe_for_log(str(e)),
                         )

@@ -30,6 +30,23 @@ def _clear_resolve_leader_cache() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _reset_unparseable_iso_warning_gate() -> Iterator[None]:
+    """Reset each type-class's one-shot ``_unparseable_iso_warning_emitted``
+    ClassVar before and after every test so the per-process gate
+    semantics are deterministic per test (the ClassVar would
+    otherwise persist across tests and silence WARNING records that
+    later tests want to observe).
+    """
+    from sqlalchemydqlite.base import _DqliteDate, _DqliteDateTime, _DqliteTime
+
+    for cls in (_DqliteDateTime, _DqliteDate, _DqliteTime):
+        cls._unparseable_iso_warning_emitted = False
+    yield
+    for cls in (_DqliteDateTime, _DqliteDate, _DqliteTime):
+        cls._unparseable_iso_warning_emitted = False
+
+
+@pytest.fixture(autouse=True)
 def _restore_adapters() -> Iterator[None]:
     """Snapshot and restore the process-wide ``_ADAPTERS`` registry
     between tests.

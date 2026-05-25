@@ -952,11 +952,20 @@ class AsyncAdaptedConnection(AdaptedConnection):
         exposes it, and ``AttributeError`` on dqlite would force those
         tools onto a less-informative fallback path.
 
-        Returns the union of the project-wide transport-class catch
-        tuple (``OperationalError`` / ``InterfaceError`` /
-        ``DqliteConnectionError`` / ``OSError``) plus
-        ``asyncio.CancelledError`` — i.e., the same exceptions that the
-        hand-rolled :meth:`terminate` body explicitly suppresses.
+        Returns the union of three groups, one per catch arm in the
+        hand-rolled :meth:`terminate` body:
+
+        * ``_TRANSPORT_CLASS_EXCEPTIONS`` — ``OperationalError`` /
+          ``InterfaceError`` / ``DqliteConnectionError`` / ``OSError``
+          (terminate() arm 1; the body DEBUG-logs and returns).
+        * ``RuntimeError`` — defunct-loop close shape
+          (``RuntimeError("Event loop is closed")``) from
+          ``engine.dispose()`` after an ``asyncio.run()`` per-call
+          tore the loop down (terminate() arm 2; the body
+          DEBUG-logs and runs ``_force_close_transport``).
+        * ``asyncio.CancelledError`` — outer cancel during forced
+          reclaim (terminate() arm 3; the body runs
+          ``_force_close_transport`` and re-raises).
 
         ``terminate()`` itself stays hand-rolled rather than reusing
         SA's ``AsyncAdapt_terminate`` mixin: the dqlite lifecycle
@@ -964,9 +973,11 @@ class AsyncAdaptedConnection(AdaptedConnection):
         both ``_terminate_graceful_close`` and ``_terminate_force_close``
         against an inert template. This method exists purely so
         introspection-only callers see a tuple
-        that matches the hand-rolled body's catch arms.
+        that matches the hand-rolled body's catch arms. Any new
+        ``except`` arm added to ``terminate()`` must be reflected
+        here to keep the contract honoured.
         """
-        return _TRANSPORT_CLASS_EXCEPTIONS + (asyncio.CancelledError,)
+        return _TRANSPORT_CLASS_EXCEPTIONS + (RuntimeError, asyncio.CancelledError)
 
     def __init__(
         self,

@@ -1009,25 +1009,30 @@ class _DqliteTime(sqltypes.Time):
                 # is intentionally polymorphic and decodes a full
                 # ``"YYYY-MM-DD HH:MM:SS"`` ISO string into
                 # ``datetime.datetime``. If such a payload lands in a
-                # ``Time`` column, narrow via ``.time()`` — sibling
+                # ``Time`` column, narrow via ``.timetz()`` — sibling
                 # parity with ``_DqliteDate.result_processor``'s
                 # ``datetime -> date`` narrowing (the ``value.date()``
-                # branch). The date component is
-                # silently dropped (mirroring ``_DqliteDate``'s
-                # documented "tzinfo is dropped" decision); ``Time``
-                # has no date dimension to preserve. ``isinstance``
-                # check ordered before ``datetime.time`` because
-                # ``datetime.datetime`` is **not** a ``datetime.time``
-                # subclass — both branches need explicit handling.
+                # branch). The date component is silently dropped;
+                # ``Time`` has no date dimension to preserve.
+                # ``isinstance`` check ordered before
+                # ``datetime.time`` because ``datetime.datetime`` is
+                # **not** a ``datetime.time`` subclass — both branches
+                # need explicit handling.
                 #
-                # ``.time()`` always drops tzinfo (its tz-preserving
-                # analogue is ``.timetz()``); the post-narrow value
-                # falls through to the ``datetime.time`` branch below
-                # so ``Time(timezone=True)`` re-attaches UTC and
-                # ``Time(timezone=False)`` keeps it naive — symmetric
-                # with how ``_DqliteDateTime`` handles its sibling
-                # ``datetime`` payloads.
-                value = value.time()
+                # Use ``.timetz()`` rather than ``.time()`` so the
+                # source ``tzinfo`` survives the narrowing. The
+                # post-narrow value then flows into the
+                # ``datetime.time`` branch with its offset intact —
+                # ``Time(timezone=True)`` keeps the source offset
+                # (no silent UTC rewrite of a non-UTC aware payload)
+                # and ``Time(timezone=False)`` strips it for the
+                # naive contract. ``.time()`` would have dropped
+                # tzinfo unconditionally, and the next branch would
+                # then have re-attached UTC to a naive-from-aware
+                # value — silently rewriting e.g. an America/Los_Angeles
+                # -07:00 offset to +00:00 (7-hour instant shift) with
+                # no operator diagnostic.
+                value = value.timetz()
             if isinstance(value, datetime.time):
                 if want_timezone:
                     # Time(timezone=True) contract promises an aware

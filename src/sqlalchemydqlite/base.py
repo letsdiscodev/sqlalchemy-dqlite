@@ -2286,6 +2286,49 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         """
         cursor.executemany(statement, parameters)
 
+    def do_execute(
+        self,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any = None,
+    ) -> None:
+        """Intentional opt-out of any future ``DefaultDialect.do_execute`` growth.
+
+        Sibling of :meth:`do_executemany` — see that docstring for the
+        full drift-defence rationale. SA's three default execute hooks
+        (``do_executemany`` / ``do_execute`` / ``do_execute_no_params``)
+        at ``engine/default.py:948-955`` are identical-shaped one-liners
+        sharing the same evolution surface (future dispatch event,
+        envelope tracer, paramstyle conversion). Pinning one but
+        inheriting the others would silently pick up any of those
+        future wrapper layers — exactly the failure mode the
+        ``do_executemany`` override goes to lengths to prevent.
+
+        Body MUST stay byte-equivalent to SA's pass-through. A pin
+        test (``test_do_execute_local_override_pin``) drives a stub
+        cursor and asserts exactly one ``cursor.execute(statement,
+        parameters)`` call with the verbatim arguments.
+        """
+        cursor.execute(statement, parameters)
+
+    def do_execute_no_params(
+        self,
+        cursor: Any,
+        statement: str,
+        context: Any = None,
+    ) -> None:
+        """Intentional opt-out of any future ``DefaultDialect.do_execute_no_params`` growth.
+
+        Sibling of :meth:`do_executemany` — see that docstring for the
+        full drift-defence rationale. Body MUST stay byte-equivalent
+        to SA's one-line pass-through. A pin test
+        (``test_do_execute_local_override_pin``) drives a stub cursor
+        and asserts exactly one ``cursor.execute(statement)`` call
+        with the verbatim argument.
+        """
+        cursor.execute(statement)
+
     # Patterns are matched case-insensitively at the comparison site.
     # Stored in lower-case so the single ``.lower()`` at each
     # ``is_disconnect`` call normalises both sides; the previous

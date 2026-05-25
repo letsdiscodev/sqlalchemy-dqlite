@@ -2967,26 +2967,52 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         deliberately NOT caught — they signal cooperative interpreter
         shutdown and a forced finalize must not mask them, mirroring
         the async sibling's stance on ``CancelledError``.
+
+        Two-tier catch:
+
+        * ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` — expected transport-class
+          shapes (``OSError``, dbapi ``Error`` subclasses,
+          ``DqliteConnectionError``, ``RuntimeError``,
+          ``ReferenceError``). DEBUG-log + absorb.
+        * Any other ``Exception`` — most likely a cross-repo dbapi
+          refactor regression (``AttributeError`` from a rename,
+          ``TypeError`` from a signature change, ``NotImplementedError``
+          from a property swap). WARNING-log + absorb so SA's binary
+          non-raising contract holds while the regression stays loudly
+          observable in operator logs.
         """
         peer = _log_safe_peer(dbapi_connection)
         try:
             dbapi_connection.force_close_transport()
         except _FORCE_CLOSE_TAIL_EXCEPTIONS:
-            # Narrow tuple: covers every transport-class shape
-            # (OSError + dbapi.Error subclasses + DqliteConnectionError)
-            # so SA's ``has_terminate=True`` non-raising contract is
-            # upheld for the universe of failures terminate is
-            # actually meant to absorb. AttributeError / TypeError —
-            # i.e. cross-repo dbapi refactor breaks where
-            # ``force_close_transport`` was removed or renamed —
-            # propagate so the regression surfaces loudly rather than
-            # silent no-op on every pool.dispose(). Same discipline as
-            # ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` (see definition at
-            # base.py:211 + the comment block above it).
+            # Expected shapes — DEBUG-log + absorb. The narrow tuple
+            # covers transport-class failures (OSError + dbapi.Error
+            # subclasses + DqliteConnectionError + RuntimeError +
+            # ReferenceError) that ``force_close_transport`` legitimately
+            # surfaces during forced disposal.
             logger.debug(
                 "do_terminate: force_close_transport raised on dispose for "
                 "peer=%s id=%s; proceeding (has_terminate=True non-raising "
                 "contract)",
+                peer,
+                id(dbapi_connection),
+                exc_info=True,
+            )
+        except Exception:
+            # Unexpected shape — most likely a cross-repo dbapi
+            # refactor regression (``force_close_transport`` renamed,
+            # removed, signature-changed, or swapped to a raising
+            # property). SA's ``has_terminate=True`` contract is
+            # binary non-raising; absorbing here prevents the regression
+            # from aborting ``engine.dispose()`` and leaking sibling
+            # slots. WARNING-tier (vs DEBUG) so the regression stays
+            # loudly visible in operator logs.
+            logger.warning(
+                "do_terminate: force_close_transport raised UNEXPECTED "
+                "exception type on dispose for peer=%s id=%s; SA "
+                "has_terminate=True contract absorbs to prevent dispose "
+                "abort. Likely a dbapi-side refactor regression — "
+                "investigate.",
                 peer,
                 id(dbapi_connection),
                 exc_info=True,

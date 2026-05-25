@@ -1,16 +1,19 @@
 """Pin: ``DqliteDialect.do_terminate`` (sync) and
-``DqliteDialect_aio.do_terminate`` (async) catch the narrow
-``_FORCE_CLOSE_TAIL_EXCEPTIONS`` tuple rather than bare ``Exception``.
+``DqliteDialect_aio.do_terminate`` (async) honour SA's
+``has_terminate=True`` non-raising pool contract on the full
+``Exception`` surface — DEBUG-log + absorb for expected transport-
+class shapes (``_FORCE_CLOSE_TAIL_EXCEPTIONS``); WARNING-log +
+absorb for unexpected shapes (cross-repo dbapi refactor regressions
+like ``AttributeError`` from a rename).
 
-The narrow tuple still upholds SA's ``has_terminate=True`` non-raising
-contract for real transport-class failures, but lets cross-repo
-refactor breaks (``AttributeError`` / ``TypeError``) propagate so the
-regression surfaces loudly rather than silent no-op on every
-``engine.dispose()``.
+The widened catch keeps the regression loudly observable in operator
+logs (WARNING tier) without aborting ``engine.dispose()`` per SA's
+binary non-raising contract.
 """
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,17 +22,26 @@ from sqlalchemydqlite.aio import DqliteDialect_aio
 from sqlalchemydqlite.base import DqliteDialect
 
 
-def test_sync_do_terminate_propagates_attribute_error_from_refactor() -> None:
+def test_sync_do_terminate_absorbs_attribute_error_with_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cross-repo dbapi refactor that removed
+    ``force_close_transport`` surfaces as ``AttributeError``;
+    SA's has_terminate=True contract requires absorption. WARNING-tier
+    log keeps the regression visible."""
     dialect = DqliteDialect()
 
     dbapi_connection = MagicMock()
-    # Simulate a future dbapi refactor that removed force_close_transport.
+    dbapi_connection.address = "host.cluster:9999"
     dbapi_connection.force_close_transport = MagicMock(
         side_effect=AttributeError("simulated refactor: method renamed")
     )
 
-    with pytest.raises(AttributeError, match="simulated refactor"):
+    with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.base"):
         dialect.do_terminate(dbapi_connection)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "expected WARNING record for AttributeError surface"
 
 
 def test_sync_do_terminate_still_absorbs_oserror_transport_class() -> None:
@@ -38,28 +50,36 @@ def test_sync_do_terminate_still_absorbs_oserror_transport_class() -> None:
     dialect = DqliteDialect()
 
     dbapi_connection = MagicMock()
+    dbapi_connection.address = "host.cluster:9999"
     dbapi_connection.force_close_transport = MagicMock(side_effect=OSError("ECONNRESET"))
 
-    # No raise — OSError is absorbed at the narrow tuple.
+    # No raise — OSError is absorbed at the expected-shape tuple.
     dialect.do_terminate(dbapi_connection)
 
 
-def test_async_do_terminate_propagates_attribute_error_from_refactor() -> None:
+def test_async_do_terminate_absorbs_attribute_error_with_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     dialect = DqliteDialect_aio()
 
     dbapi_connection = MagicMock()
+    dbapi_connection.address = "host.cluster:9999"
     dbapi_connection.terminate = MagicMock(
         side_effect=AttributeError("simulated refactor: method renamed")
     )
 
-    with pytest.raises(AttributeError, match="simulated refactor"):
+    with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.aio"):
         dialect.do_terminate(dbapi_connection)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "expected WARNING record for AttributeError surface"
 
 
 def test_async_do_terminate_still_absorbs_oserror_transport_class() -> None:
     dialect = DqliteDialect_aio()
 
     dbapi_connection = MagicMock()
+    dbapi_connection.address = "host.cluster:9999"
     dbapi_connection.terminate = MagicMock(side_effect=OSError("ECONNRESET"))
 
     dialect.do_terminate(dbapi_connection)

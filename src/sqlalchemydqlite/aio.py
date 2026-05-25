@@ -1970,23 +1970,45 @@ class DqliteDialect_aio(DqliteDialect):
         is deliberately NOT caught — asyncio's structured-concurrency
         contract says cancels must propagate, and an outer cancel
         signalling "abort dispose now" must not be silently swallowed.
+
+        Two-tier catch (mirrors the sync sibling):
+
+        * ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` — expected transport-class
+          shapes. DEBUG-log + absorb.
+        * Any other ``Exception`` — most likely a cross-repo dbapi
+          refactor regression. WARNING-log + absorb so the SA contract
+          holds while the regression stays loudly observable.
         """
         peer = _log_safe_peer(dbapi_connection)
         try:
             dbapi_connection.terminate()
         except _FORCE_CLOSE_TAIL_EXCEPTIONS:
-            # Narrow tuple: covers every transport-class shape so the
-            # has_terminate=True non-raising contract holds for real
-            # transport failures (OSError, dbapi.Error subclasses,
-            # DqliteConnectionError). AttributeError / TypeError from
-            # cross-repo dbapi-package refactor breaks (where
-            # ``terminate()`` is removed or renamed) propagate so the
-            # regression surfaces loudly rather than silent no-op on
-            # every ``engine.dispose()``. Sync sibling at
-            # base.py::do_terminate uses the same tuple.
+            # Expected shapes — DEBUG-log + absorb. Narrow tuple covers
+            # transport-class failures (OSError + dbapi.Error subclasses
+            # + DqliteConnectionError + RuntimeError + ReferenceError)
+            # that ``terminate()`` legitimately surfaces.
             logger.debug(
                 "do_terminate: terminate raised on dispose for peer=%s id=%s; "
                 "proceeding (has_terminate=True non-raising contract)",
+                peer,
+                id(dbapi_connection),
+                exc_info=True,
+            )
+        except Exception:
+            # Unexpected shape — most likely a cross-repo dbapi
+            # refactor regression (``terminate`` renamed, removed,
+            # signature-changed, or swapped to a raising property).
+            # SA's ``has_terminate=True`` contract is binary non-
+            # raising; absorbing here prevents the regression from
+            # aborting ``engine.dispose()`` and leaking sibling slots.
+            # WARNING-tier (vs DEBUG) so the regression stays loudly
+            # visible in operator logs. Sync sibling at
+            # base.py::do_terminate uses the same two-tier shape.
+            logger.warning(
+                "do_terminate: terminate raised UNEXPECTED exception type "
+                "on dispose for peer=%s id=%s; SA has_terminate=True "
+                "contract absorbs to prevent dispose abort. Likely a "
+                "dbapi-side refactor regression — investigate.",
                 peer,
                 id(dbapi_connection),
                 exc_info=True,

@@ -2218,14 +2218,23 @@ class DqliteDialect(SQLiteDialect_pysqlite):
             # ``__context__``.
             try:
                 cursor.close()
-            except _TRANSPORT_CLASS_EXCEPTIONS:
-                # Narrowed from the broader ``DatabaseError`` umbrella to
-                # the shared transport-class tuple. An ``IntegrityError``
-                # from ``cursor.close()`` is implausible (close doesn't
-                # fire constraints) and would more likely indicate a
-                # custom audit trigger or an outright programmer bug —
-                # let it surface instead of silently masking the
-                # BEGIN-time exception.
+            except _FORCE_CLOSE_TAIL_EXCEPTIONS:
+                # Widened from ``_TRANSPORT_CLASS_EXCEPTIONS`` to the
+                # ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` tuple used by
+                # ``do_close`` at the same surface — cursor / connection
+                # close under cross-loop dispose or dead-``weakref.proxy``
+                # state. The wider tuple covers the same two extra shapes
+                # ``do_close`` documents: ``RuntimeError("Event loop is
+                # closed")`` from cross-loop dispose and ``ReferenceError``
+                # from a dead proxy. Under the narrower tuple, those two
+                # escaped the ``finally`` body and masked the BEGIN-time
+                # exception per Python's "finally replaces propagating
+                # exception" rule. ``IntegrityError`` (implausible from
+                # close — no constraints fire), programmer-bug shapes
+                # (``AttributeError`` / ``TypeError``), and any other
+                # ``dbapi.Error`` subclass remain outside the wider
+                # tuple and still escape so the bug surfaces rather
+                # than masking the BEGIN-time exception silently.
                 logger.debug(
                     "do_begin: cursor.close failed after BEGIN; BEGIN exception preserved",
                     exc_info=True,

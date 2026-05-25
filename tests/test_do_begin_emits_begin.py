@@ -139,31 +139,30 @@ class TestDoBeginErrorHandling:
             f"{[r.message for r in caplog.records]}"
         )
 
-    def test_close_failure_non_transport_class_re_raises(self) -> None:
-        """The close-failure suppression is intentionally narrow to
-        ``_TRANSPORT_CLASS_EXCEPTIONS``; an out-of-band close exception
-        (e.g., ``IntegrityError`` from a custom audit trigger, or a
-        plain ``RuntimeError`` from a programmer bug) must NOT be
-        swallowed. The narrow except is documented at base.py:1552-1559
-        as "let it surface instead of silently masking the BEGIN-time
-        exception" — pin the surfacing behaviour so a refactor that
-        broadens to ``except Exception:`` regresses it.
+    def test_close_failure_non_force_close_tail_re_raises(self) -> None:
+        """The close-failure suppression is intentionally bounded by
+        ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` (transport-class +
+        ``RuntimeError`` + ``ReferenceError``); an out-of-band close
+        exception outside that tuple (e.g., ``IntegrityError`` from a
+        custom audit trigger, or ``AttributeError`` from a programmer
+        bug) must NOT be swallowed. Pin the surfacing behaviour so a
+        refactor that broadens to ``except Exception:`` regresses it.
         """
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         begin_exc = dqlitedbapi.exceptions.OperationalError("begin sentinel", code=42)
         mock_cursor.execute.side_effect = begin_exc
-        # IntegrityError and bare RuntimeError are both NOT in
-        # _TRANSPORT_CLASS_EXCEPTIONS — they should escape the narrow
-        # except and replace the BEGIN exception.
-        mock_cursor.close.side_effect = RuntimeError("close fault out of band")
+        # AttributeError is NOT in _FORCE_CLOSE_TAIL_EXCEPTIONS — it
+        # should escape and replace the BEGIN exception, surfacing the
+        # programmer bug rather than silently masking it.
+        mock_cursor.close.side_effect = AttributeError("cursor lost its close hook")
         mock_conn.cursor.return_value = mock_cursor
 
-        with pytest.raises(RuntimeError, match="close fault out of band") as exc_info:
+        with pytest.raises(AttributeError, match="cursor lost its close hook") as exc_info:
             dialect.do_begin(mock_conn)
         # Belt-and-brace: Python's implicit chaining stashes the
-        # BEGIN-time exception on the raised RuntimeError's
+        # BEGIN-time exception on the raised AttributeError's
         # ``__context__`` (because the close happened inside the
         # ``finally`` of the try/except block that caught BEGIN).
         # Pin so a refactor that swaps to ``raise from None`` discards

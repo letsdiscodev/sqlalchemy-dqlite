@@ -151,17 +151,20 @@ class TestDoBeginCloseNarrowing:
         with pytest.raises(_dbapi_exc.DataError, match="value too large"):
             dialect.do_begin(mock_conn)
 
-    def test_does_not_swallow_runtime_error(self) -> None:
-        """A bare ``RuntimeError`` from ``cursor.close()`` (not in the
-        transport-class set) propagates — programmer-bug shapes must
-        stay visible."""
+    def test_does_not_swallow_attribute_error(self) -> None:
+        """An ``AttributeError`` from ``cursor.close()`` (not in the
+        ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` tuple) propagates —
+        programmer-bug shapes must stay visible. ``RuntimeError`` and
+        ``ReferenceError`` ARE in the wider tuple (cross-loop dispose /
+        dead-proxy shapes that mask the BEGIN exception) and are
+        swallowed; the rationale is symmetric with ``do_close``."""
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
-        mock_cursor.close.side_effect = RuntimeError("unexpected")
+        mock_cursor.close.side_effect = AttributeError("programmer bug")
         mock_conn.cursor.return_value = mock_cursor
 
-        with pytest.raises(RuntimeError, match="unexpected"):
+        with pytest.raises(AttributeError, match="programmer bug"):
             dialect.do_begin(mock_conn)
 
 

@@ -514,6 +514,25 @@ class AsyncAdaptedCursor:
         very large bind set must drive multiple ``execute()`` calls
         themselves; ``executemany`` cannot stream because the retry
         contract requires re-iteration.
+
+        ``lastrowid`` handling: same sticky-INSERT contract as
+        ``execute`` (see ``execute``'s docstring for the full
+        rationale). Both branches below write ``self.lastrowid`` only
+        when the underlying cursor reports a non-None value (i.e., an
+        INSERT/REPLACE actually ran in this executemany); a subsequent
+        ``UPDATE``/``DELETE``/``SELECT`` executemany preserves the
+        prior INSERT's lastrowid, matching stdlib ``sqlite3.Cursor``
+        stickiness. DIVERGES from SA's aiosqlite reference
+        (``sqlalchemy/dialects/sqlite/aiosqlite.py``'s ``executemany``
+        body) which assigns ``self.lastrowid = _cursor.lastrowid``
+        unconditionally — under that shape, a non-INSERT
+        ``executemany`` clears the value to ``None``. Cross-driver
+        code consulting ``cursor.lastrowid`` after a non-INSERT
+        ``executemany`` sees the prior INSERT's value here vs ``None``
+        on aiosqlite. The dqlite stance privileges stdlib parity over
+        SA-reference parity; the choice is documented at both call
+        sites because the underlying RETURNING-path drain pattern
+        otherwise structurally mirrors the SA reference shape.
         """
         # Mirror the closed-cursor guard the other methods on this
         # class apply; see ``execute`` for the rationale.

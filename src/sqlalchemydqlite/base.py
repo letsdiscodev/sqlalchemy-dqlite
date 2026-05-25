@@ -518,6 +518,34 @@ class _DqliteDateTime(sqltypes.DateTime):
     behaviour.
     """
 
+    # Pysqlite-only kwargs that pysqlite's ``_DateTimeMixin`` /
+    # ``DATETIME`` accept and that the dqlite-specific processors
+    # do NOT consult. Mirrors the dialect-level ``native_datetime``
+    # eager-reject discipline at this type-class layer so the
+    # diagnostic surfaces the dqlite divergence directly instead of
+    # a bare stdlib ``TypeError`` two frames removed from the
+    # ``Column(...)`` call site.
+    _DQLITE_REJECTED_KWARGS = ("storage_format", "regexp", "truncate_microseconds")
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        for kwarg in self._DQLITE_REJECTED_KWARGS:
+            if kwarg in kwargs:
+                raise ArgumentError(
+                    f"dqlite dialect does not honour ``{kwarg}`` on "
+                    f"{type(self).__name__}: the dqlite-specific "
+                    f"bind/result processors emit a fixed ISO8601 "
+                    f"format and parse via "
+                    f"``datetime.fromisoformat``; the kwarg would be "
+                    f"silently dropped. Use "
+                    f"``sqlalchemy.dialects.sqlite.DATETIME`` "
+                    f"directly if you need pysqlite's custom storage "
+                    f"format — the dqlite colspecs will not adapt "
+                    f"that type through. Mirrors the "
+                    f"``native_datetime`` eager-reject discipline "
+                    f"applied at the dialect level."
+                )
+        super().__init__(*args, **kwargs)
+
     def bind_processor(self, dialect: Any) -> Callable[[Any], Any] | None:
         def process(value: Any) -> Any:
             if value is None:
@@ -667,6 +695,31 @@ class _DqliteDate(sqltypes.Date):
     full read.
     """
 
+    # Pysqlite-only kwargs that the dqlite-specific processors do NOT
+    # consult. ``Date`` has no ``truncate_microseconds`` on pysqlite
+    # (it's a ``DATETIME``-only knob). Mirrors the
+    # ``native_datetime`` eager-reject discipline.
+    _DQLITE_REJECTED_KWARGS = ("storage_format", "regexp")
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        for kwarg in self._DQLITE_REJECTED_KWARGS:
+            if kwarg in kwargs:
+                raise ArgumentError(
+                    f"dqlite dialect does not honour ``{kwarg}`` on "
+                    f"{type(self).__name__}: the dqlite-specific "
+                    f"bind/result processors emit a fixed ISO8601 "
+                    f"format and parse via "
+                    f"``datetime.date.fromisoformat``; the kwarg "
+                    f"would be silently dropped. Use "
+                    f"``sqlalchemy.dialects.sqlite.DATE`` directly "
+                    f"if you need pysqlite's custom storage format "
+                    f"— the dqlite colspecs will not adapt that "
+                    f"type through. Mirrors the "
+                    f"``native_datetime`` eager-reject discipline "
+                    f"applied at the dialect level."
+                )
+        super().__init__(*args, **kwargs)
+
     def bind_processor(self, dialect: Any) -> Callable[[Any], Any] | None:
         def process(value: Any) -> Any:
             if value is None:
@@ -765,6 +818,30 @@ class _DqliteTime(sqltypes.Time):
     by the parent dialect's processor; we don't widen the contract
     here.
     """
+
+    # Pysqlite-only kwargs that the dqlite-specific processors do NOT
+    # consult. Mirrors the ``native_datetime`` eager-reject discipline
+    # at the type-class layer.
+    _DQLITE_REJECTED_KWARGS = ("storage_format", "regexp", "truncate_microseconds")
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        for kwarg in self._DQLITE_REJECTED_KWARGS:
+            if kwarg in kwargs:
+                raise ArgumentError(
+                    f"dqlite dialect does not honour ``{kwarg}`` on "
+                    f"{type(self).__name__}: the dqlite-specific "
+                    f"bind/result processors emit a fixed ISO8601 "
+                    f"format and parse via "
+                    f"``datetime.time.fromisoformat``; the kwarg "
+                    f"would be silently dropped. Use "
+                    f"``sqlalchemy.dialects.sqlite.TIME`` directly "
+                    f"if you need pysqlite's custom storage format "
+                    f"— the dqlite colspecs will not adapt that "
+                    f"type through. Mirrors the "
+                    f"``native_datetime`` eager-reject discipline "
+                    f"applied at the dialect level."
+                )
+        super().__init__(*args, **kwargs)
 
     def bind_processor(self, dialect: Any) -> None:
         return None

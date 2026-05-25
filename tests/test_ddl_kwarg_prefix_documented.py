@@ -17,6 +17,7 @@ behaviour matches.
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import Column, Integer, MetaData, Table
 from sqlalchemy.schema import CreateTable
 
@@ -46,21 +47,22 @@ def test_sqlite_with_rowid_kwarg_takes_effect() -> None:
     assert "WITHOUT ROWID" in compiled
 
 
-def test_dqlite_with_rowid_kwarg_silently_ignored() -> None:
-    """Pin the documented contract — the naturally-spelled
-    ``dqlite_*`` form is silently dropped at compile time. A
-    regression that adds dqlite_* support without also adding a
-    deprecation path would fail this pin."""
+def test_dqlite_with_rowid_kwarg_rejected_at_construction() -> None:
+    """The ``dqlite_*`` DDL prefix is now refused at construction
+    with an ``ArgumentError`` carrying a "did you mean ``sqlite_*``"
+    hint, mirroring the connect-side
+    ``_validate_connect_kwargs`` discipline. The previous "silently
+    dropped at compile time" behaviour was a footgun that survived
+    only as a docstring footnote; the runtime guard converts it
+    into a sharp error so a copy-paste mistake from a
+    pysqlite-tagged-with-dialect-name example surfaces immediately."""
+    from sqlalchemy.exc import ArgumentError
+
     m = MetaData()
-    t = Table(
-        "t2",
-        m,
-        Column("id", Integer, primary_key=True),
-        dqlite_with_rowid=False,
-    )
-    compiled = str(CreateTable(t).compile(dialect=DqliteDialect()))
-    assert "WITHOUT ROWID" not in compiled, (
-        "Documented contract: dqlite_with_rowid is silently dropped. "
-        "If this fails, the dialect grew dqlite_* support — update "
-        "the docstring to match."
-    )
+    with pytest.raises(ArgumentError, match="sqlite_with_rowid"):
+        Table(
+            "t2",
+            m,
+            Column("id", Integer, primary_key=True),
+            dqlite_with_rowid=False,
+        )

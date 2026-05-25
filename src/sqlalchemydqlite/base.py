@@ -3319,3 +3319,61 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # produces queries the cluster rejects (RETURNING etc.).
     # Operators must ensure their cluster's SQLite >= the floor.
     # See ``dqlitedbapi/_constants.py`` for the full pin contract.
+
+
+# DDL kwarg-prefix runtime guard.
+#
+# SA's ``DialectKWArgs`` keys per-construct dialect kwargs by the
+# user-written prefix; the inherited ``SQLiteDDLCompiler`` reads
+# exclusively from ``dialect_options['sqlite']``. A
+# ``Table(..., dqlite_with_rowid=False)`` therefore stored its value
+# under ``dialect_options['dqlite']`` and was silently dropped at
+# compile time. The dialect docstring warned about this in prose;
+# the listener below enforces the discipline at construction time so
+# a copy-paste mistake from a pysqlite-tagged-with-dialect-name
+# example surfaces a sharp ``ArgumentError`` rather than a silently
+# dropped kwarg. Mirrors the connect-side
+# ``_validate_connect_kwargs`` discipline.
+def _dqlite_prefix_ddl_guard(target: Any, parent: Any) -> None:
+    dqlite_opts = target.dialect_options.get("dqlite")
+    if dqlite_opts is None:
+        return
+    # ``_non_defaults`` is SA's source of truth for "user actually
+    # passed this kwarg" — the public ``dict``-view always includes
+    # the registry defaults. Reading the private attribute keeps the
+    # guard tight (no false positives on inherited defaults).
+    non_defaults = getattr(dqlite_opts, "_non_defaults", None)
+    if not non_defaults:
+        return
+    offenders = sorted(non_defaults.keys())
+    hint = ", ".join(f"sqlite_{key}" for key in offenders)
+    raise ArgumentError(
+        f"{type(target).__name__} received dqlite_* DDL kwarg(s) "
+        f"{sorted(f'dqlite_{k}' for k in offenders)}: the inherited "
+        f"SQLiteDDLCompiler reads exclusively from "
+        f"dialect_options['sqlite'], so the dqlite-prefixed value(s) "
+        f"would be silently dropped at compile time. Did you mean: "
+        f"{hint}? Mirrors the connect-side _validate_connect_kwargs "
+        f"fail-fast discipline; the DDL-side guard refuses to let a "
+        f"copy-paste mistake silently disable a constraint, where "
+        f"clause, or rowid option."
+    )
+
+
+def _install_dqlite_prefix_ddl_guard() -> None:
+    """Register the prefix guard against the DDL constructs SA's
+    SQLite dialect declares ``construct_arguments`` for. Idempotent
+    so a re-import (test runner) does not double-attach the listener.
+    """
+    from sqlalchemy import event
+    from sqlalchemy.sql import schema as sa_schema
+
+    _ATTR = "_dqlite_prefix_guard_installed"
+    if getattr(_install_dqlite_prefix_ddl_guard, _ATTR, False):
+        return
+    for cls in (sa_schema.Table, sa_schema.Index, sa_schema.Column, sa_schema.Constraint):
+        event.listen(cls, "after_parent_attach", _dqlite_prefix_ddl_guard)
+    setattr(_install_dqlite_prefix_ddl_guard, _ATTR, True)
+
+
+_install_dqlite_prefix_ddl_guard()

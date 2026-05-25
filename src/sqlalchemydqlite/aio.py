@@ -991,6 +991,42 @@ class AsyncAdaptedConnection(AdaptedConnection):
         else:
             inner_conn = connection
             dbapi_module = dbapi
+        # Type-shape guard: detect the third plausible call shape —
+        # the positional swap ``AsyncAdaptedConnection(connection,
+        # dbapi)`` — that the ``_UNSET`` sentinel cannot discriminate.
+        # Without this guard the swap silently poisons both slots and
+        # the downstream ``AttributeError`` (on ``self._connection.cursor()``
+        # or third-party ``self.dbapi.OperationalError`` lookup) surfaces
+        # many frames from the construction site.
+        #
+        # Confirmed-swap signature: the supposed dbapi (first
+        # positional) lacks ``OperationalError`` but exposes
+        # ``cursor`` — i.e. it shape-looks like a connection — AND
+        # the supposed connection (second positional) lacks
+        # ``cursor`` but exposes ``OperationalError`` — i.e. it
+        # shape-looks like a dbapi module. Both conditions firing
+        # together is the unambiguous swap fingerprint; a single
+        # mismatch could be a minimal in-tree fake that lacks both
+        # attributes by design (the test suite has several), so the
+        # guard tolerates that shape and only rejects the
+        # bilaterally swapped call.
+        if (
+            dbapi_module is not None
+            and inner_conn is not None
+            and not hasattr(dbapi_module, "OperationalError")
+            and hasattr(dbapi_module, "cursor")
+            and not hasattr(inner_conn, "cursor")
+            and hasattr(inner_conn, "OperationalError")
+        ):
+            raise TypeError(
+                f"AsyncAdaptedConnection __init__: positional "
+                f"arguments appear swapped — first positional "
+                f"({type(dbapi_module).__name__}) has 'cursor' but "
+                f"no 'OperationalError'; second positional "
+                f"({type(inner_conn).__name__}) has "
+                f"'OperationalError' but no 'cursor'. Reference "
+                f"shape: AsyncAdaptedConnection(dbapi, connection)."
+            )
         # ``_connection`` is the concrete ``dqlitedbapi.aio.AsyncConnection``
         # this adapter wraps; SQLAlchemy's parent ``AdaptedConnection``
         # declares the attribute with a wider Protocol type, so we keep

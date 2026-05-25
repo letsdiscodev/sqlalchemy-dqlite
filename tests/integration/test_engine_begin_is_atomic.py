@@ -273,11 +273,18 @@ class TestEngineBeginEmitsBeginOverWire:
             finally:
                 cc.DqliteConnection.execute = orig_execute
 
-            # The trace MUST start with BEGIN; the INSERT MUST follow;
-            # the COMMIT MUST close it. Other entries (pool reset
-            # ROLLBACKs etc.) are tolerated.
-            assert "BEGIN" in recorded, f"no BEGIN in trace: {recorded!r}"
-            begin_idx = recorded.index("BEGIN")
+            # The trace MUST start with a BEGIN form; the INSERT MUST
+            # follow; the COMMIT MUST close it. Other entries (pool
+            # reset ROLLBACKs etc.) are tolerated. Bare ``BEGIN`` is
+            # rewritten by the dbapi cursor's ``BEGIN IMMEDIATE``
+            # intercept (default on, writer-safe); accept either
+            # literal at this layer — the rewrite is covered by the
+            # dbapi-side unit tests.
+            begin_idx = next(
+                (i for i, s in enumerate(recorded) if s in ("BEGIN", "BEGIN IMMEDIATE")),
+                None,
+            )
+            assert begin_idx is not None, f"no BEGIN form in trace: {recorded!r}"
             insert_idx = next(i for i, s in enumerate(recorded) if "INSERT INTO wire_trace" in s)
             commit_idx = recorded.index("COMMIT")
             assert begin_idx < insert_idx < commit_idx, f"unexpected order: {recorded!r}"

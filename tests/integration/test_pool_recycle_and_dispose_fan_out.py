@@ -67,8 +67,18 @@ def test_sync_engine_dispose_calls_do_close_per_slot(engine_url: str) -> None:
     """SA's ``QueuePool.dispose()`` drains every queued slot and
     invokes ``conn.close()``, routing through ``dialect.do_close``
     (NOT ``do_terminate``, since dispose passes ``terminate=False``).
-    Warm multiple slots, dispose, count do_close calls."""
-    eng = create_engine(engine_url, pool_size=3, max_overflow=0)
+    Warm multiple slots, dispose, count do_close calls.
+
+    Uses ``dqlite_begin_mode="deferred"`` to opt out of the
+    writer-safe ``BEGIN IMMEDIATE`` rewrite — this test warms 3
+    parallel SA Connections, each opens its own implicit
+    transaction, and ``BEGIN IMMEDIATE`` would serialize them at
+    the dqlite writer-lock for the duration of the SELECT 1's
+    implicit tx. The test is about pool fan-out, not write
+    contention; deferred semantics are correct here."""
+    eng = create_engine(engine_url, pool_size=3, max_overflow=0).execution_options(
+        dqlite_begin_mode="deferred"
+    )
 
     close_calls: list[object] = []
     original = eng.dialect.do_close
@@ -97,8 +107,12 @@ def test_sync_engine_dispose_calls_do_close_per_slot(engine_url: str) -> None:
 
 @pytest.mark.integration
 async def test_async_engine_dispose_drains_pool(async_engine_url: str) -> None:
-    """Async sibling of the dispose fan-out test."""
-    eng = create_async_engine(async_engine_url, pool_size=2, max_overflow=0)
+    """Async sibling of the dispose fan-out test. Uses
+    ``dqlite_begin_mode="deferred"`` for the same reason as the
+    sync version — pool fan-out test, not write contention."""
+    eng = create_async_engine(async_engine_url, pool_size=2, max_overflow=0).execution_options(
+        dqlite_begin_mode="deferred"
+    )
 
     close_calls: list[object] = []
     # AsyncAdaptedConnection.close() routes through the dbapi
@@ -125,8 +139,12 @@ async def test_async_engine_dispose_drains_pool(async_engine_url: str) -> None:
 def test_before_cursor_execute_listener_fires(engine_url: str) -> None:
     """The ``before_cursor_execute`` event must fire for each cursor
     execution. A regression in dialect plumbing that bypassed the
-    SA cursor abstraction would silently break user listeners."""
-    eng = create_engine(engine_url)
+    SA cursor abstraction would silently break user listeners.
+
+    Uses ``dqlite_begin_mode="deferred"`` so the test's pool reset
+    rollback path on a held-open connection doesn't take the
+    writer-lock (unrelated to the listener-fan-out under test)."""
+    eng = create_engine(engine_url).execution_options(dqlite_begin_mode="deferred")
     captured: list[str] = []
 
     @event.listens_for(eng, "before_cursor_execute")

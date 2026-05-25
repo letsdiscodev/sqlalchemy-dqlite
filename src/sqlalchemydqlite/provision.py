@@ -310,7 +310,25 @@ def _format_url(url: sa_url.URL, driver: str | None, ident: str | None) -> sa_ur
             suffix = f"{suffix}_{ident_clean}"
         database = f"{database}_{suffix}"
 
-    return url.set(drivername=new_drivername, database=database)
+    # SA's compliance-suite fixtures routinely run DDL through one
+    # connection while a separate test-body Connection holds an
+    # implicit transaction (``test_huge_int``'s
+    # ``integer_round_trip`` invokes ``metadata.create_all`` on a
+    # fresh engine connection while the SA Connection fixture
+    # already holds an open tx). Under the dbapi's default
+    # ``begin_immediate=True`` (writer-safe), the fixture-side BEGIN
+    # acquires the writer-lock; the create_all on the second
+    # connection then BUSY-blocks for the full ``busy_timeout``
+    # budget and the test times out. The compliance suite was
+    # designed against SQLite's DEFERRED-by-default semantics; opt
+    # the suite out of the writer-safe upgrade via the URL query so
+    # the legacy semantics apply. End-user URLs built by callers
+    # (``create_engine("dqlite://...")``) bypass this helper and
+    # keep the writer-safe default — the opt-out is scoped to the
+    # SA-provision plugin's compliance-test engines.
+    rewritten_query = dict(url.query)
+    rewritten_query.setdefault("begin_immediate", "false")
+    return url.set(drivername=new_drivername, database=database, query=rewritten_query)
 
 
 @generate_driver_url.for_db("dqlite")

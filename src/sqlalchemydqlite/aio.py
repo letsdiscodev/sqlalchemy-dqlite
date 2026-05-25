@@ -2043,6 +2043,22 @@ class DqliteDialect_aio(DqliteDialect):
         # and SA's ``_handle_dbapi_exception`` see a clean
         # ``dbapi.Error``.
         if type(dbapi_connection._connection) in weakref.ProxyTypes:
+            # Diagnostic: SA's pool sees this raise as a ping failure
+            # and retires the slot silently. Without a DEBUG line a
+            # flapping pool's root cause (sibling task closed the
+            # adapter between pool checkout and ping, GC sweep,
+            # engine.dispose race) is invisible to log analysis.
+            # Sibling close()/terminate()/transport-class arms in this
+            # module emit DEBUG signal on analogous slot-retirement
+            # transitions; mirror that discipline here.
+            logger.debug(
+                "_async_ping: adapter already closed (id=%s); reporting "
+                "ping failure so SA pool retires the slot. Likely a "
+                "sibling task closed the adapter between pool checkout "
+                "and ping (GC sweep, engine.dispose race, parallel "
+                "task close).",
+                id(dbapi_connection),
+            )
             raise InterfaceError(f"Connection is closed (id={id(dbapi_connection)})")
         try:
             cur = dbapi_connection._connection.cursor()

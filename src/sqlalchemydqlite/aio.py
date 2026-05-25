@@ -1496,8 +1496,17 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     # leak bare ``RuntimeError`` past
                     # ``engine.dispose()``.
                     msg_lower = str(exc).lower()
+                    # Use ``if / elif / else`` (not sequential
+                    # ``if``s) so the mutual-exclusion contract is
+                    # structural rather than dependent on
+                    # ``_handle_exception``'s ``NoReturn`` annotation
+                    # (which has no runtime enforcement). A future
+                    # refactor that breaks the NoReturn invariant —
+                    # or a contributor adding a fourth substring arm
+                    # — cannot accidentally fall through to the
+                    # trailing ``raise``.
                     if "different loop" in msg_lower or "different event loop" in msg_lower:
-                        self._handle_exception(exc)
+                        self._handle_exception(exc)  # NoReturn
                     # ``RuntimeError("Event loop is closed")`` lands
                     # here during ``engine.dispose()`` after a per-call
                     # ``asyncio.run()`` finished and tore the loop down
@@ -1508,7 +1517,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     # try/finally still runs the proxy swap on this
                     # return path. The debug log preserves the
                     # traceback for triage.
-                    if "event loop is closed" in msg_lower:
+                    elif "event loop is closed" in msg_lower:
                         peer = _log_safe_peer(self._connection)
                         logger.debug(
                             "AsyncAdaptedConnection.close (id=%s, peer=%s): "
@@ -1530,10 +1539,11 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     # the close-arm matches that discipline rather than
                     # leaking a bare ``RuntimeError`` past
                     # ``engine.dispose()``.
-                    if "loop is already running" in msg_lower:
-                        self._handle_exception(exc)
-                    # Other RuntimeErrors (programmer bugs) propagate.
-                    raise
+                    elif "loop is already running" in msg_lower:
+                        self._handle_exception(exc)  # NoReturn
+                    else:
+                        # Other RuntimeErrors (programmer bugs) propagate.
+                        raise
                 # The non-greenlet path is handled by the
                 # ``in_greenlet()`` preflight at the top of ``close()``;
                 # ``MissingGreenlet`` cannot land here.

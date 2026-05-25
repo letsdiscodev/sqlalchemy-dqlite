@@ -1376,6 +1376,24 @@ class AsyncAdaptedConnection(AdaptedConnection):
             # raises from the matched hop; if no hop matches, falls
             # through to the wrap below.
             _remap_loop_state_runtime_error(remainder)
+            # Single-child remainder unwrap: a ``TaskGroup`` /
+            # ``anyio.create_task_group`` wrapping ONE inner SQL
+            # operation produces a group-of-one whose only child is
+            # the original ``IntegrityError`` / ``DataError`` /
+            # ``ProgrammingError`` / etc. Unconditionally wrapping
+            # the remainder as ``OperationalError(code=None)`` would
+            # silently lose the original class identity — user
+            # ``except IntegrityError`` clauses miss the rewritten
+            # exception and ``is_disconnect``'s substring scan runs
+            # on an aggregate message that isn't a wire fault. The
+            # group-of-one case is structurally byte-equivalent to
+            # the non-group path; dispatch through the same shape.
+            # ``raise child from remainder`` preserves the group on
+            # ``__cause__`` so SA's ``_walk_cause_chain`` still finds
+            # the structured-concurrency context if it needs to.
+            if len(remainder.exceptions) == 1:
+                child = remainder.exceptions[0]
+                raise child from remainder
             child_classes = {type(c).__name__ for c in remainder.exceptions}
             raise OperationalError(
                 f"aggregate {type(remainder).__name__} with "

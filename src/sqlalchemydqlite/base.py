@@ -2249,9 +2249,7 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         """
         return "SERIALIZABLE"
 
-    def set_isolation_level(
-        self, dbapi_connection: DBAPIConnection, level: IsolationLevel | None
-    ) -> None:
+    def set_isolation_level(self, dbapi_connection: DBAPIConnection, level: IsolationLevel) -> None:
         """Set isolation level.
 
         dqlite only supports SERIALIZABLE. Any other level is rejected
@@ -2270,17 +2268,17 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         callers (test harnesses, custom engine implementations) that
         bypass SA's upstream validation.
 
-        Note on ``level=None``: ``DefaultDialect.reset_isolation_level``
-        calls this with ``self.default_isolation_level`` which is
-        ``"SERIALIZABLE"`` after ``initialize()`` runs — but
-        ``initialize()`` may be skipped by test harnesses or by direct
-        callers that build a dialect without an engine. Treat
-        ``level=None`` as a deliberate no-op (the level is already
-        SERIALIZABLE, no-op is correct) rather than raising
-        ``ArgumentError``; raising would break the
-        ``reset_isolation_level`` path on harnesses that bypass
-        ``initialize()``. Diverges from pysqlite's
-        ``_isolation_lookup`` which would ``KeyError`` on None.
+        Note on ``level=None``: pysqlite's parent
+        ``SQLiteDialect.set_isolation_level`` raises ``KeyError`` on
+        ``None`` (its body is ``self._isolation_lookup[level]``).
+        The dqlite dialect mirrors that strict-rejection by raising
+        ``ArgumentError`` — the SA-internal reset path that prompted
+        the earlier silent-accept-None arm (``reset_isolation_level``
+        with ``self.default_isolation_level=None`` on a dialect that
+        skipped ``initialize()``) no longer reaches this method,
+        because ``reset_isolation_level`` is now overridden to a
+        no-op (see the sibling method below). Strict-reject removes
+        the divergence from the pysqlite-parity surface.
         """
         # Compare case-insensitively. SA's engine flow upper-cases
         # before dispatching here, so the upper-case form is what
@@ -2292,7 +2290,16 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # through such inputs to the generic rejection message, which
         # is confusing because the value only differs in case.
         if level is None:
-            return
+            raise ArgumentError(
+                "dqlite set_isolation_level requires a non-None level "
+                "(use 'SERIALIZABLE' to confirm the dialect's only "
+                "accepted level, or 'AUTOCOMMIT' to route through the "
+                "dedicated rejection message). The earlier silent-"
+                "accept-None arm protected a stale reset_isolation_level "
+                "path that no longer reaches this method — reset is now "
+                "a local no-op. Mirrors pysqlite's parent KeyError-on-"
+                "None behaviour with an SA-shaped ArgumentError."
+            )
         if not isinstance(level, str):
             raise ArgumentError(
                 f"dqlite only supports SERIALIZABLE isolation; requested level "

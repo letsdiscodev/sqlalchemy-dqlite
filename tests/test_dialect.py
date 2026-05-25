@@ -669,38 +669,22 @@ class TestIsolationLevel:
 
         assert len(w) == 0
 
-    def test_set_isolation_level_silent_for_none(self) -> None:
-        """set_isolation_level should not warn when level is None."""
-        import warnings
+    def test_set_isolation_level_none_rejected(self) -> None:
+        """``None`` is rejected with ``ArgumentError`` mirroring the
+        pysqlite parent's ``KeyError``-on-None behaviour. The
+        ``reset_isolation_level`` no-op override disconnects SA's
+        reset path from this method, so the earlier silent-accept-
+        None arm is no longer reachable."""
         from unittest.mock import MagicMock
+
+        import pytest
+        from sqlalchemy.exc import ArgumentError
 
         dialect = DqliteDialect()
         mock_conn = MagicMock()
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            dialect.set_isolation_level(mock_conn, None)
-
-        assert len(w) == 0
-
-    def test_set_isolation_level_none_does_not_touch_connection(self) -> None:
-        """SA's pool resets isolation between checkouts via
-        ``set_isolation_level(conn, None)``. Pin the true no-op contract:
-        no cursor opened, no attribute accessed, no exception raised —
-        a future refactor that routed ``None`` through autocommit
-        setup would stay warning-free but still break SA's reset path,
-        so observe at the mock-call level.
-        """
-        from unittest.mock import MagicMock
-
-        dialect = DqliteDialect()
-        mock_conn = MagicMock()
-
-        dialect.set_isolation_level(mock_conn, None)
-
-        # No cursor opened and no other attribute access on conn.
+        with pytest.raises(ArgumentError, match="non-None"):
+            dialect.set_isolation_level(mock_conn, None)  # type: ignore[arg-type]
         mock_conn.cursor.assert_not_called()
-        assert mock_conn.mock_calls == []
 
     def test_reset_isolation_level_silent_for_serializable_sync(self) -> None:
         """SA's ``DefaultDialect.reset_isolation_level`` fires on

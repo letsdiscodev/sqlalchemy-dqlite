@@ -26,17 +26,20 @@ from sqlalchemydqlite.aio import DqliteDialect_aio
 
 
 class TestAsyncDialectSetIsolationLevel:
-    def test_none_is_noop_no_connection_access(self) -> None:
-        """SA's async pool resets isolation via ``set_isolation_level(conn, None)``.
-        Pin the true no-op contract on the async dialect: no cursor, no
-        attribute access, no warning. A future async-only override that
-        routed ``None`` through autocommit setup would break SA's reset path.
-        """
+    def test_none_is_rejected_with_argument_error(self) -> None:
+        """SA's async pool's reset path goes through the dialect-local
+        ``reset_isolation_level`` no-op override, NOT through
+        ``set_isolation_level(conn, None)``. Pin the strict-reject-
+        None behaviour on the async dialect; mirrors the sync
+        sibling and the pysqlite parent's ``KeyError``-on-None
+        contract."""
+        from sqlalchemy.exc import ArgumentError
+
         dialect = DqliteDialect_aio()
         mock_conn = MagicMock()
-        dialect.set_isolation_level(mock_conn, None)
+        with pytest.raises(ArgumentError, match="non-None"):
+            dialect.set_isolation_level(mock_conn, None)  # type: ignore[arg-type]
         mock_conn.cursor.assert_not_called()
-        assert mock_conn.mock_calls == []
 
     def test_serializable_is_noop(self) -> None:
         dialect = DqliteDialect_aio()

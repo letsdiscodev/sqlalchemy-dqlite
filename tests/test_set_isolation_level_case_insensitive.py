@@ -59,13 +59,16 @@ def test_set_isolation_level_unknown_string_rejected() -> None:
         dialect.set_isolation_level(conn, "READ COMMITTED")
 
 
-def test_set_isolation_level_none_accepted() -> None:
-    """``None`` is treated as a deliberate no-op so
-    ``reset_isolation_level`` works on harnesses that bypass
-    ``initialize()``."""
+def test_set_isolation_level_none_rejected() -> None:
+    """``None`` is rejected with ``ArgumentError`` matching pysqlite
+    parent's ``KeyError``-on-None behaviour. The ``reset_isolation_level``
+    no-op override at the dialect level disconnects the SA-internal
+    reset path from this method, so the earlier silent-accept-None
+    arm is no longer reachable from any internal caller."""
     dialect = DqliteDialect.__new__(DqliteDialect)
     conn = MagicMock()
-    dialect.set_isolation_level(conn, None)
+    with pytest.raises(ArgumentError, match="non-None"):
+        dialect.set_isolation_level(conn, None)  # type: ignore[arg-type]
 
 
 def test_set_isolation_level_non_string_rejected() -> None:

@@ -7,7 +7,7 @@ import logging
 import math
 import types
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any, ClassVar, Final
+from typing import Any, ClassVar, Final, NoReturn
 
 from sqlalchemy import pool, util
 from sqlalchemy import types as sqltypes
@@ -2852,7 +2852,15 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     ) -> None:
         raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
 
-    def do_recover_twophase(self, connection: Any) -> list[Any]:
+    def do_recover_twophase(self, connection: Any) -> NoReturn:
+        # ``NoReturn`` over ``list[Any]`` mirrors SA's ``raise``-only
+        # stub convention (the dialect already uses ``NoReturn`` for
+        # ``aio.py``'s ``callproc`` / ``nextset`` / ``scroll`` stubs)
+        # so mypy / pyright correctly flag any code following a call
+        # site as unreachable. The body unconditionally raises and
+        # never returns a list; the prior annotation misled IDE
+        # tooltips and type-checkers into expecting a successful
+        # response.
         raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
 
     def do_close(self, dbapi_connection: Any) -> None:

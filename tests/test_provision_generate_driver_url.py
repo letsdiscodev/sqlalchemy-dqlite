@@ -51,3 +51,19 @@ def test_aio_driver_yields_dqlite_aio_drivername() -> None:
     out = _dqlite_generate_driver_url(url, "aio", None)
     assert out is not None
     assert out.drivername == "dqlite+aio"
+
+
+def test_bare_dqlite_alias_rejected_to_preserve_fail_fast() -> None:
+    """``driver="dqlite"`` is NOT in the allowlist. A user supplying
+    ``--dburi dqlite+dqlite://host/db`` (doubled dialect-name typo)
+    would otherwise silently route as the bare form; refusing the
+    alias preserves the explicit ``get_dialect()`` fail-fast guard."""
+    url = sa_url.make_url("dqlite+dqlite://h:9001/db")
+    assert _dqlite_generate_driver_url(url, "dqlite", None) is None
+
+
+def test_drivernames_only_contains_sa_invoked_values() -> None:
+    """Defensive: the allowlist contains exactly the two drivername
+    values SA's URL.get_driver_name() actually returns for this
+    dialect's two classes (``dqlitedbapi`` / ``aio``)."""
+    assert frozenset({"dqlitedbapi", "aio"}) == _DRIVERNAMES

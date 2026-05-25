@@ -148,19 +148,24 @@ logger = logging.getLogger(__name__)
 # ``+driver``) reports ``"dqlitedbapi"`` because SA defaults to the
 # dialect's ``driver`` when no explicit driver is given.
 #
-# Accept all three forms so ``--dburi`` / ``--dbs`` work with any of
-# the canonical shapes:
+# Accept the two SA-invoked driver-name forms so ``--dburi`` /
+# ``--dbs`` work with any canonical URL shape:
 #
 #   dqlite://...               -> driver name "dqlitedbapi"
 #   dqlite+dqlitedbapi://...   -> driver name "dqlitedbapi"
 #   dqlite+aio://...           -> driver name "aio"
 #
-# The "dqlite" entry is a tolerated alias used internally when we
-# rewrite URLs from the bare-dialect form back into themselves; SA
-# never invokes the hook with that value at the call site, but
-# keeping it here documents the canonical sync drivername the
-# rewrite produces.
-_DRIVERNAMES: Final[frozenset[str]] = frozenset({"dqlite", "dqlitedbapi", "aio"})
+# We do NOT accept the bare "dqlite" alias in this allowlist. A user-
+# supplied URL ``dqlite+dqlite://host/db`` (a typo where the dialect
+# name is doubled) would otherwise be silently accepted as
+# equivalent to ``dqlite://host/db`` — the explicit
+# ``rewritten.get_dialect()`` fail-fast at the bottom of
+# ``_dqlite_generate_driver_url`` exists precisely to catch
+# misconfiguration, and tolerating the duplicate alias here defeats
+# that guard. SA never invokes the hook with the bare driver name
+# at the call site (``URL.get_driver_name()`` always returns the
+# dialect's ``driver`` class attribute, never the entry-point name).
+_DRIVERNAMES: Final[frozenset[str]] = frozenset({"dqlitedbapi", "aio"})
 
 
 # Characters scrubbed from the follower ident before it is appended to

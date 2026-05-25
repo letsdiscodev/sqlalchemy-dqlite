@@ -867,11 +867,18 @@ class _DqliteTime(sqltypes.Time):
     ``func.time(col)`` etc.) via ``datetime.time.fromisoformat``, log
     and pass through unparseable strings rather than crashing the read.
 
-    No ``bind_processor`` override is needed: dqlitedbapi accepts
-    ``datetime.time`` on the bind path and encodes it as an ISO8601
-    string. A ``str`` bound to a ``Time`` column would be sent verbatim
-    by the parent dialect's processor; we don't widen the contract
-    here.
+    ``bind_processor`` (below) raises ``DataError`` on cross-type
+    ``datetime.datetime`` / ``datetime.date`` payloads and formats
+    ``datetime.time`` with the always-on six-digit microsecond
+    suffix matching pysqlite's ``TIME._storage_format`` byte-for-
+    byte. The pysqlite-effective baseline (the SQLite ``TIME`` class
+    inherited via ``SQLiteDialect.colspecs``,
+    ``sqlalchemy/dialects/sqlite/base.py``) would otherwise reject
+    a ``str`` bind with ``TypeError("SQLite Time type only accepts
+    Python time objects as input.")``; our override replaces that
+    surface with the dqlite-specific bind discipline (PEP 249-shape
+    ``DataError`` over ``TypeError``, six-digit microsecond
+    formatting for cross-writer parity).
     """
 
     # Pysqlite-only kwargs that the dqlite-specific processors do NOT
@@ -1534,8 +1541,20 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # auto-decode hook on the wire — TEXT cells reach the result-
     # processor as plain strings. Our processors handle the wire
     # shape directly (``str.fromisoformat`` for the string path,
-    # passthrough for the ``datetime`` path). ``Time`` uses our
-    # processor too because pysqlite has no ``Time`` colspec at all.
+    # passthrough for the ``datetime`` path).
+    #
+    # ``Time`` is also overridden. The pysqlite-effective baseline
+    # is the SQLite ``TIME`` class inherited from
+    # ``SQLiteDialect.colspecs`` (``sqlalchemy/dialects/sqlite/base.py``)
+    # via ``util.update_copy`` — pysqlite does NOT remove the entry
+    # and does NOT install its own ``Time`` override. That inherited
+    # ``TIME`` calls ``processors.str_to_time`` on the raw cell
+    # (``str.fromisoformat`` wrapper) and would raise ``TypeError``
+    # on an already-decoded ``datetime.time`` instance that
+    # dqlitedbapi returns. Our ``sqltypes.Time: _DqliteTime`` entry
+    # replaces that surface with the dqlite-specific bind/result
+    # discipline.
+    #
     # ``TIMESTAMP`` is mapped explicitly even though it would
     # transitively reach our ``DateTime`` processor via MRO — pinning
     # the entry guards against a future SA change to ``sqltypes.TIMESTAMP``'s

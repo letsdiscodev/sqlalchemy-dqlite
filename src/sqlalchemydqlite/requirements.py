@@ -496,3 +496,215 @@ class Requirements(SuiteRequirements):
         """``CREATE INDEX IF NOT EXISTS`` / ``DROP INDEX IF EXISTS``.
         SQLite 3.3+ supports."""
         return exclusions.open()
+
+    # --- Capability declarations for SA-default-closed requirements ----
+    # These four batches mirror the upstream
+    # ``sqlalchemy.testing.requirements.SuiteRequirements`` defaults
+    # that closed silently for features dqlite actually supports
+    # (SQLite ≥ 3.35 / JSON1 / dqlite wire codec). Declare each
+    # explicitly so the SA compliance suite exercises the capability
+    # rather than skipping with the silent upstream default. Closed
+    # entries name the dialect-specific reason (UDF primitive,
+    # SQLite operator absence, etc.) so the skip message in
+    # compliance-suite output is informative.
+
+    # --- JSON1 capabilities (SQLite >= 3.9; dqlite-server ships it) ----
+
+    @property
+    def json_type(self) -> compound:
+        """dqlite's server-side SQLite is built with JSON1 enabled
+        (the default for SQLite ≥ 3.9, which dqlite requires). The
+        wire codec round-trips JSON strings end-to-end via the TEXT
+        affinity path; the inherited ``SQLiteDialect`` JSON colspecs
+        compile to SQLite's ``json_extract`` / ``json_array`` /
+        ``json_object`` functions natively."""
+        return exclusions.open()
+
+    @property
+    def json_array_indexes(self) -> compound:
+        """SQLite JSON1 supports numeric array indexes via
+        ``json_extract(col, '$[0]')``; inherited from
+        ``SQLiteDialect``."""
+        return exclusions.open()
+
+    # --- UUID / computed columns / identity / lastrowid ----------------
+
+    @property
+    def uuid_data_type(self) -> compound:
+        """SA's ``Uuid`` colspec round-trips through BLOB storage on
+        SQLite-flavoured dialects; dqlite's wire codec preserves
+        BLOB cells verbatim."""
+        return exclusions.open()
+
+    @property
+    def computed_columns(self) -> compound:
+        """SQLite ≥ 3.31 supports ``GENERATED ALWAYS AS (...) STORED |
+        VIRTUAL``; dqlite-server ships SQLite ≥ 3.35."""
+        return exclusions.open()
+
+    @property
+    def computed_columns_stored(self) -> compound:
+        return exclusions.open()
+
+    @property
+    def computed_columns_virtual(self) -> compound:
+        return exclusions.open()
+
+    @property
+    def computed_columns_default_persisted(self) -> compound:
+        """SQLite computed columns default to VIRTUAL when no STORED
+        modifier is given — matches the SA requirement's intent."""
+        return exclusions.open()
+
+    @property
+    def computed_columns_reflect_persisted(self) -> compound:
+        """SQLite reflection surfaces the GENERATED column's STORED
+        / VIRTUAL flag via ``pragma_table_xinfo``."""
+        return exclusions.open()
+
+    @property
+    def autoincrement_without_sequence(self) -> compound:
+        """SQLite uses ``INTEGER PRIMARY KEY AUTOINCREMENT`` directly;
+        no separate sequence object."""
+        return exclusions.open()
+
+    @property
+    def dbapi_lastrowid(self) -> compound:
+        """``Cursor.lastrowid`` is implemented on the dqlite dbapi
+        cursor; the value is forwarded from
+        ``ResultResponse.last_insert_id`` verbatim."""
+        return exclusions.open()
+
+    @property
+    def supports_lastrowid(self) -> compound:
+        """See ``dbapi_lastrowid`` above; the dialect supports
+        ``cursor.lastrowid`` as the PK-recovery channel."""
+        return exclusions.open()
+
+    @property
+    def identity_columns(self) -> compound:
+        """SQLite does NOT support SQL-standard ``GENERATED ... AS
+        IDENTITY`` syntax — it uses ``INTEGER PRIMARY KEY
+        AUTOINCREMENT`` instead. Closed deliberately; the SA
+        compliance suite's ``IdentityTest`` cases expect this for
+        SQLite-flavoured dialects."""
+        return exclusions.closed()
+
+    # --- check_constraint / recursive_fk / tuple_in / values / fetch_first ---
+
+    @property
+    def check_constraint_reflection(self) -> compound:
+        """SQLite stores CHECK constraints in ``sqlite_master.sql``;
+        the inherited ``SQLiteDialect.get_check_constraints`` parses
+        them back. dqlite inherits the reflection path verbatim."""
+        return exclusions.open()
+
+    @property
+    def recursive_fk_cascade(self) -> compound:
+        """``ON DELETE CASCADE`` on a self-referential FK works on
+        SQLite ≥ 3.6.19 (``recursive_triggers`` PRAGMA defaults on
+        for FK actions). dqlite inherits."""
+        return exclusions.open()
+
+    @property
+    def tuple_in(self) -> compound:
+        """``WHERE (x, y) IN ((1, 2), (3, 4))`` works on SQLite ≥
+        3.0."""
+        return exclusions.open()
+
+    @property
+    def table_value_constructor(self) -> compound:
+        """``VALUES (1, 2), (3, 4)`` as a row-source works on SQLite
+        ≥ 3.0; SA's ``sql.values()`` compiles to it."""
+        return exclusions.open()
+
+    @property
+    def fetch_first(self) -> compound:
+        """``FETCH FIRST n ROWS ONLY`` works on SQLite ≥ 3.35;
+        dqlite-server ships SQLite ≥ 3.35."""
+        return exclusions.open()
+
+    @property
+    def server_defaults(self) -> compound:
+        """``column DEFAULT (expression)`` is server-evaluated;
+        SQLite supports it and dqlite inherits."""
+        return exclusions.open()
+
+    @property
+    def comment_reflection(self) -> compound:
+        """SQLite does NOT support inline column comments; the
+        ``sqlite_master.sql`` round-trip does not preserve any
+        out-of-band comment column. Closed by design — the explicit
+        declaration encodes the audit intent so a later sweep does
+        not repeatedly re-discover the gap."""
+        return exclusions.closed()
+
+    # --- SQLite-specific feature markers (operators / indexes) --------
+
+    @property
+    def indexes_with_expressions(self) -> compound:
+        """SQLite ≥ 3.9 supports indexes on expressions:
+        ``CREATE INDEX ix ON t(lower(col))``. dqlite inherits."""
+        return exclusions.open()
+
+    @property
+    def reflect_tables_no_columns(self) -> compound:
+        """SQLite tolerates a table created with zero columns via
+        ``CREATE TABLE t()``; reflection returns an empty column
+        list. Used by SA's compliance suite to assert reflection
+        does not crash on the degenerate shape."""
+        return exclusions.open()
+
+    @property
+    def mod_operator_as_percent_sign(self) -> compound:
+        """SQLite uses ``%`` as the modulus operator (not
+        ``MOD(...)``)."""
+        return exclusions.open()
+
+    @property
+    def regexp_replace(self) -> compound:
+        """Same rationale as :py:attr:`regexp_match`: SQLite's
+        ``regexp_replace`` requires a UDF registered via
+        ``Connection.create_function``; the dqlite wire protocol has
+        no UDF primitive. Declared closed explicitly so the
+        dqlite-specific rejection rationale is visible in
+        compliance-suite skip messages rather than relying on the
+        silent upstream default."""
+        return exclusions.closed()
+
+    @property
+    def supports_bitwise_or(self) -> compound:
+        """SQLite ≥ 3.0 supports the ``|`` bitwise OR operator."""
+        return exclusions.open()
+
+    @property
+    def supports_bitwise_and(self) -> compound:
+        """SQLite ≥ 3.0 supports the ``&`` bitwise AND operator."""
+        return exclusions.open()
+
+    @property
+    def supports_bitwise_not(self) -> compound:
+        """SQLite ≥ 3.0 supports the ``~`` bitwise NOT operator."""
+        return exclusions.open()
+
+    @property
+    def supports_bitwise_xor(self) -> compound:
+        """SQLite does NOT have a native XOR operator (``^`` is
+        unsupported on SQLite, despite being widely supported on
+        other dialects). SA's compile path falls back to
+        ``(a | b) & ~(a & b)`` on dialects that lack native XOR.
+        Declared closed so the compliance suite skips with the
+        dialect-specific reason rather than the silent upstream
+        default."""
+        return exclusions.closed()
+
+    @property
+    def supports_bitwise_shift(self) -> compound:
+        """SQLite ≥ 3.0 supports ``<<`` and ``>>`` shift operators."""
+        return exclusions.open()
+
+    @property
+    def infinity_floats(self) -> compound:
+        """SQLite stores IEEE 754 infinities; the wire codec
+        preserves them via ``struct.pack/unpack('<d')``."""
+        return exclusions.open()

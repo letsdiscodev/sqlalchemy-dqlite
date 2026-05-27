@@ -680,7 +680,16 @@ class _DqliteDateTime(sqltypes.DateTime):
                             _safe_for_log(value),
                             _safe_for_log(str(e)),
                         )
-                    else:
+                    elif logger.isEnabledFor(logging.DEBUG):
+                        # Gate the DEBUG arm on the logger level so
+                        # the per-row ``_safe_for_log`` sanitiser
+                        # walks (codepoint-class scans on the value
+                        # + on the exception string) do not run
+                        # when DEBUG is filtered. Without the gate
+                        # a corrupted-column 1M-row SELECT pays
+                        # ~500 ms of pure-Python sanitiser CPU on
+                        # the loop thread for log lines the
+                        # operator's WARN-level config never emits.
                         logger.debug(
                             "DateTime processor received unparseable ISO8601 string %r: %s",
                             _safe_for_log(value),
@@ -841,7 +850,11 @@ class _DqliteDate(sqltypes.Date):
                             _safe_for_log(value),
                             _safe_for_log(str(e)),
                         )
-                    else:
+                    elif logger.isEnabledFor(logging.DEBUG):
+                        # See DateTime sibling: gate the DEBUG arm
+                        # on the logger level so the per-row
+                        # sanitiser walks do not run when DEBUG
+                        # is filtered out.
                         logger.debug(
                             "Date processor received unparseable ISO8601 string %r: %s",
                             _safe_for_log(value),
@@ -1074,7 +1087,11 @@ class _DqliteTime(sqltypes.Time):
                             _safe_for_log(value),
                             _safe_for_log(str(e)),
                         )
-                    else:
+                    elif logger.isEnabledFor(logging.DEBUG):
+                        # See DateTime sibling: gate the DEBUG arm
+                        # on the logger level so the per-row
+                        # sanitiser walks do not run when DEBUG
+                        # is filtered out.
                         logger.debug(
                             "Time processor received unparseable ISO8601 string %r: %s",
                             _safe_for_log(value),

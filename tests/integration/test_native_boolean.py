@@ -20,6 +20,12 @@ class BoolModel(Base):  # type: ignore[valid-type,misc]
     flag = Column(Boolean, nullable=False)
 
 
+class NullableBoolModel(Base):  # type: ignore[valid-type,misc]
+    __tablename__ = "native_bool_nullable_test"
+    id = Column(Integer, primary_key=True)
+    flag = Column(Boolean, nullable=True)
+
+
 @pytest.mark.integration
 class TestNativeBoolean:
     @pytest.fixture
@@ -47,6 +53,25 @@ class TestNativeBoolean:
             rows = s.query(BoolModel).order_by(BoolModel.id).all()
             assert [r.flag for r in rows] == [True, False]
             assert all(isinstance(r.flag, bool) for r in rows)
+
+    def test_nullable_boolean_preserves_none(self, engine: Engine) -> None:
+        """A NULL in a nullable Boolean column reads back as ``None``,
+        not ``False`` — the NULL-vs-FALSE distinction must survive the
+        ORM layer, not just the raw client/DBAPI layers.
+        """
+        with Session(engine) as s:
+            s.add_all(
+                [
+                    NullableBoolModel(id=1, flag=True),
+                    NullableBoolModel(id=2, flag=False),
+                    NullableBoolModel(id=3, flag=None),
+                ]
+            )
+            s.commit()
+            rows = s.query(NullableBoolModel).order_by(NullableBoolModel.id).all()
+            assert rows[0].flag is True
+            assert rows[1].flag is False
+            assert rows[2].flag is None
 
     def test_reflect_column_is_boolean(self, engine: Engine) -> None:
         insp = inspect(engine)

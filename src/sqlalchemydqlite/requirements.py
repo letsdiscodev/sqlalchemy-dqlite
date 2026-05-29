@@ -11,6 +11,8 @@
 # silences have to stay until SA adds annotations upstream.
 # mypy: disable-error-code="no-untyped-call, no-any-return"
 
+from typing import Any
+
 from sqlalchemy.testing import exclusions
 from sqlalchemy.testing.exclusions import compound
 from sqlalchemy.testing.requirements import SuiteRequirements
@@ -382,6 +384,15 @@ class Requirements(SuiteRequirements):
         cannot silently skip these compliance cases."""
         return exclusions.open()
 
+    def get_order_by_collation(self, config: Any) -> str:
+        """SQLite supports ``ORDER BY <col> COLLATE NOCASE``; dqlite
+        inherits. The base ``SuiteRequirements`` raises
+        ``NotImplementedError`` here, which makes the
+        ``order_by_collation`` requirement skip ``CollateTest``. Return
+        a real collation so those cases run — the SQLite dialect's own
+        test requirements return ``NOCASE`` too."""
+        return "NOCASE"
+
     @property
     def cross_schema_fk_reflection(self) -> compound:
         """SQLite's FK reflection is single-schema only — ``ATTACH``ed
@@ -656,6 +667,15 @@ class Requirements(SuiteRequirements):
     def server_defaults(self) -> compound:
         """``column DEFAULT (expression)`` is server-evaluated;
         SQLite supports it and dqlite inherits."""
+        return exclusions.open()
+
+    @property
+    def expression_server_defaults(self) -> compound:
+        """``column DEFAULT (3 * 5)`` — a server-evaluated *expression*
+        default, not just a literal. SQLite supports expression
+        defaults and reflects them, so the expression variants of the
+        server-default reflection tests run (the sibling
+        ``server_defaults`` is already open)."""
         return exclusions.open()
 
     @property

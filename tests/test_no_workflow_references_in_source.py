@@ -22,6 +22,11 @@ _WORKFLOW_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"ISSUE-\d+"),
     re.compile(r"\b[Cc]ycle \d+"),
     re.compile(r"\bround \d+"),
+    # "round" used in the development-episode sense (a "widening round",
+    # the "prior round"). Anchored to dev-process qualifiers so the
+    # legitimate algorithmic/technical uses ("import cycle", "settle
+    # round", "round-trip", "a round of retries") are NOT flagged.
+    re.compile(r"\b(?:prior|previous|earlier|widening|hardening|audit) round\b"),
     re.compile(r"\b[Bb]undle [A-Z]\b"),
     re.compile(r"\bPhase \d+\b"),
 )

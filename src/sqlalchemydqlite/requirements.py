@@ -672,6 +672,26 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
+    def float_or_double_precision_behaves_generically(self) -> compound:
+        """SQLite stores every REAL as an 8-byte IEEE-754 double
+        regardless of a declared ``Float(p)`` / ``Double(p)`` precision,
+        so the precision argument does not truncate — generic float
+        behavior. The reference SQLite dialect opens this; dqlite
+        inherits. Un-skips the ``Double(53)`` / ``Float(8)`` variants of
+        ``ReturningTest::test_insert_w_floats``."""
+        return exclusions.open()
+
+    @property
+    def foreign_key_constraint_name_reflection(self) -> compound:
+        """dqlite reflects an explicit FOREIGN KEY constraint name from
+        ``sqlite_master.sql`` (e.g. ``get_foreign_keys`` returns the
+        declared ``name``). SQLite supports this and the reference
+        dialect opens it; dqlite inherits, so ``LongNameBlowoutTest``
+        actually asserts the reflected FK name instead of skipping the
+        comparison."""
+        return exclusions.open()
+
+    @property
     def comment_reflection(self) -> compound:
         """SQLite does NOT support inline column comments; the
         ``sqlite_master.sql`` round-trip does not preserve any

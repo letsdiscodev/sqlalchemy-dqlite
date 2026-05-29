@@ -2510,24 +2510,26 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         the parent's annotation.) If a future dqlite version gains a
         UDF primitive, this is the hook to register replacements at.
 
-        **Foreign-key enforcement is NOT enabled by this hook.**
-        SA's SQLite reflection docs (see
-        ``.../sqlalchemy/dialects/sqlite/base.py``'s "Foreign Key
-        Support" prose) require every connection to issue
-        ``PRAGMA foreign_keys = ON`` before use — pysqlite does not
-        emit it from ``on_connect`` either; the recipe lives in
-        user code as a ``@event.listens_for(engine, "connect")``
-        handler. dqlite inherits the same default by design (pysqlite
-        parity). Applications that need FK enforcement should attach
-        the recipe at engine-construction time, e.g.::
+        **Foreign-key enforcement is already ON by default in dqlite —
+        this hook does not need to enable it.** Unlike stdlib ``sqlite3``
+        / pysqlite, which default ``PRAGMA foreign_keys = OFF`` per
+        connection and rely on a user-supplied
+        ``@event.listens_for(engine, "connect")`` recipe to turn it on,
+        the dqlite server defaults every fresh connection to
+        ``PRAGMA foreign_keys = ON``. FK constraints are therefore
+        enforced without any hook, which is why this no-op is correct
+        (not because dqlite mirrors pysqlite's OFF default — it does
+        not). Applications that want SQLite's legacy *unenforced*
+        behavior must issue ``PRAGMA foreign_keys = OFF`` per connection,
+        e.g.::
 
             from sqlalchemy import event
 
 
             @event.listens_for(engine, "connect")
-            def _fk_pragma_on_connect(dbapi_connection, _):
+            def _fk_pragma_off_on_connect(dbapi_connection, _):
                 cursor = dbapi_connection.cursor()
-                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.execute("PRAGMA foreign_keys=OFF")
                 cursor.close()
 
         The dialect deliberately stays out of this choice so

@@ -8,9 +8,11 @@ describes a contract the code does not actually deliver.
   ``_timeout`` attribute; the timeout lives on the dbapi
   ``Connection``. Pin that ``self._timeout`` no longer appears
   AND that the dialect carries no ``_timeout`` attribute.
-* ``on_connect`` previously omitted any reference to FK enforcement.
-  Pin the rewrite includes the FK-PRAGMA recipe so a contributor
-  reading the docstring is directed to the correct extension point.
+* ``on_connect`` previously claimed FK enforcement defaults OFF
+  ("pysqlite parity"); dqlite-server actually defaults
+  ``PRAGMA foreign_keys = ON``. Pin that the docstring states the
+  ON-by-default behavior and gives the OFF recipe, so the inverted
+  claim cannot creep back.
 * ``_DqliteDateTime`` previously did not warn callers about the
   "naive cell under ``timezone=False`` is interpreted as UTC"
   mixed-writer hazard. Pin the docstring now mentions the hazard.
@@ -37,19 +39,23 @@ def test_dialect_has_no_timeout_attribute() -> None:
     assert not hasattr(dialect, "_timeout")
 
 
-def test_on_connect_docstring_mentions_fk_pragma_recipe() -> None:
-    """Pin: the on_connect override documents the FK-PRAGMA recipe so
-    a contributor or operator reading the docstring is directed to
-    the correct extension point."""
+def test_on_connect_docstring_states_fk_on_by_default_with_off_recipe() -> None:
+    """Pin: the on_connect override documents that dqlite defaults
+    ``PRAGMA foreign_keys = ON`` (diverging from pysqlite/stdlib OFF)
+    and gives the ``@event.listens_for`` recipe for turning it OFF — so
+    the previously-inverted "FK off by default" claim cannot return."""
     text = DqliteDialect.on_connect.__doc__ or ""
-    assert "foreign_keys" in text.lower(), (
-        "on_connect docstring should mention the FK-PRAGMA recipe so "
-        "operators know the dialect does not enable foreign-key "
-        "enforcement by default."
+    lower = text.lower()
+    assert "foreign_keys" in lower, "on_connect docstring should mention the foreign_keys pragma."
+    # Must convey ON-by-default, not the old inverted "OFF / not enabled".
+    assert "on by default" in lower or "= on" in lower or "foreign_keys = on" in lower, (
+        "on_connect docstring should state dqlite defaults "
+        "PRAGMA foreign_keys = ON (the dialect previously claimed the "
+        "opposite — FK off by default, 'pysqlite parity')."
     )
     assert "event.listens_for" in text, (
         "on_connect docstring should reference the @event.listens_for "
-        "recipe pattern for applications that need FK enforcement."
+        "recipe pattern (here, for turning FK enforcement OFF)."
     )
 
 

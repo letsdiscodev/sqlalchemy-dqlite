@@ -1,6 +1,7 @@
 """Pin the closed-cursor guard on AsyncAdaptedCursor.execute /
-executemany, and pin the post-close scrub of description / rowcount /
-lastrowid.
+executemany, and pin the post-close state contract: ``close()`` clears
+the result-set surface (``description`` / rows) but PRESERVES
+``rowcount`` / ``lastrowid``.
 
 Every other method on the adapter cursor (fetchone / fetchmany /
 fetchall / setinputsizes / setoutputsize / callproc / nextset /
@@ -9,9 +10,10 @@ scroll) raises ``InterfaceError("cursor is closed")`` when ``_closed``.
 post-close execute silently ran against the underlying dbapi cursor
 and the user only saw "cursor is closed" from the first fetch.
 
-``close()`` previously left ``description`` / ``rowcount`` /
-``lastrowid`` at their last-statement values; the scrub now matches
-the contract the other state-clearing methods commit to.
+``close()`` clears ``description`` and the buffered rows (a closed
+cursor cannot fetch) but keeps ``rowcount`` / ``lastrowid`` readable,
+matching stdlib ``sqlite3.Cursor`` and the dbapi cursor so SA's Result
+layer can read ``lastrowid`` after the cursor is closed.
 """
 
 from __future__ import annotations

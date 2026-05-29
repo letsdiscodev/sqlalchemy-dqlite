@@ -735,3 +735,86 @@ class Requirements(SuiteRequirements):
         """SQLite stores IEEE 754 infinities; the wire codec
         preserves them via ``struct.pack/unpack('<d')``."""
         return exclusions.open()
+
+    @property
+    def ctes_with_values(self) -> compound:
+        """``WITH cte AS (VALUES ...)`` — SQLite ≥ 3.8.3 supports a
+        VALUES row-source inside a CTE; matches the SQLite dialect.
+        (Companion to the already-open ``ctes`` /
+        ``ctes_with_update_delete``.)"""
+        return exclusions.open()
+
+    @property
+    def update_from(self) -> compound:
+        """``UPDATE ... FROM`` — SQLite ≥ 3.33 supports it; dqlite
+        ships SQLite ≥ 3.35. Matches the SQLite dialect."""
+        return exclusions.open()
+
+    @property
+    def foreign_key_constraint_option_reflection_ondelete(self) -> compound:
+        """Reflection of a foreign key's ``ON DELETE`` action via the
+        inherited ``PRAGMA foreign_key_list``. dqlite does not enforce
+        foreign keys by default, but the declared action still
+        round-trips through reflection. Matches the SQLite dialect."""
+        return exclusions.open()
+
+    @property
+    def foreign_key_constraint_option_reflection_onupdate(self) -> compound:
+        """Reflection of a foreign key's ``ON UPDATE`` action; see
+        :meth:`foreign_key_constraint_option_reflection_ondelete`."""
+        return exclusions.open()
+
+    @property
+    def fk_constraint_option_reflection_ondelete_noaction(self) -> compound:
+        """Reflection of ``ON DELETE NO ACTION``; see
+        :meth:`foreign_key_constraint_option_reflection_ondelete`."""
+        return exclusions.open()
+
+    @property
+    def fk_constraint_option_reflection_ondelete_restrict(self) -> compound:
+        """Reflection of ``ON DELETE RESTRICT``; see
+        :meth:`foreign_key_constraint_option_reflection_ondelete`."""
+        return exclusions.open()
+
+    @property
+    def fk_constraint_option_reflection_onupdate_restrict(self) -> compound:
+        """Reflection of ``ON UPDATE RESTRICT``; see
+        :meth:`foreign_key_constraint_option_reflection_ondelete`."""
+        return exclusions.open()
+
+    @property
+    def indexes_check_column_order(self) -> compound:
+        """Reflected indexes report their columns in declared order
+        (inherited ``PRAGMA index_info``). Matches the SQLite dialect,
+        which enables this unconditionally."""
+        return exclusions.open()
+
+    @property
+    def temporary_views(self) -> compound:
+        """``CREATE TEMPORARY VIEW`` and temp-view reflection work over
+        dqlite (which is not a file database). Matches the SQLite
+        dialect; companion to the already-open ``views`` /
+        ``temporary_tables`` / ``temp_table_reflection``."""
+        return exclusions.open()
+
+    @property
+    def nvarchar_types(self) -> compound:
+        """``NVARCHAR`` / ``NCHAR`` type reflection round-trips via the
+        inherited SQLite type affinity. Matches the SQLite dialect."""
+        return exclusions.open()
+
+    @property
+    def precision_numerics_retains_significant_digits(self) -> compound:
+        """A ``Numeric`` value's trailing significant digits round-trip
+        (e.g. ``Decimal('1.000')``). Matches the SQLite dialect (which
+        only fails this on Oracle)."""
+        return exclusions.open()
+
+    @property
+    def inline_check_constraint_reflection(self) -> compound:
+        """Reflection of column-level (inline) CHECK constraints via the
+        inherited ``SQLiteDialect.get_check_constraints``. Matches the
+        SQLite dialect; companion to the open ``check_constraint_reflection``.
+        (The ``use_schema=True`` compliance variants are skipped in the
+        compliance conftest because dqlite has no schemas.)"""
+        return exclusions.open()

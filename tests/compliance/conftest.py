@@ -46,6 +46,14 @@ _SCHEMA_USING_PARAMETRIZE_SKIPS: tuple[str, ...] = (
     "test_check_constraint_standalone[True-my_ck_const]",
     "test_check_constraint_standalone[True-MyCkConst]",
     "test_check_constraint_standalone[True-None]",
+    # ``test_check_constraint_inline`` / ``_mixed`` (gated on
+    # ``inline_check_constraint_reflection``) parametrise
+    # use_schema=True/False the same ungated way; the ``[True-...]``
+    # variants create ``test_schema`` tables dqlite lacks.
+    "test_check_constraint_inline[True-my_inline]",
+    "test_check_constraint_inline[True-MyInline]",
+    "test_check_constraint_inline[True-None]",
+    "test_check_constraint_mixed[True]",
 )
 
 

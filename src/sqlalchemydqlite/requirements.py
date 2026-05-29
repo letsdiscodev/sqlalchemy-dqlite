@@ -585,26 +585,19 @@ class Requirements(SuiteRequirements):
     @property
     def dbapi_lastrowid(self) -> compound:
         """``Cursor.lastrowid`` is implemented on the dqlite dbapi
-        cursor and is the documented PK-recovery channel for
-        SQLAlchemy. The compliance suite's
-        ``LastrowidTest.test_native_lastrowid_autoinc`` reads
-        ``CursorResult.inserted_primary_key`` after an
-        explicit-stmt INSERT and observes ``None`` because SA's
-        SQLite dialect emits the INSERT via the no-cursor
-        ``dialect.do_execute_no_params`` path on the implicit-tx
-        connection, where the lastrowid surface is not exposed.
-        Closed pending a dialect-side wire of the value through
-        the ``ExecutionContext`` adapter; the underlying
-        ``cursor.lastrowid`` value IS populated, just not surfaced
-        to ``inserted_primary_key`` via the path the compliance
-        suite exercises."""
-        return exclusions.closed()
+        cursor and survives ``cursor.close()`` (matching stdlib
+        ``sqlite3.Cursor``), so SQLAlchemy's ``CursorResult.lastrowid``
+        — which reads ``cursor.lastrowid`` lazily after the cursor is
+        closed — returns the real rowid after an INSERT. Open: the
+        SQLite reference (pysqlite/aiosqlite) opens this too."""
+        return exclusions.open()
 
     @property
     def supports_lastrowid(self) -> compound:
-        """See ``dbapi_lastrowid`` above; closed for the same
-        compliance-suite reason."""
-        return exclusions.closed()
+        """See ``dbapi_lastrowid`` above; the dialect's
+        ``postfetch_lastrowid`` is True and ``cursor.lastrowid`` is
+        readable after close, so lastrowid-based PK recovery works."""
+        return exclusions.open()
 
     @property
     def identity_columns(self) -> compound:

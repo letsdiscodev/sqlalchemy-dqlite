@@ -287,9 +287,11 @@ class AsyncAdaptedCursor:
 
         Idempotent: a second call is a no-op (mirrors stdlib
         ``sqlite3.Cursor.close`` and the underlying
-        ``dqlitedbapi.aio.AsyncCursor.close``). Scrubs ``description``
-        / ``rowcount`` / ``lastrowid`` to the "no operation performed"
-        sentinel and swaps the strong back-references to the parent
+        ``dqlitedbapi.aio.AsyncCursor.close``). Clears ``description``
+        and the buffered rows (a closed cursor cannot fetch) but
+        PRESERVES ``rowcount`` / ``lastrowid``, matching stdlib and the
+        dbapi cursor so SA's Result layer can read ``cursor.lastrowid``
+        after close. Swaps the strong back-references to the parent
         adapter and inner dbapi connection for ``weakref.proxy``
         wrappers so a retained closed cursor does not pin the inner
         ``AsyncConnection`` (and through it the client-layer state).
@@ -309,16 +311,15 @@ class AsyncAdaptedCursor:
         # exception-suppression-based.
         if self._closed:
             return
-        # Scrub the public read-attributes so post-close reads of
-        # ``description`` / ``rowcount`` / ``lastrowid`` see a
-        # consistent "no operation performed" surface. Plain
-        # attributes have no _closed gating, so a caller (or SA's
-        # Result layer) reading them after close would otherwise see
-        # the last statement's values — composes badly with any
-        # subsequent execute that should reset them.
+        # Clear the result-set surface (a closed cursor cannot fetch),
+        # but PRESERVE ``rowcount`` / ``lastrowid`` across close — matching
+        # stdlib ``sqlite3.Cursor`` and the underlying dbapi cursor, both
+        # of which keep them readable after close. SQLAlchemy's Result
+        # layer reads ``cursor.lastrowid`` lazily AFTER closing the cursor,
+        # so scrubbing it here made ``CursorResult.lastrowid`` come back
+        # ``None`` after every INSERT. A subsequent execute resets these
+        # at execute time, so preserving them post-close is safe.
         self.description = None
-        self.rowcount = -1
-        self.lastrowid = None
         self._rows.clear()
         self._closed = True
         # Drop the strong back-references to the parent adapter
@@ -371,9 +372,10 @@ class AsyncAdaptedCursor:
         # Do NOT clear ``lastrowid`` here. stdlib ``sqlite3.Cursor.lastrowid``
         # and the dbapi-layer ``Cursor._execute_async`` both honour the
         # sticky-INSERT contract: ``lastrowid`` survives a subsequent
-        # UPDATE / DELETE / DDL / SELECT on the same cursor and is
-        # cleared only on ``close()``. The async adapter opens a fresh
-        # underlying ``AsyncCursor`` per ``execute()``, so we cannot
+        # UPDATE / DELETE / DDL / SELECT on the same cursor, and also
+        # survives ``close()`` (it is readable post-close, matching
+        # stdlib). The async adapter opens a fresh underlying
+        # ``AsyncCursor`` per ``execute()``, so we cannot
         # rely on the dbapi cursor's stickiness directly — instead we
         # preserve the adapter's prior value across non-INSERT
         # executes by writing only when the underlying cursor reports

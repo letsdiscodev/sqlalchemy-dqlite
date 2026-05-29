@@ -1327,9 +1327,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
         # Keeping the substring tuple in ONE place avoids the
         # three-site DRY drift (helper + this method + close-arm
         # below) that would otherwise let a Python minor wording
-        # change silently bypass one of the three sites — a hazard the
-        # ``done/sa-async-close-rollback-arm-missing-loop-is-already-
-        # running-remap.md`` near-miss documents.
+        # change silently bypass one of the three sites.
         # PEP 654 cancel-class split must run BEFORE
         # ``_remap_loop_state_runtime_error`` so a
         # ``BaseExceptionGroup`` containing BOTH a CancelledError

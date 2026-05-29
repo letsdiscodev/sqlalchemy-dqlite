@@ -79,12 +79,21 @@ suite explicitly with `pytest tests/compliance/`.
 ### Why ~700 suite tests are skipped (and that's correct)
 
 Each compliance run reports a large `skipped` count (currently
-~689). Every skip is gated by a `Requirements.<feature>` declaration
+~639). Most skips are gated by a `Requirements.<feature>` declaration
 in `src/sqlalchemydqlite/requirements.py` that says "dqlite doesn't
 support this." The skipped tests are testing capabilities the
 underlying database genuinely lacks — running them would fail with
 `syntax error` / `unknown database` / `no such function`, not with
 real bugs.
+
+A few schema-using parametrize variants are skipped at the
+compliance-conftest level instead (`_SCHEMA_USING_PARAMETRIZE_SKIPS`
+in `tests/compliance/conftest.py`): SQLAlchemy parametrises some
+reflection tests with `use_schema=True/False` without gating the
+`True` branch on `requires.schemas`, so the `True` variants try to
+create tables in `test_schema` (which dqlite lacks, having no ATTACH)
+and are skipped explicitly while the `False` variants run for real
+coverage.
 
 Examples of features dqlite doesn't have (each declared
 `exclusions.closed()`):

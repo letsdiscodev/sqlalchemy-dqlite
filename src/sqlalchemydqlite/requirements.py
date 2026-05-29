@@ -539,29 +539,31 @@ class Requirements(SuiteRequirements):
     @property
     def computed_columns(self) -> compound:
         """SQLite ≥ 3.31 supports ``GENERATED ALWAYS AS (...) STORED |
-        VIRTUAL`` at the DDL layer, but SA's compliance harness
-        compares against the inherited SQLite reflection output and
-        the GENERATED column metadata round-trip is not fully aligned
-        with the SA-side schema. Closed pending a tighter
-        reflection-side fix; the underlying engine accepts the DDL,
-        only the SA Computed reflection contract diverges."""
-        return exclusions.closed()
+        VIRTUAL``, and the inherited SQLite reflection round-trips the
+        GENERATED column metadata (``sqltext`` / ``persisted``) over
+        dqlite — ``ComputedReflectionTest`` passes. Matches the SQLite
+        dialect, which enables this for SQLite ≥ 3.31."""
+        return exclusions.open()
 
     @property
     def computed_columns_stored(self) -> compound:
-        return exclusions.closed()
+        return exclusions.open()
 
     @property
     def computed_columns_virtual(self) -> compound:
-        return exclusions.closed()
+        return exclusions.open()
 
     @property
     def computed_columns_default_persisted(self) -> compound:
+        # A GENERATED column with no STORED/VIRTUAL keyword reflects as
+        # ``persisted=False`` on SQLite/dqlite; SA only declares this
+        # requirement for backends where the default is persisted
+        # (PostgreSQL). Kept closed to match the SQLite dialect.
         return exclusions.closed()
 
     @property
     def computed_columns_reflect_persisted(self) -> compound:
-        return exclusions.closed()
+        return exclusions.open()
 
     @property
     def autoincrement_without_sequence(self) -> compound:
@@ -608,14 +610,11 @@ class Requirements(SuiteRequirements):
     def check_constraint_reflection(self) -> compound:
         """SQLite stores CHECK constraints in ``sqlite_master.sql``;
         the inherited ``SQLiteDialect.get_check_constraints`` parses
-        them back, but SA's compliance harness uses
-        ``Inspector.get_check_constraints`` against a freshly-
-        provisioned ``CREATE TABLE`` whose textual normalization
-        diverges between the SQLite write path and the reflection
-        round-trip (whitespace / parenthesization). Closed pending
-        a tighter normalization fix; the dqlite wire path itself
-        does not block reflection."""
-        return exclusions.closed()
+        them back, and the reflection round-trips over dqlite. Matches
+        the SQLite dialect, which enables this. (The ``use_schema=True``
+        compliance variants are skipped separately in the compliance
+        conftest because dqlite has no schemas, not via this flag.)"""
+        return exclusions.open()
 
     @property
     def recursive_fk_cascade(self) -> compound:
@@ -719,14 +718,12 @@ class Requirements(SuiteRequirements):
 
     @property
     def supports_bitwise_xor(self) -> compound:
-        """SQLite does NOT have a native XOR operator (``^`` is
-        unsupported on SQLite, despite being widely supported on
-        other dialects). SA's compile path falls back to
-        ``(a | b) & ~(a & b)`` on dialects that lack native XOR.
-        Declared closed so the compliance suite skips with the
-        dialect-specific reason rather than the silent upstream
-        default."""
-        return exclusions.closed()
+        """SQLite has no native XOR operator, but SA compiles
+        ``bitwise_xor`` to the ``(a | b) & ~(a & b)`` fallback, which
+        runs over dqlite — ``BitwiseTest``'s XOR variant passes. Matches
+        the SQLite dialect, which enables this (it only fails on
+        Oracle < 21)."""
+        return exclusions.open()
 
     @property
     def supports_bitwise_shift(self) -> compound:

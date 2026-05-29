@@ -37,6 +37,15 @@ _SCHEMA_USING_PARAMETRIZE_SKIPS: tuple[str, ...] = (
     # use_schema=True/False without a requires.schemas gate.
     "test_metadata[False-_exclusions_01-True]",
     "test_metadata[True-_exclusions_00-True]",
+    # ``ComponentReflectionTestExtra::test_check_constraint_*`` likewise
+    # parametrises use_schema=True/False ungated by requires.schemas;
+    # the ``[True-...]`` variants CREATE TABLE in ``test_schema`` which
+    # dqlite lacks (no ATTACH). The ``[False-...]`` variants run for
+    # real check-constraint-reflection coverage.
+    "test_check_constraint_no_constraint[True]",
+    "test_check_constraint_standalone[True-my_ck_const]",
+    "test_check_constraint_standalone[True-MyCkConst]",
+    "test_check_constraint_standalone[True-None]",
 )
 
 

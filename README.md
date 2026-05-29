@@ -1,6 +1,20 @@
 # sqlalchemy-dqlite
 
-SQLAlchemy 2.0 dialect for [dqlite](https://dqlite.io/).
+A [SQLAlchemy 2.0](https://www.sqlalchemy.org/) dialect for
+[dqlite](https://dqlite.io/), Canonical's distributed SQLite. Point
+SQLAlchemy (and Alembic, and most ORMs built on it) at a dqlite cluster
+with a `dqlite://` URL and use it like any other backend.
+
+It supports both the synchronous and the async SQLAlchemy engines, and
+builds on dqlite's SQLite roots, so SQLAlchemy treats it as a SQLite-family
+dialect.
+
+## Is this the package you want?
+
+Yes, if you use SQLAlchemy or an ORM/migration tool on top of it (Alembic,
+Flask-SQLAlchemy, etc.) and want it backed by dqlite. If you want a plain
+database driver without SQLAlchemy, use
+[dqlite-dbapi](https://github.com/letsdiscodev/python-dqlite-dbapi).
 
 ## Installation
 
@@ -8,141 +22,55 @@ SQLAlchemy 2.0 dialect for [dqlite](https://dqlite.io/).
 pip install sqlalchemy-dqlite
 ```
 
+Requires Python 3.13+ and SQLAlchemy 2.0+.
+
 ## Usage
 
 ```python
 from sqlalchemy import create_engine, text
 
-# Sync
 engine = create_engine("dqlite://localhost:9001/mydb")
 with engine.connect() as conn:
-    result = conn.execute(text("SELECT 1"))
-    print(result.fetchone())
+    print(conn.execute(text("SELECT 1")).fetchone())
+```
 
-# Async
+Async:
+
+```python
 from sqlalchemy.ext.asyncio import create_async_engine
 
-async_engine = create_async_engine("dqlite+aio://localhost:9001/mydb")
-async with async_engine.connect() as conn:
+engine = create_async_engine("dqlite+aio://localhost:9001/mydb")
+async with engine.connect() as conn:
     result = await conn.execute(text("SELECT 1"))
     print(result.fetchone())
 ```
 
-## Transactions
+URL format: `dqlite://host:port/database` (or `dqlite+aio://…` for async).
+The host:port is the bootstrap node — the cluster is discovered from there.
+See [Connection URL](docs/connection-url.md) for details.
 
-SQLAlchemy owns the `BEGIN`/`COMMIT`/`ROLLBACK` for any block opened via
-`engine.begin()`, `connection.begin()`, or `session.begin()`. Do not
-issue raw `BEGIN` yourself.
+## The dqlite Python stack
 
-```python
-from sqlalchemy import create_engine, text
+This is the top of four layered packages. Each builds on the one below:
 
-engine = create_engine("dqlite://localhost:9001/mydb")
+| Package | Role |
+| --- | --- |
+| **sqlalchemy-dqlite** — this package | SQLAlchemy 2.0 dialect |
+| [dqlite-dbapi](https://github.com/letsdiscodev/python-dqlite-dbapi) | PEP 249 (DB-API 2.0) driver — sync & async |
+| [dqlite-client](https://github.com/letsdiscodev/python-dqlite-client) | Async wire client — pooling, leader discovery |
+| [dqlite-wire](https://github.com/letsdiscodev/python-dqlite-wire) | Wire-protocol codec |
 
-# OK — SA emits BEGIN / COMMIT for you
-with engine.begin() as conn:
-    conn.execute(text("INSERT INTO t VALUES (1)"))
+## Documentation
 
-# WRONG — second BEGIN inside an SA-managed transaction errors with
-#   OperationalError: cannot start a transaction within a transaction
-with engine.begin() as conn:
-    conn.execute(text("BEGIN"))                  # error
-    conn.execute(text("INSERT INTO t VALUES (1)"))
-```
-
-The same rule applies to `engine.connect()`: SA auto-begins a
-transaction on the first execute, so a user-issued `text("BEGIN")`
-collides the same way. This matches every other SA backend (pysqlite,
-postgres, mysql); SA's transaction model is universal.
-
-`isolation_level="AUTOCOMMIT"` is rejected — every dqlite statement
-goes through Raft consensus and there is no per-statement autocommit
-mode. Use `engine.begin()` (or `connection.begin()`) for writes.
-
-See SQLAlchemy's [transaction
-docs](https://docs.sqlalchemy.org/en/20/core/connections.html#using-transactions)
-for the full model.
-
-## Savepoint naming
-
-The dqlite client tracks active SAVEPOINTs to keep the SQLAlchemy
-pool's ROLLBACK-on-checkin path correct. The tracker only handles
-bare-ASCII SQLite identifiers (e.g. `sa_savepoint_1`, `my_sp`) —
-SQLAlchemy's generated savepoint names always match this shape, so
-`engine.begin()` / `Session.begin_nested()` / `connection.begin_nested()`
-are unaffected.
-
-If user-issued raw SQL uses quoted, backticked, square-bracketed,
-unicode, or leading-digit savepoint names (e.g.
-`text('SAVEPOINT "weird name"')`), the client conservatively flags
-the connection as carrying an untracked savepoint. On the next pool
-checkin SQLAlchemy issues a safety `ROLLBACK`, paying one extra
-round-trip per checkout for the remainder of that connection's
-lifetime in the pool. Stick to bare-ASCII SAVEPOINT names in raw
-text SQL to avoid the overhead, or accept the per-checkout cost.
-
-## URL Format
-
-```
-dqlite://host:port/database
-dqlite+aio://host:port/database
-```
-
-When a query parameter is repeated
-(`?max_total_rows=100&max_total_rows=200`), the **last** occurrence
-wins. This matches `urllib.parse.parse_qsl` ordering. Templated
-connection URLs that layer values from multiple sources should be
-aware that duplicated keys silently override earlier values rather
-than raising.
-
-The URL host:port pair is the bootstrap address — the dqlite client
-discovers the rest of the cluster from that one node's leader-info
-response. If the URL host is unreachable, leader-discovery cannot
-start; operators that want bootstrap-from-many-addresses should put
-a load balancer or DNS round-robin in front of the cluster, or rotate
-the URL host across deployments. Multi-address bootstrap is not
-exposed at the dialect URL surface.
-
-## STRICT-table DDL is unavailable through SA's compiler
-
-SA's SQLite dialect gates STRICT-table compilation on
-`server_version_info >= (3, 37)` (`sqlalchemy/dialects/sqlite/base.py`).
-The dqlite dbapi pins `sqlite_version_info = (3, 35, 0)` as the
-documented floor (see
-`python-dqlite-dbapi/src/dqlitedbapi/_constants.py`) to avoid silently
-rejecting connections to older-server clusters that ship SQLite below
-the floor. As a consequence, SA's compiler will NOT emit
-`CREATE TABLE ... STRICT` DDL through this dialect, even when the
-cluster ships SQLite 3.37 or newer.
-
-If your cluster supports STRICT tables and you want STRICT semantics,
-emit the DDL via raw SQL (`engine.execute(text("CREATE TABLE ...
-STRICT"))`) rather than SA's `Table` / `Column` model.
-
-## Cross-version semantic shift: NULL in BOOLEAN/DATETIME columns
-
-Upstream dqlite commit `f30fc99` (`query: preserve SQLITE_NULL type
-for NULL values`, 2026-01-25) changed the wire encoding of NULL cells
-in columns declared `BOOLEAN`, `DATE`, `DATETIME`, or `TIMESTAMP`.
-Before that commit, a NULL in a `BOOLEAN` column was emitted as
-`BOOLEAN(0)` (decodes to `False`) and a NULL in a `DATETIME` column
-was emitted as `ISO8601("")` — indistinguishable on the wire from
-real `FALSE` / empty-string values. After the commit, NULL is emitted
-with the SQLite NULL type and decodes to `None`.
-
-ORM models with `Boolean()` and `DateTime()` columns will start
-returning `None` for previously-`False` / `""` values after a server
-upgrade. SQLAlchemy `nullable=False` constraints will start tripping
-on rows that previously decoded to non-NULL. There is no driver-level
-handshake distinguishing the two server versions — check your dqlite
-cluster version before relying on the post-fix semantics.
+- [Transactions](docs/transactions.md) — SQLAlchemy owns `BEGIN`/`COMMIT`; no `AUTOCOMMIT`.
+- [Connection URL](docs/connection-url.md) — URL format, the bootstrap address, and query parameters.
+- [Limitations & notes](docs/limitations.md) — STRICT tables, savepoint
+  naming, and a server-version NULL gotcha.
 
 ## Development
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for setup, contribution guidelines,
-and the SQLAlchemy compliance test-suite documentation (how to run it
-locally, why it's not part of the default `pytest` invocation, and
-why ~700 of its tests are correctly skipped).
+See [DEVELOPMENT.md](DEVELOPMENT.md) for setup, contribution guidelines, and
+how to run the SQLAlchemy compliance test suite.
 
 ## License
 

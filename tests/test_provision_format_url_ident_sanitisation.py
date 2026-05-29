@@ -1,20 +1,5 @@
-"""Pin: ``_format_url``'s ident sanitisation honours the narrative
-comment's promise to scrub ``@`` / path-separators / control chars.
-
-Before round 8 the implementation only replaced ``/`` and ``@`` while
-the surrounding comment promised "control chars" handling — a
-docstring-vs-implementation divergence. The fix widens the scrub to
-match the documented intent: ``@``, ``/``, ``\\``, C0 control
-characters (``\\x00``..``\\x1f``), and U+2028 / U+2029 (LF-equivalent
-in many log pipelines / journald). Other characters (alphanumerics,
-dots, dashes, underscores) survive verbatim — this is not a strict
-``[A-Za-z0-9_]`` allowlist; legitimate idents with version suffixes
-or hyphens stay readable.
-
-``ident`` is normally pytest-xdist's ``gw0`` / ``gw1`` shape, so the
-live exposure is bounded; the pin is defense-in-depth and a
-docstring-vs-implementation reconciliation.
-"""
+"""Pin: ``_format_url`` scrubs ``@`` / path-separators / control chars from
+``ident`` (not a strict ``[A-Za-z0-9_]`` allowlist — dots/hyphens survive)."""
 
 from __future__ import annotations
 
@@ -28,8 +13,8 @@ def _base() -> sa_url.URL:
 
 
 def test_ident_with_lf_replaced() -> None:
-    """LF in ``ident`` must not survive into the database name; an LF
-    in a URL echoed to a structured log splits the record."""
+    """LF must not survive into the database name; in a logged URL it splits
+    the record."""
     out = _format_url(_base(), "dqlitedbapi", "gw0\nINJECT")
     assert out.database is not None
     assert "\n" not in out.database
@@ -104,10 +89,7 @@ def test_ident_ordinary_alphanumeric_unchanged() -> None:
 
 
 def test_ident_with_dot_preserved() -> None:
-    """The scrub is not a strict alphanumeric allowlist — legitimate
-    idents with version suffixes (``gw0.1``) or hyphens stay
-    readable. The architect's note (c) explicitly warns against
-    over-tightening to ``[A-Za-z0-9_]``."""
+    """Not a strict alphanumeric allowlist — version suffixes like ``gw0.1`` survive."""
     out = _format_url(_base(), "dqlitedbapi", "gw0.1")
     assert out.database is not None
     assert "gw0.1" in out.database
@@ -121,51 +103,37 @@ def test_ident_with_hyphen_preserved() -> None:
 
 
 def test_ident_with_del_replaced() -> None:
-    """DEL (``\\x7f``) is a control character per Unicode category
-    ``Cc``; the docstring promise of "control chars" must cover it.
-    DEL is the seventh-bit-only C0 trailer that shares the TTY /
-    terminal-control hazards of the C0 range and is the load-bearing
-    omission flagged in the round-9 audit of the round-8 widening."""
+    """DEL (``\\x7f``) is a ``Cc`` control char and shares the C0 TTY hazards."""
     out = _format_url(_base(), "dqlitedbapi", "gw0\x7finject")
     assert out.database is not None
     assert "\x7f" not in out.database
 
 
 def test_ident_with_nel_replaced() -> None:
-    """NEL (``\\x85``) is treated as a line terminator by
-    ``str.splitlines`` (the only non-LF/CR byte in the default
-    splitlines newline set) and several log forwarders — matches the
-    line-separator promise alongside LF / CR / U+2028 / U+2029."""
+    """NEL (``\\x85``) is a line terminator for ``str.splitlines`` and log forwarders."""
     out = _format_url(_base(), "dqlitedbapi", "gw0\x85inject")
     assert out.database is not None
     assert "\x85" not in out.database
 
 
 def test_ident_with_c1_low_replaced() -> None:
-    """Pin the C1 lower boundary (``\\x80``): Unicode category ``Cc``.
-    Some structured log formats decode / escape C1 inconsistently;
-    the widened class covers the full ``Cc`` category."""
+    """C1 lower boundary (``\\x80``); the scrub covers the full ``Cc`` category."""
     out = _format_url(_base(), "dqlitedbapi", "gw0\x80inject")
     assert out.database is not None
     assert "\x80" not in out.database
 
 
 def test_ident_with_c1_high_replaced() -> None:
-    """Pin the C1 upper boundary (``\\x9f``): last byte of the
-    extended control range."""
+    """C1 upper boundary (``\\x9f``): last byte of the extended control range."""
     out = _format_url(_base(), "dqlitedbapi", "gw0\x9finject")
     assert out.database is not None
     assert "\x9f" not in out.database
 
 
 def test_ident_already_suffixed_path_also_sanitised() -> None:
-    """The already-suffixed branch (when ``_SESSION_TOKEN`` is already
-    present in the database name) must apply the same scrub. Before
-    round 8 it used the same incomplete two-character strip."""
+    """The already-suffixed branch (``_SESSION_TOKEN`` present) applies the same scrub."""
     from sqlalchemydqlite.provision import _SESSION_TOKEN
 
-    # Build a URL whose database name already carries the session
-    # token, so the already-suffixed branch fires.
     pre_suffixed = sa_url.make_url(f"dqlite://127.0.0.1:9001/test_{_SESSION_TOKEN}")
     out = _format_url(pre_suffixed, "dqlitedbapi", "gw0\nx")
     assert out.database is not None

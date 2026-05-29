@@ -1,15 +1,8 @@
-"""Pin: ``AsyncAdaptedCursor.executemany`` materialises one-shot
-iterables (``iter([...])``, generators, ``map``) to a list BEFORE
-forwarding to the underlying cursor.
+"""``executemany`` materialises one-shot iterables to a list before forwarding.
 
-Without this, a disconnect-class exception mid-batch triggers SA's
-pool-invalidation + engine-retry path which re-issues the same
-``executemany`` against the now-exhausted iterator — silent zero-row
-execute followed by COMMIT, a data-loss class.
-
-The ``isinstance(list)`` gate keeps SA's canonical (always a list) call
-a no-copy fast path; pin via ``id()`` equality.
-"""
+Otherwise SA's engine-retry path re-issues executemany against the exhausted
+iterator: a silent zero-row execute then COMMIT, a data-loss class. The list
+fast path stays no-copy (pinned via ``id()``)."""
 
 from __future__ import annotations
 
@@ -38,16 +31,11 @@ def _patch_await(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_iterator_input_is_materialised_to_list(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-list iterable (``iter([...])`` is one-shot) must be
-    materialised before being forwarded to the underlying cursor; the
-    underlying receives a ``list``."""
     cur, inner = _make_cursor_with_underlying()
     _patch_await(monkeypatch)
 
     cur.executemany("INSERT INTO t VALUES (?)", iter([(1,), (2,), (3,)]))
 
-    # The underlying cursor.executemany was called with a list, not
-    # the original (now-exhausted) iterator.
     args, _ = inner.executemany.call_args
     assert args[0] == "INSERT INTO t VALUES (?)"
     assert isinstance(args[1], list)
@@ -72,8 +60,7 @@ def test_generator_input_is_materialised_to_list(monkeypatch: pytest.MonkeyPatch
 
 
 def test_list_input_is_forwarded_unchanged_no_copy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SA's canonical call site always hands a ``list``. Pin the
-    no-copy fast path via ``id()`` equality."""
+    """SA always hands a ``list``; pin the no-copy fast path via ``id()``."""
     cur, inner = _make_cursor_with_underlying()
     _patch_await(monkeypatch)
 

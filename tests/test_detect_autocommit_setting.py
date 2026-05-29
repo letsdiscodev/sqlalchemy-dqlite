@@ -1,17 +1,6 @@
-"""``DqliteDialect.detect_autocommit_setting`` returns False unconditionally.
-
-dqlite has no AUTOCOMMIT mode (every statement goes through Raft
-consensus; see ``set_isolation_level`` rejection). The dqlite dbapi
-``Connection`` exposes ``isolation_level`` returning ``None`` for
-stdlib pre-3.12 parity. Without this override, the pysqlite parent's
-probe (``dbapi_conn.isolation_level is None``) would succeed and flip
-on SA's ``skip_autocommit_rollback`` short-circuit
-(``sqlalchemy/engine/default.py::do_rollback`` /
-``base.py:1115-1124``) — which was designed for stdlib's
-connection-level auto-BEGIN, not for dqlite's explicit-BEGIN wire
-discipline. Override to return False so the SA-managed BEGIN/COMMIT
-lifecycle is preserved.
-"""
+"""detect_autocommit_setting returns False unconditionally. dqlite has no
+AUTOCOMMIT mode; without the override the pysqlite probe (isolation_level is None)
+would flip on skip_autocommit_rollback and bypass our explicit-BEGIN discipline."""
 
 from __future__ import annotations
 
@@ -23,10 +12,8 @@ from sqlalchemydqlite.base import DqliteDialect
 
 class TestDetectAutocommitSetting:
     def test_dqlite_dialect_returns_false_on_arbitrary_object(self) -> None:
-        # MagicMock has no ``isolation_level`` attribute set explicitly,
-        # but auto-attribute makes the inherited probe falsely succeed.
-        # Use ``object()`` to expose the real failure mode of the
-        # inherited method.
+        # object() (not MagicMock, whose auto-attribute would mask it) exposes
+        # the inherited probe's real failure mode.
         dialect = DqliteDialect()
         assert dialect.detect_autocommit_setting(object()) is False  # type: ignore[arg-type]
 
@@ -35,11 +22,8 @@ class TestDetectAutocommitSetting:
         assert dialect.detect_autocommit_setting(MagicMock()) is False
 
     def test_dqlite_dialect_does_not_touch_dbapi_attribute(self) -> None:
-        # Override must not access ``isolation_level`` on the dbapi
-        # connection — that probe is the bug we are fixing. Use a
-        # class-level descriptor (not ``MagicMock.side_effect``, which
-        # only fires on call, not on attribute access) so any read
-        # raises and surfaces an accidental probe.
+        # A class-level descriptor (not MagicMock.side_effect, which fires only on
+        # call) makes any read of isolation_level raise, surfacing an accidental probe.
         class _Probe:
             @property
             def isolation_level(self) -> object:
@@ -53,47 +37,29 @@ class TestDetectAutocommitSetting:
         assert dialect.detect_autocommit_setting(object()) is False  # type: ignore[arg-type]
 
     def test_dbapi_connection_exposes_isolation_level_returning_none(self) -> None:
-        """Defence pin: the dbapi ``Connection.isolation_level`` reads
-        as ``None`` (stdlib parity stub), so SA's pysqlite-style probe
-        ``dbapi_conn.isolation_level is None`` succeeds and would flip
-        on ``skip_autocommit_rollback`` without this dialect's
-        ``detect_autocommit_setting`` override.
-
-        Pin the actual VALUE returned by the descriptor — not just the
-        descriptor's existence — so a future regression that flips
-        the body to e.g. ``return "DEFERRED"`` fails this test.
-        """
+        """The dbapi Connection.isolation_level reads as None (stdlib parity stub),
+        the value SA's probe keys on. Pin the value, not just the descriptor."""
         from dqlitedbapi.connection import Connection as DqliteSyncConnection
 
-        # Read the value through an instance so the property descriptor
-        # actually fires (as opposed to checking the descriptor itself).
         instance_unused = DqliteSyncConnection.__new__(DqliteSyncConnection)
-        # The ``isolation_level`` getter now raises ``InterfaceError``
-        # on a closed connection (stdlib parity). ``__new__`` skips
-        # ``__init__`` and leaves ``_closed`` unset; set it explicitly
-        # so the probe under test reaches the property body.
+        # The getter raises InterfaceError on a closed connection; __new__ skips
+        # __init__, so set _closed explicitly to reach the property body.
         instance_unused._closed = False
         assert instance_unused.isolation_level is None
 
     def test_async_dbapi_connection_isolation_level_also_returns_none(self) -> None:
-        """Sibling pin on the async surface — the same SA probe runs
-        through the async adapter."""
+        """Sibling pin on the async surface."""
         from dqlitedbapi.aio.connection import (
             AsyncConnection as DqliteAsyncConnection,
         )
 
         instance_unused = DqliteAsyncConnection.__new__(DqliteAsyncConnection)
-        # See sync sibling above — closed-state guard requires
-        # ``_closed`` to be initialised before the property fires.
+        # See sync sibling: _closed must be set before the property fires.
         instance_unused._closed = False
         assert instance_unused.isolation_level is None
 
     def test_override_remains_load_bearing_against_isolation_level_eq_none(self) -> None:
-        """Pin: the override returns False even if the dbapi probe
-        says ``isolation_level is None`` (which it does post-stdlib-
-        parity stub). Without the override, SA would flip on
-        ``skip_autocommit_rollback`` and bypass our explicit-BEGIN
-        wire discipline."""
+        """The override returns False even when the probe sees isolation_level is None."""
 
         class _StdlibParityProbe:
             isolation_level = None

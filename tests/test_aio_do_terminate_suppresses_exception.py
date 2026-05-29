@@ -1,12 +1,5 @@
-"""Pin: async ``DqliteDialect_aio.do_terminate`` suppresses tail
-``Exception`` from ``dbapi_connection.terminate()`` and emits a debug
-log with peer + id, mirroring the sync sibling at
-``DqliteDialect.do_terminate``.
-
-SA's ``has_terminate=True`` contract promises a non-raising path on
-``engine.dispose()``. ``CancelledError`` must NOT be swallowed —
-asyncio's structured-concurrency contract says cancels propagate.
-"""
+"""Pin: async ``do_terminate`` suppresses tail ``Exception`` from ``terminate()`` and debug-logs
+peer + id, but ``CancelledError`` must propagate (asyncio structured-concurrency wins)."""
 
 from __future__ import annotations
 
@@ -47,9 +40,7 @@ def test_do_terminate_log_includes_peer_and_id(
 
 
 def test_do_terminate_propagates_cancellederror() -> None:
-    """``asyncio.CancelledError`` must propagate — asyncio
-    structured-concurrency wins over SA's non-raising promise here.
-    """
+    """``asyncio.CancelledError`` must propagate, overriding SA's non-raising promise."""
     conn = MagicMock()
     conn.terminate.side_effect = asyncio.CancelledError()
 
@@ -58,9 +49,7 @@ def test_do_terminate_propagates_cancellederror() -> None:
 
 
 def test_do_terminate_clean_path_unchanged() -> None:
-    """Regression guard: ``terminate()`` returning normally is still a
-    no-raise no-log path.
-    """
+    """``terminate()`` returning normally stays a no-raise no-log path."""
     conn = MagicMock()
     DqliteDialect_aio().do_terminate(conn)
     conn.terminate.assert_called_once_with()

@@ -1,17 +1,5 @@
 """Integration coverage for SA pool features that interact with the
 dialect's ``do_close`` / ``do_terminate`` / ``do_ping`` hooks.
-
-Existing coverage: ``test_pool_pre_ping_leader_flip.py`` exercises
-pre-ping; ``test_pool_reset_on_return.py`` covers checkin reset;
-``test_async_cancel_during_commit_invalidates_slot.py`` covers
-invalidation. This file pins the still-uncovered scenarios:
-
-- ``pool_recycle``: recycled slots must invoke ``do_terminate`` (not
-  ``do_close``) per SA's ``__close(terminate=True)`` path.
-- ``engine.dispose()``: every queued slot must invoke ``do_close``
-  (one per pooled connection).
-- ``before_cursor_execute`` and ``handle_error`` SA events fire
-  through the dialect.
 """
 
 from __future__ import annotations
@@ -26,12 +14,9 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 @pytest.mark.integration
 def test_sync_pool_recycle_calls_do_terminate(engine_url: str) -> None:
-    """SA's recycle path goes through ``__close(terminate=True)`` →
-    ``dialect.do_terminate(conn)``. A regression that flipped this
-    to ``terminate=False`` (using ``do_close``'s graceful close
-    path) would silently extend recycle latency. Instrument
-    ``do_terminate`` and verify it fires when a slot ages past
-    ``pool_recycle``."""
+    """SA's recycle path must route through ``do_terminate``, not the
+    graceful ``do_close``; a regression there would silently extend
+    recycle latency."""
     eng = create_engine(engine_url, pool_recycle=0.1, pool_size=1, max_overflow=0)
     try:
         terminate_calls: list[object] = []
@@ -43,12 +28,10 @@ def test_sync_pool_recycle_calls_do_terminate(engine_url: str) -> None:
 
         eng.dialect.do_terminate = spy  # type: ignore[assignment]
 
-        # Warm one slot.
         with eng.connect() as conn:
             conn.execute(text("SELECT 1")).scalar()
-        # Sleep past recycle window.
-        time.sleep(0.2)
-        # Next checkout triggers recycle of the stale slot.
+        time.sleep(0.2)  # past recycle window
+        # Next checkout recycles the stale slot.
         with eng.connect() as conn:
             conn.execute(text("SELECT 1")).scalar()
 
@@ -64,18 +47,9 @@ def test_sync_pool_recycle_calls_do_terminate(engine_url: str) -> None:
 
 @pytest.mark.integration
 def test_sync_engine_dispose_calls_do_close_per_slot(engine_url: str) -> None:
-    """SA's ``QueuePool.dispose()`` drains every queued slot and
-    invokes ``conn.close()``, routing through ``dialect.do_close``
-    (NOT ``do_terminate``, since dispose passes ``terminate=False``).
-    Warm multiple slots, dispose, count do_close calls.
-
-    Uses ``dqlite_session_mode="deferred"`` to opt out of the
-    writer-safe ``BEGIN IMMEDIATE`` rewrite — this test warms 3
-    parallel SA Connections, each opens its own implicit
-    transaction, and ``BEGIN IMMEDIATE`` would serialize them at
-    the dqlite writer-lock for the duration of the SELECT 1's
-    implicit tx. The test is about pool fan-out, not write
-    contention; deferred semantics are correct here."""
+    """dispose() must route every queued slot through ``do_close`` (not
+    ``do_terminate``). Uses ``deferred`` session mode so the 3 parallel
+    connections don't serialize on the writer-lock via ``BEGIN IMMEDIATE``."""
     eng = create_engine(engine_url, pool_size=3, max_overflow=0).execution_options(
         dqlite_session_mode="deferred"
     )
@@ -89,14 +63,12 @@ def test_sync_engine_dispose_calls_do_close_per_slot(engine_url: str) -> None:
 
     eng.dialect.do_close = spy  # type: ignore[assignment]
 
-    # Warm 3 slots concurrently.
     conns = [eng.connect() for _ in range(3)]
     for c in conns:
         c.execute(text("SELECT 1")).scalar()
     for c in conns:
         c.close()  # return to pool, NOT close-the-connection
 
-    # Dispose now drains the queue.
     eng.dispose()
 
     assert len(close_calls) == 3, (
@@ -107,17 +79,12 @@ def test_sync_engine_dispose_calls_do_close_per_slot(engine_url: str) -> None:
 
 @pytest.mark.integration
 async def test_async_engine_dispose_drains_pool(async_engine_url: str) -> None:
-    """Async sibling of the dispose fan-out test. Uses
-    ``dqlite_session_mode="deferred"`` for the same reason as the
-    sync version — pool fan-out test, not write contention."""
+    """Async sibling of the dispose fan-out test."""
     eng = create_async_engine(async_engine_url, pool_size=2, max_overflow=0).execution_options(
         dqlite_session_mode="deferred"
     )
 
     close_calls: list[object] = []
-    # AsyncAdaptedConnection.close() routes through the dbapi
-    # AsyncConnection.close(); instrument the dialect's do_close
-    # which is the documented adapter point.
     original = eng.sync_engine.dialect.do_close
 
     def spy(dbapi_conn: object) -> None:
@@ -126,7 +93,6 @@ async def test_async_engine_dispose_drains_pool(async_engine_url: str) -> None:
 
     eng.sync_engine.dialect.do_close = spy  # type: ignore[assignment]
 
-    # Warm 2 slots concurrently.
     async with eng.connect() as a, eng.connect() as b:
         await a.execute(text("SELECT 1"))
         await b.execute(text("SELECT 1"))
@@ -137,13 +103,9 @@ async def test_async_engine_dispose_drains_pool(async_engine_url: str) -> None:
 
 @pytest.mark.integration
 def test_before_cursor_execute_listener_fires(engine_url: str) -> None:
-    """The ``before_cursor_execute`` event must fire for each cursor
-    execution. A regression in dialect plumbing that bypassed the
-    SA cursor abstraction would silently break user listeners.
-
-    Uses ``dqlite_session_mode="deferred"`` so the test's pool reset
-    rollback path on a held-open connection doesn't take the
-    writer-lock (unrelated to the listener-fan-out under test)."""
+    """``before_cursor_execute`` must fire for each cursor execution;
+    dialect plumbing that bypassed SA's cursor abstraction would
+    silently break user listeners."""
     eng = create_engine(engine_url).execution_options(dqlite_session_mode="deferred")
     captured: list[str] = []
 
@@ -170,9 +132,7 @@ def test_before_cursor_execute_listener_fires(engine_url: str) -> None:
 
 @pytest.mark.integration
 def test_handle_error_listener_fires_on_disconnect(engine_url: str) -> None:
-    """The ``handle_error`` event must fire when SA classifies an
-    exception as a disconnect. Force a disconnect by closing the
-    underlying transport out from under SA, then attempt a query."""
+    """``handle_error`` must fire when SA classifies an exception as a disconnect."""
     eng = create_engine(engine_url, pool_pre_ping=False)
     seen_errors: list[object] = []
 
@@ -182,8 +142,7 @@ def test_handle_error_listener_fires_on_disconnect(engine_url: str) -> None:
 
     try:
         with eng.connect() as conn:
-            # Reach in and force-close the dbapi transport so SA's
-            # next round-trip surfaces a disconnect.
+            # Force-close the dbapi transport so SA's next round-trip disconnects.
             dbapi_conn = conn.connection.dbapi_connection
             assert dbapi_conn is not None
             dbapi_conn.force_close_transport()

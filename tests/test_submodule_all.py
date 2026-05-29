@@ -1,10 +1,5 @@
-"""Each ``sqlalchemydqlite`` submodule must declare ``__all__`` so
-``from sqlalchemydqlite.<sub> import *`` does not leak private helpers.
-
-Mirrors the harness in ``dqlitewire``, ``dqliteclient``, and
-``dqlitedbapi``. Without per-submodule ``__all__``, a star-import
-leaks ``logging``, SA internals, etc.
-"""
+"""Each ``sqlalchemydqlite`` submodule must declare ``__all__`` so a
+star-import does not leak private helpers (``logging``, SA internals)."""
 
 from __future__ import annotations
 

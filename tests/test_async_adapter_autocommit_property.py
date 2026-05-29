@@ -1,8 +1,6 @@
-"""``AsyncAdaptedConnection.autocommit`` is a read-only property that
-reports ``False`` (matching the effective dqlite mode) and rejects
-``True`` with a helpful ``ArgumentError``. Mirrors the parity contract
-that ``isolation_level`` already satisfies for SA's aiosqlite reference
-adapter.
+"""``AsyncAdaptedConnection.autocommit`` is a read-only property reporting
+``False`` (the effective dqlite mode) and rejecting ``True`` with
+``ArgumentError``.
 """
 
 from __future__ import annotations
@@ -25,9 +23,8 @@ def test_autocommit_reports_false() -> None:
 
 
 def test_autocommit_getattr_default_is_false_not_none() -> None:
-    """SA characteristic probes do ``getattr(conn, 'autocommit', None)``
-    — the property must be present so the probe sees ``False``, not
-    ``None`` (which would log "autocommit unknown")."""
+    """SA's ``getattr(conn, 'autocommit', None)`` probe must see ``False``,
+    not ``None`` (which would log "autocommit unknown")."""
     assert getattr(_adapter(), "autocommit", None) is False
 
 

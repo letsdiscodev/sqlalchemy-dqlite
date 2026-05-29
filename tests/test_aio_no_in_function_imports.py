@@ -1,8 +1,6 @@
-"""Pin: ``aio.do_ping`` and the autocommit setter must not run import
-statements inside the function body. Module-level caching is fine; an
-in-function ``import`` defeats IDE introspection and adds a dict lookup
-per call (do_ping fires on every pool checkout under ``pool_pre_ping``).
-"""
+"""``aio.do_ping`` and the autocommit setter must not run import
+statements in their bodies: do_ping fires on every pool checkout under
+``pool_pre_ping``, so a per-call import lookup is hot."""
 
 from __future__ import annotations
 
@@ -15,10 +13,8 @@ import sqlalchemydqlite.aio as aio_mod
 
 
 def _function_has_import(func: Any) -> bool:
-    """Return True if the function's source body contains any ``import``
-    or ``from ... import`` statements (recursively, including nested
-    blocks).
-    """
+    """True if the function's source body contains any import statement
+    (recursive)."""
     src = textwrap.dedent(inspect.getsource(func))
     tree = ast.parse(src)
     return any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in ast.walk(tree))

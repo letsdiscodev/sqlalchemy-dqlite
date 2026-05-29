@@ -1,13 +1,7 @@
-"""Pin: ``AsyncAdaptedConnection._handle_exception`` remaps the
-``await_only`` loop-mismatch ``RuntimeError`` into
-``dbapi.OperationalError`` so the SA pool's ``is_disconnect``
-classifies it and the slot is invalidated.
+"""Pin: _handle_exception remaps the loop-mismatch RuntimeError to OperationalError.
 
-Without the remap, a bare ``RuntimeError`` escapes
-commit/rollback/execute paths; SA gates ``is_disconnect`` on
-``isinstance(e, dbapi.Error)`` so the slot is not invalidated and the
-next checkout hits the same fault.
-"""
+SA gates is_disconnect on isinstance(e, dbapi.Error), so a bare RuntimeError would
+leave the slot un-invalidated and the next checkout would hit the same fault."""
 
 from __future__ import annotations
 
@@ -19,14 +13,11 @@ from sqlalchemydqlite.base import DqliteDialect
 
 
 def _make_adapter() -> AsyncAdaptedConnection:
-    """Build a minimal ``AsyncAdaptedConnection`` without going through
-    the dialect's connect path — we only need ``_handle_exception``."""
+    """Minimal instance bypassing the connect path; only _handle_exception is needed."""
     return AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
 
 
 def test_loop_mismatch_runtime_error_remapped_to_operational_error() -> None:
-    """The exact wording asyncio emits when a future is awaited in
-    the wrong loop must be remapped."""
     adapter = _make_adapter()
     err = RuntimeError("<Future pending> attached to a different loop")
     with pytest.raises(OperationalError) as info:
@@ -37,8 +28,7 @@ def test_loop_mismatch_runtime_error_remapped_to_operational_error() -> None:
 
 
 def test_short_different_loop_wording_also_remapped() -> None:
-    """Some asyncio versions emit just "different loop" without the
-    "attached to a" prefix. Pin both spellings."""
+    """Pin both spellings: some asyncio versions omit the "attached to a" prefix."""
     adapter = _make_adapter()
     err = RuntimeError("Task got Future attached to a different loop")
     with pytest.raises(OperationalError):
@@ -46,9 +36,7 @@ def test_short_different_loop_wording_also_remapped() -> None:
 
 
 def test_unrelated_runtime_error_not_remapped() -> None:
-    """Negative pin: a generic RuntimeError must NOT be remapped — the
-    remap is for the loop-mismatch shape only. Identity passthrough
-    must preserve the type so caller's existing handlers still match."""
+    """Negative pin: a generic RuntimeError passes through unchanged (identity preserved)."""
     adapter = _make_adapter()
     err = RuntimeError("some unrelated runtime fault")
     with pytest.raises(RuntimeError) as info:
@@ -57,7 +45,6 @@ def test_unrelated_runtime_error_not_remapped() -> None:
 
 
 def test_other_exception_classes_passthrough_identity() -> None:
-    """Negative pin: ValueError, TypeError, etc. must passthrough."""
     adapter = _make_adapter()
     err = ValueError("test")
     with pytest.raises(ValueError) as info:
@@ -66,9 +53,7 @@ def test_other_exception_classes_passthrough_identity() -> None:
 
 
 def test_remapped_error_classified_as_disconnect_by_dialect() -> None:
-    """End-to-end pin: the remapped ``OperationalError`` carries the
-    "different loop" substring, and the dialect's substring fallback
-    returns True from ``is_disconnect``."""
+    """End-to-end: the remapped OperationalError classifies as disconnect via substring."""
     adapter = _make_adapter()
     err = RuntimeError("Future attached to a different loop")
     try:

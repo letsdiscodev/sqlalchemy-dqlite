@@ -1,16 +1,5 @@
-"""Pin: ``supports_sane_multi_rowcount_returning`` is NOT a real
-SA 2.x attribute. We previously pinned this name as a fourth
-rowcount-truthfulness flag — but SA only defines three. The
-pin was a decorative no-op that would have applied to a
-hypothetical future SA flag of the same name with arbitrary
-semantics; the pin was removed to keep the drift-defence
-surface aligned with reality.
-
-This test guards the dropped pin: if a future SA release
-DOES introduce the attribute, we'll see this fail and can
-make a deliberate decision about the value rather than
-inheriting a stale silent default.
-"""
+"""Pin: ``supports_sane_multi_rowcount_returning`` is not a real SA attribute.
+Guards the dropped no-op pin — fails if a future SA release introduces it."""
 
 from __future__ import annotations
 
@@ -27,16 +16,10 @@ def test_phantom_returning_flag_not_defined_in_sa_default_dialect() -> None:
 
 
 def test_real_returning_flag_remains_pinned() -> None:
-    """Pin: the REAL flag (without the ``_multi_`` infix) must
-    remain pinned on our dialect. The phantom flag was the no-op
-    sibling; the real one is load-bearing."""
+    """Pin: the real flag (no ``_multi_`` infix) stays pinned on our dialect."""
     from sqlalchemydqlite import DqliteDialect
 
     assert "supports_sane_rowcount_returning" in DqliteDialect.__dict__
     assert DqliteDialect.supports_sane_rowcount_returning is False
-    # Sanity: verify SA itself defines it (the pin is anchored to a
-    # real upstream attribute, not a phantom).
     assert hasattr(DefaultDialect, "supports_sane_rowcount_returning")
-    # Touch sqlalchemy module to keep import live in optimised builds
-    # that strip unused imports.
     assert sqlalchemy is not None

@@ -1,16 +1,6 @@
-"""``do_ping`` returns False on ``ProgrammingError`` from the dbapi.
-
-Two deterministic dbapi paths raise ``ProgrammingError`` for a slot
-that is permanently unusable by the pool:
-
-- ``AsyncConnection._ensure_locks`` when the connection is reused on
-  a different event loop.
-- ``_build_and_connect`` remapped ``ClusterPolicyError`` (addressed
-  separately, but the pool surface is the same shape).
-
-Neither is a real programmer bug on the ``SELECT 1`` query — it is a
-slot-level fault. Without this catch, the exception escapes
-``do_ping`` and SA's pool leaves the slot in a half-dead state.
+"""``do_ping`` returns False on ``ProgrammingError`` (a slot-level fault,
+e.g. cross-loop reuse) rather than letting it escape and leave SA's pool
+slot half-dead.
 """
 
 from __future__ import annotations
@@ -35,9 +25,7 @@ def test_do_ping_returns_false_on_programming_error() -> None:
 
 
 def test_do_ping_propagates_real_programmer_bug_when_close_raises_non_caught() -> None:
-    # ``TypeError`` from cursor() (not a connection-level exception) must
-    # still propagate out of do_ping — only connection-level exception
-    # classes are considered "dead socket".
+    # TypeError from cursor() is not connection-level, so it propagates.
     conn = MagicMock()
     conn.cursor.side_effect = TypeError("bad argument")
 

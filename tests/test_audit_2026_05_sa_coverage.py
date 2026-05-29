@@ -1,21 +1,4 @@
-"""Coverage gaps surfaced by the 2026-05 SA-side audit pass.
-
-Four behavioural arms that exist correctly in the source but were
-not pinned by the existing test suite — a regression in any one
-would have shipped silently:
-
-1. ``DqliteDialect_aio.do_ping`` async DatabaseError-with-disconnect-
-   code arm (CORRUPT/FORMAT/NOTADB → False; unknown code → re-raise).
-2. ``AsyncAdaptedConnection.close`` rollback-side
-   ``RuntimeError("Event loop is closed")`` debug-log arm.
-3. ``provision._format_url`` parametrised over multiple URL shapes
-   to lock URL fan-out semantics (with/without +driver suffix,
-   with/without ident).
-4. SA ``do_begin`` keeps the underlying client-layer
-   ``_in_transaction`` flag in sync — pin via a unit-level proxy
-   that asserts the BEGIN trip flips the flag through the adapter
-   chain.
-"""
+"""Coverage gaps surfaced by the 2026-05 SA-side audit pass."""
 
 import asyncio
 import logging
@@ -31,10 +14,6 @@ from sqlalchemydqlite.aio import (
     DqliteDialect_aio,
 )
 from sqlalchemydqlite.provision import _format_url
-
-# ---------------------------------------------------------------
-# 1. do_ping DatabaseError disconnect-codes arm
-# ---------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -74,19 +53,11 @@ def test_async_do_ping_database_error_unknown_code_propagates() -> None:
         dialect.do_ping(adapter)
 
 
-# ---------------------------------------------------------------
-# 2. AsyncAdaptedConnection.close rollback "Event loop is closed"
-# ---------------------------------------------------------------
-
-
 def test_close_rollback_event_loop_closed_debug_logged_proceeds_to_close(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """During engine.dispose() after asyncio.run() torn down its
-    loop, the rollback await raises RuntimeError("Event loop is
-    closed"). The has_terminate=True dialect promise says close
-    must NOT propagate, so this arm debug-logs and falls through
-    to the close arm in the finally."""
+    """has_terminate=True means close must not propagate; the rollback
+    "Event loop is closed" arm debug-logs and falls through to close."""
     adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
     inner = MagicMock()
     inner.address = "127.0.0.1:9001"
@@ -94,14 +65,12 @@ def test_close_rollback_event_loop_closed_debug_logged_proceeds_to_close(
     inner.close = AsyncMock()
     adapter._connection = inner
 
-    # Drive close() with the in_greenlet preflight bypassed so the
-    # rollback path runs.
+    # in_greenlet bypassed so the rollback path runs.
     with (
         patch("sqlalchemydqlite.aio.in_greenlet", return_value=True),
         patch("sqlalchemydqlite.aio.await_only", new=lambda c: asyncio.run(c)),
         caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.aio"),
     ):
-        # No raise; the arm absorbs and proceeds to close.
         adapter.close()
 
     debug_records = [r for r in caplog.records if r.levelname == "DEBUG"]
@@ -109,11 +78,6 @@ def test_close_rollback_event_loop_closed_debug_logged_proceeds_to_close(
     assert any("rollback raised RuntimeError" in m for m in messages), (
         f"expected rollback-side Event loop is closed DEBUG record, got {messages}"
     )
-
-
-# ---------------------------------------------------------------
-# 3. provision._format_url URL fan-out parametrisation
-# ---------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -131,12 +95,9 @@ def test_format_url_drivername_dispatch(
     driver: str | None,
     expected_drivername: str,
 ) -> None:
-    """``_format_url`` maps ``"dqlite"`` and ``"dqlitedbapi"`` driver
-    tokens to the bare ``"dqlite"`` drivername, and any other
-    driver to ``"dqlite+driver"``. Pinning here against future
-    refactors that might silently route ``"dqlitedbapi"`` to a
-    ``+dqlitedbapi`` form (which would mismatch SA's dispatch
-    table)."""
+    """``"dqlite"``/``"dqlitedbapi"`` map to bare ``"dqlite"``; any other
+    driver to ``"dqlite+driver"``. A ``+dqlitedbapi`` form would mismatch
+    SA's dispatch table."""
     parsed = make_url(input_url)
     out = _format_url(parsed, driver, "test1")
     assert out.drivername == expected_drivername
@@ -152,63 +113,39 @@ def test_format_url_preserves_host_port_and_embeds_ident() -> None:
 
 
 def test_format_url_appends_session_token_even_when_ident_is_none() -> None:
-    """ident=None means no follower-ident suffix, but the
-    session-unique token IS still appended so concurrent pytest runs
-    against the same cluster do not bleed state across runs (dqlite
-    has no DROP DATABASE primitive). Used by
-    ``_dqlite_generate_driver_url`` which only flips sync↔async,
-    not the database identity."""
+    """ident=None drops the follower-ident suffix but still appends the
+    session token, so concurrent runs against one cluster don't bleed
+    state (dqlite has no DROP DATABASE)."""
     parsed = make_url("dqlite+aio://h:9001/mydb")
     out = _format_url(parsed, "dqlitedbapi", None)
     assert out.drivername == "dqlite"
     assert out.database is not None
     assert out.database.startswith("mydb_")
-    # No follower-ident substring appended.
     assert out.database.startswith("mydb_sa_")  # session-token prefix from provision.py
 
 
 def test_format_url_does_not_double_append_session_token_in_chained_calls() -> None:
-    """SA's bootstrap calls ``_format_url`` twice along the same chain
-    (``generate_driver_url`` first with ``ident=None``, then
-    ``follower_url_from_main`` with the worker ident). The session
-    token must appear at most once in the final database name; only
-    the follower ident is appended on the second pass."""
+    """SA bootstrap calls ``_format_url`` twice on the same chain; the
+    session token must appear at most once, only the follower ident is
+    appended on the second pass."""
     from sqlalchemydqlite.provision import _SESSION_TOKEN
 
     base = make_url("dqlite://h:9001/db")
     step1 = _format_url(base, "dqlitedbapi", None)
     step2 = _format_url(step1, None, "gw0")
     assert step2.database is not None
-    # Session token appears exactly once.
     assert step2.database.count(_SESSION_TOKEN) == 1
-    # Follower ident is appended at the end.
     assert step2.database.endswith("_gw0")
 
 
-# ---------------------------------------------------------------
-# 4. do_begin keeps client-layer _in_transaction in sync
-# ---------------------------------------------------------------
-
-
 def test_do_begin_emits_begin_through_dbapi_cursor() -> None:
-    """Pin: ``DqliteDialect.do_begin`` emits ``BEGIN`` via a cursor
-    on the dbapi connection. The dbapi cursor's execute path
-    invokes the client's ``_update_tx_flags_from_sql`` which flips
-    ``_in_transaction``. A future SA refactor that bypasses the
-    cursor (e.g. opening a savepoint directly via the dbapi
-    connection.execute shortcut without going through ``BEGIN``
-    first) would silently break the lifecycle.
-
-    Unit-level pin: assert the dialect's ``do_begin`` issues
-    ``BEGIN`` SQL — without enforcing this, the wire-level
-    transaction state could drift from SA's expectations.
-    """
+    """``do_begin`` emits ``BEGIN`` via a cursor; that execute path flips
+    the client's ``_in_transaction``. Bypassing the cursor would break
+    the lifecycle."""
     from sqlalchemydqlite.base import DqliteDialect
 
     dialect = DqliteDialect()
 
-    # Build a stub dbapi-connection chain. The cursor receives
-    # ``BEGIN`` via execute().
     fake_cursor = MagicMock()
     fake_conn = MagicMock()
     fake_conn.cursor = MagicMock(return_value=fake_cursor)

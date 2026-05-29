@@ -1,26 +1,8 @@
-"""Pin the canonical event-loop-mismatch substring on is_disconnect.
+"""The canonical ``"event-loop mismatch:"`` prefix is the durable disconnect signal.
 
-Every cross-loop RuntimeError that reaches ``is_disconnect``'s
-``code=None`` ``OperationalError`` substring scan was first remapped
-by ``aio._handle_exception`` to:
-
-    OperationalError(f"event-loop mismatch: {original_msg}", code=None)
-
-The legacy substrings ``"different loop"`` and ``"different event
-loop"`` were left over from an earlier version that scanned the bare
-``RuntimeError``/``ProgrammingError`` text directly. They were both
-redundant — any match they could see today is also covered by the
-canonical ``"event-loop mismatch:"`` prefix — and both could
-false-positive against a benign user-supplied error message in a
-``code=None`` ``OperationalError`` (e.g. a custom retry decorator
-that logs a context message containing those words).
-
-Pin both directions:
-
-- the canonical remapped form is classified as disconnect;
-- a benign code=None OperationalError that happens to mention
-  "different loop" / "different event loop" without the canonical
-  prefix is NOT classified as disconnect.
+The legacy ``"different loop"`` / ``"different event loop"`` substrings were
+redundant and could false-positive on benign user message text, so only the
+prefix classifies.
 """
 
 from __future__ import annotations
@@ -30,9 +12,7 @@ from sqlalchemydqlite.base import DqliteDialect
 
 
 def test_event_loop_mismatch_remapped_form_classified_as_disconnect() -> None:
-    """The canonical ``aio._handle_exception`` remap form is matched.
-    Note the original substring still appears inside the prefix-led
-    remap; both shapes converge to the prefix."""
+    """The canonical remap form is matched."""
     dialect = DqliteDialect()
     e = _dbapi_exc.OperationalError(
         "event-loop mismatch: <Future ... attached to a different loop>",
@@ -42,9 +22,7 @@ def test_event_loop_mismatch_remapped_form_classified_as_disconnect() -> None:
 
 
 def test_event_loop_mismatch_remapped_dbapi_wording_classified() -> None:
-    """The dbapi-side wording (``"different event loop"``) is also
-    routed through the remap and prefixed; the same prefix substring
-    matches it."""
+    """The dbapi-side wording is also prefixed by the remap and matches."""
     dialect = DqliteDialect()
     e = _dbapi_exc.OperationalError(
         "event-loop mismatch: AsyncConnection ... called from a different event loop",
@@ -54,12 +32,8 @@ def test_event_loop_mismatch_remapped_dbapi_wording_classified() -> None:
 
 
 def test_user_message_with_different_loop_no_prefix_not_classified() -> None:
-    """A user-supplied OperationalError(code=None) whose text happens
-    to contain the legacy substring ``"different loop"`` (without the
-    canonical ``"event-loop mismatch:"`` prefix) MUST NOT trigger a
-    pool-invalidation. The legacy substring was load-bearing only
-    because the remap prefixed every match; the prefix itself is the
-    durable signal."""
+    """A code=None OperationalError with the legacy "different loop" text but no
+    canonical prefix MUST NOT invalidate the slot."""
     dialect = DqliteDialect()
     e = _dbapi_exc.OperationalError(
         "user-trigger said 'different loop' but everything is fine",

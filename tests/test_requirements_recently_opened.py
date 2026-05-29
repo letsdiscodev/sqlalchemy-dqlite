@@ -1,15 +1,5 @@
-"""Pin: ``Requirements`` opens the SQLite-supported SuiteRequirements
-that default to ``closed()`` upstream.
-
-Each property below is a SQL feature SQLite (and therefore dqlite)
-supports natively. Without these explicit ``exclusions.open()``
-overrides, the SA compliance suite skips every test gated on
-them — silent coverage gaps on demonstrably-supported features.
-
-If a future SA upgrade adds a new fence to one of these
-requirements, the corresponding compliance test will fail and the
-override should be re-evaluated against the new fence.
-"""
+"""Pin: ``Requirements`` opens the SQLite-supported SuiteRequirements that
+default to ``closed()`` upstream, so the suite doesn't skip supported features."""
 
 from __future__ import annotations
 
@@ -19,14 +9,11 @@ from sqlalchemydqlite.requirements import Requirements
 
 
 def _is_open(prop: compound) -> bool:
-    """An ``exclusions.open()`` instance has no enabled exclusion
-    rules; ``closed()`` has at least one. The compound's
-    ``__bool__`` returns True if it would skip — so an open
-    compound is falsy."""
-    # SA's `compound.enabled_for_config(config)` is the public
-    # check, but we don't have a config object here. Instead,
-    # inspect the internal `fails` attribute which is empty for
-    # open() and non-empty for closed().
+    """True for ``open()``: ``fails`` is empty, vs non-empty for ``closed()``.
+
+    The public ``enabled_for_config`` needs a config object we lack here, so
+    inspect the internal ``fails`` attribute instead.
+    """
     return len(prop.fails) == 0
 
 

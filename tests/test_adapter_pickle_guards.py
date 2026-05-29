@@ -1,10 +1,5 @@
-"""Pin: SA-adapter classes ``AsyncAdaptedConnection`` and
-``AsyncAdaptedCursor`` raise a clear driver-level ``TypeError`` on
-pickle / copy / deepcopy. The error message must name the
-SA-adapter class specifically — without an explicit
-``__reduce__``, the underlying dbapi class name leaks through and
-the diagnostic is a wrong-layer pointer for SA users.
-"""
+"""SA-adapter classes raise ``TypeError`` on pickle/copy/deepcopy, naming the
+adapter class (without an explicit ``__reduce__`` the dbapi class name leaks through)."""
 
 from __future__ import annotations
 

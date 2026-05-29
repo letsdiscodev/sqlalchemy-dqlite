@@ -1,21 +1,5 @@
-"""Pin: the DateTime / Date / Time result-processor DEBUG arm
-on a malformed cell is gated by ``logger.isEnabledFor(logging.DEBUG)``
-so the per-row ``_safe_for_log`` sanitiser walk does not run when
-the operator's level filters DEBUG out.
-
-The WARN arm fires once per type class (gated by
-``_unparseable_iso_warning_emitted``). The DEBUG arm previously
-fired unconditionally for every subsequent malformed cell — even
-when the handler was filtering DEBUG out. The sanitiser was
-evaluated EAGERLY as a positional ``logger.debug`` argument, so
-the cost was paid before the handler ever decided to drop the
-record.
-
-Production deployments typically run at WARNING level or higher.
-On a corrupted-column 1M-row SELECT, the prior shape burned
-~500 ms of pure-Python sanitiser CPU on the loop thread for log
-lines the handler never emitted.
-"""
+"""DEBUG arm on a malformed cell is gated by ``isEnabledFor(DEBUG)`` so the
+per-row ``_safe_for_log`` walk does not run when DEBUG is filtered out."""
 
 from __future__ import annotations
 
@@ -29,14 +13,11 @@ from sqlalchemydqlite.base import _DqliteDate, _DqliteDateTime, _DqliteTime
 
 
 def _arm_warn_one_shot(cls: type) -> None:
-    """Flip the one-shot WARN gate so the DEBUG arm is the one
-    exercised by the test."""
+    """Flip the one-shot WARN gate so the DEBUG arm is exercised."""
     cls._unparseable_iso_warning_emitted = True  # type: ignore[attr-defined]
 
 
 def _make_processor_datetime() -> Any:
-    """Build a result_processor that walks the malformed-cell path
-    on plain string input."""
     inst = _DqliteDateTime()
     return inst.result_processor(None, DATETIME)
 
@@ -52,15 +33,11 @@ def _make_processor_time() -> Any:
 
 
 def _run_processor_n_times(processor: Any, n: int) -> None:
-    """Drive the processor over N malformed values to exercise
-    the DEBUG arm."""
     for _ in range(n):
         processor("not-an-iso-string")
 
 
 def test_datetime_debug_arm_does_not_call_sanitiser_when_debug_filtered() -> None:
-    """DEBUG-filtered logger: per-row sanitiser walks must NOT run
-    on the DEBUG arm of the unparseable-ISO path."""
     _arm_warn_one_shot(_DqliteDateTime)
     processor = _make_processor_datetime()
 
@@ -75,7 +52,6 @@ def test_datetime_debug_arm_does_not_call_sanitiser_when_debug_filtered() -> Non
         patch("sqlalchemydqlite.base._safe_for_log", side_effect=counting_safe_for_log),
         patch.object(logging.getLogger("sqlalchemydqlite.base"), "level", logging.WARNING),
     ):
-        # Force the dialect logger's effective level to WARNING.
         sa_logger = logging.getLogger("sqlalchemydqlite.base")
         previous = sa_logger.level
         sa_logger.setLevel(logging.WARNING)
@@ -92,7 +68,6 @@ def test_datetime_debug_arm_does_not_call_sanitiser_when_debug_filtered() -> Non
 
 
 def test_datetime_debug_arm_calls_sanitiser_when_debug_enabled() -> None:
-    """DEBUG-enabled logger: sanitiser walks run as before."""
     _arm_warn_one_shot(_DqliteDateTime)
     processor = _make_processor_datetime()
 
@@ -143,8 +118,6 @@ def test_date_debug_arm_does_not_call_sanitiser_when_debug_filtered() -> None:
 
 def test_time_debug_arm_does_not_call_sanitiser_when_debug_filtered() -> None:
     _arm_warn_one_shot(_DqliteTime)
-    # Avoid the time-only-fromisoformat path issuing a date error;
-    # use a string that's clearly not parseable as time.
     processor = _make_processor_time()
 
     sanitiser_calls = 0

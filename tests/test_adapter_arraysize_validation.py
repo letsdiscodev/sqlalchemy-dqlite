@@ -1,11 +1,4 @@
-"""``AsyncAdaptedCursor.arraysize`` rejects ``bool`` and non-int.
-
-Accepts any int including ``0`` and negatives, matching SA's
-reference adapter (``sqlalchemy/connectors/asyncio.py``) and stdlib
-``sqlite3.Cursor.arraysize`` (both unvalidated). PEP 249 §6.2 sets
-no minimum. Bool / non-int rejection remains as a dqlite-specific
-footgun-prevention with no SA-reference sibling.
-"""
+"""``AsyncAdaptedCursor.arraysize`` rejects ``bool`` and non-int; any int is accepted."""
 
 from __future__ import annotations
 
@@ -27,7 +20,6 @@ def _make_cursor() -> AsyncAdaptedCursor:
 
 @pytest.mark.parametrize("value", [0, -1, -100])
 def test_accepts_zero_or_negative(value: int) -> None:
-    """SA-reference / stdlib parity: zero and negatives pass through."""
     cur = _make_cursor()
     cur.arraysize = value
     assert cur.arraysize == value

@@ -1,14 +1,5 @@
-"""``_dqlite_run_reap_dbs`` masks the URL password and sanitises the
-host portion of the INFO entry-line.
-
-The entry-line interpolates an SA URL via ``%s``. ``URL.__str__``
-defaults to ``render_as_string(hide_password=False)`` — the password
-becomes part of the INFO record verbatim (CWE-532). The host
-portion is operator- or peer-supplied and can carry LF / U+2028 /
-bidi / ZWSP that splits the log record (CWE-117). The fix calls
-``parsed.render_as_string(hide_password=True)`` and wraps the result
-in ``sanitize_for_log``; this test pins both halves.
-"""
+"""``_dqlite_run_reap_dbs`` masks the URL password (CWE-532) and sanitises the
+peer-supplied host portion (CWE-117) in its INFO entry-line."""
 
 from __future__ import annotations
 
@@ -21,9 +12,7 @@ import sqlalchemydqlite.provision as provision
 
 
 def test_reap_dbs_info_log_masks_url_password(caplog: Any) -> None:
-    """Pin: a URL carrying a password renders with ``***`` (the SA
-    ``hide_password=True`` mask) in the INFO record; the literal
-    password MUST NOT appear."""
+    """A password renders as ``***``; the literal password must not appear."""
     url = URL.create(
         drivername="dqlite+aio",
         username="admin",
@@ -44,9 +33,7 @@ def test_reap_dbs_info_log_masks_url_password(caplog: Any) -> None:
 
 
 def test_reap_dbs_info_log_escapes_lf_in_host(caplog: Any) -> None:
-    """Pin: an LF embedded in the host portion is escaped as the
-    two-byte sequence ``\\n`` (sanitize_for_log discipline), not
-    survived raw."""
+    """An LF in the host is escaped as ``\\n``, not survived raw."""
     malformed = URL.create(
         drivername="dqlite",
         host="evil.example.com\n[CRITICAL] forged",
@@ -65,9 +52,7 @@ def test_reap_dbs_info_log_escapes_lf_in_host(caplog: Any) -> None:
 
 
 def test_reap_dbs_info_log_credential_free_url_renders_cleanly(caplog: Any) -> None:
-    """Regression: a credential-free URL renders the host:port
-    cleanly (no ``***`` appears uselessly), preserving operator
-    diagnostics."""
+    """A credential-free URL renders host:port cleanly with no spurious ``***``."""
     url = URL.create(
         drivername="dqlite",
         host="cluster.example.com",

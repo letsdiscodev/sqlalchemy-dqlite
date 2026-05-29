@@ -1,21 +1,5 @@
-"""Pin ``set_isolation_level``'s parameter annotation to the parent
-contract's literal type.
-
-The SA parent ``Dialect.set_isolation_level`` declares
-``level: IsolationLevel`` (a ``Literal[...]`` of the five canonical
-level names) in ``sqlalchemy/engine/interfaces.py``. The pysqlite
-dialect keeps the same shape; the dqlite dialect now matches that
-shape too — the earlier ``IsolationLevel | None`` widening was load-
-bearing for a stale ``reset_isolation_level`` path that the dialect's
-local no-op override (see ``DqliteDialect.reset_isolation_level``)
-disconnects from ``set_isolation_level`` entirely. The runtime body
-rejects ``None`` with ``ArgumentError`` for defence-in-depth against
-direct callers using ``cast`` or ``# type: ignore``.
-
-Regression guard: if someone re-widens to ``str | None`` (or
-re-introduces the ``IsolationLevel | None`` widening) for ergonomics
-this test surfaces the contract drift immediately.
-"""
+"""Pin ``set_isolation_level``'s ``level`` annotation to the parent's ``IsolationLevel``, so a
+re-widening to ``IsolationLevel | None`` (or ``str | None``) trips."""
 
 from __future__ import annotations
 

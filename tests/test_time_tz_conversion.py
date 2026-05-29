@@ -1,17 +1,6 @@
-"""Pin: ``_DqliteTime.result_processor`` honours ``Time(timezone=...)``,
-mirroring ``_DqliteDateTime.result_processor``'s ``want_timezone``
-branches.
-
-- ``Time(timezone=True)`` reading a naive cell attaches UTC so
-  downstream aware-vs-aware comparisons don't crash.
-- ``Time(timezone=False)`` reading an aware cell strips tzinfo so
-  the column's contract (naive) is honoured.
-
-Bind-side handling is intentionally *not* extended (mirroring
-``_DqliteDateTime.bind_processor``, which also does not consult
-``self.timezone``); pysqlite renders Time without offset and the
-result-side normalisation is what callers actually observe.
-"""
+"""Pin: _DqliteTime.result_processor honours Time(timezone=...) (attach/strip tzinfo).
+Bind side is intentionally not extended: pysqlite renders Time without offset, so only the
+result-side normalisation is observable."""
 
 from __future__ import annotations
 
@@ -49,8 +38,7 @@ class TestDqliteTimeResultProcessorTimezone:
         assert proc(naive) == naive
 
     def test_default_timezone_is_false_strips_tzinfo(self) -> None:
-        """Time() without an explicit timezone arg defaults to
-        ``timezone=False`` (matching SA's sqltypes.Time default)."""
+        """Time() defaults to timezone=False (matching SA's sqltypes.Time default)."""
         proc = _DqliteTime().result_processor(None, None)
         assert proc is not None
         aware = datetime.time(12, 30, 45, tzinfo=datetime.UTC)

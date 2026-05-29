@@ -1,23 +1,6 @@
-"""Pin: ``AsyncAdaptedConnection.close()``'s inner-rollback
-``RuntimeError`` arm matches the loop-mismatch / event-loop-closed
-substrings case-insensitively, mirroring the sibling
-``_handle_exception`` ``.lower()`` discipline and the
-``is_disconnect`` substring scan in ``base.py``.
-
-The canonical phrases shipped by CPython today are
-``"attached to a different loop"`` and ``"Event loop is closed"``,
-but the CPython source-of-truth for both is implementation-level
-(asyncio internals), not stable documented API. A future capital-
-isation tweak between point releases would silently bypass the
-remap and let a bare ``RuntimeError`` propagate past
-``engine.dispose()``, breaking SA's ``has_terminate=True`` contract.
-
-The disconnect classifier in ``base.py::is_disconnect`` already
-lowercases its input (post-d8ecb49); ``_handle_exception`` does the
-same at ``aio.py:1004``. The inner-rollback arm at ``aio.py:1140-1153``
-was the asymmetric raw-case site; this test pins it under uppercase
-variants of both substrings.
-"""
+"""close()'s inner-rollback RuntimeError arm matches the loop-mismatch /
+event-loop-closed substrings case-insensitively: the phrases are asyncio
+internals, not stable API, so a capitalisation tweak must not bypass it."""
 
 from __future__ import annotations
 
@@ -32,9 +15,7 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection
 
 @pytest.mark.asyncio
 async def test_close_rollback_runtime_error_different_loop_uppercase_remapped() -> None:
-    """RuntimeError with uppercase ``"DIFFERENT LOOP"`` raised by the
-    rollback await must still route through ``_handle_exception``
-    (which raises OperationalError)."""
+    """Uppercase "DIFFERENT LOOP" still routes through _handle_exception."""
     adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
     inner = MagicMock()
     inner.rollback = AsyncMock(side_effect=RuntimeError("Future ... attached to a DIFFERENT LOOP"))
@@ -48,11 +29,8 @@ async def test_close_rollback_runtime_error_different_loop_uppercase_remapped() 
 
 @pytest.mark.asyncio
 async def test_close_rollback_runtime_error_event_loop_closed_uppercase_suppressed() -> None:
-    """RuntimeError with uppercase ``"EVENT LOOP IS CLOSED"`` raised
-    by the rollback await must be suppressed (debug-log + return),
-    not propagated. ``has_terminate=True`` requires dispose to stay
-    quiet on this arm. The outer close runs via the finally block
-    after the suppression returns."""
+    """Uppercase "EVENT LOOP IS CLOSED" must be suppressed (debug-log), not
+    propagated, so dispose stays quiet per has_terminate=True."""
     adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
     inner = MagicMock()
     inner.rollback = AsyncMock(side_effect=RuntimeError("EVENT LOOP IS CLOSED"))
@@ -60,5 +38,4 @@ async def test_close_rollback_runtime_error_event_loop_closed_uppercase_suppress
     inner.address = "localhost:9001"
     adapter._connection = inner
 
-    # Must not raise.
-    await greenlet_spawn(adapter.close)
+    await greenlet_spawn(adapter.close)  # must not raise

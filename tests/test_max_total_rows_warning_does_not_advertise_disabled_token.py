@@ -1,19 +1,5 @@
-"""Pin: the dialect's ``max_total_rows=none`` warning does NOT
-mention a ``=disabled`` token.
-
-The pre-fix warning text said:
-"dqlite: ``max_total_rows`` cap disabled via URL
-(``?max_total_rows=none`` or ``=disabled`` token)..."
-
-But ``_parse_url_int_or_none`` accepts ONLY the literal token
-``"none"`` (case-insensitive); ``"disabled"`` is rejected with
-``ArgumentError("must be a positive integer or 'none' to disable:
-...")``. An operator copying the WARNING text into a runbook (set
-``?max_total_rows=disabled``) hits ArgumentError at engine creation.
-
-The fix drops the ``=disabled`` mention so the warning text matches
-the parser's actual contract.
-"""
+"""Pin: the ``max_total_rows=none`` warning must not mention a ``=disabled``
+token — the parser rejects ``=disabled``, so advertising it misleads operators."""
 
 from __future__ import annotations
 
@@ -28,14 +14,9 @@ from sqlalchemydqlite.base import DqliteDialect
 def test_max_total_rows_warning_does_not_mention_disabled_token(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Trigger the warning by passing ``max_total_rows=None`` to
-    ``create_connect_args`` (the URL-parser path) and assert the
-    emitted message does NOT mention a ``=disabled`` token.
-    """
     DqliteDialect._max_total_rows_disabled_warning_emitted = False
     dialect = DqliteDialect()
 
-    # Synthesize a URL whose query yields max_total_rows=None.
     from sqlalchemy.engine import URL
 
     url = URL.create(
@@ -63,16 +44,12 @@ def test_max_total_rows_warning_does_not_mention_disabled_token(
         f"warning must still advertise the documented =none token; got: {msg!r}"
     )
 
-    # Reset the gate so other tests aren't affected.
     DqliteDialect._max_total_rows_disabled_warning_emitted = False
 
 
 def test_url_parser_rejects_disabled_token() -> None:
-    """Negative pin: the warning's wording must match parser
-    behaviour. ``?max_total_rows=disabled`` is rejected with
-    ``ArgumentError`` — so the warning's omission of ``=disabled``
-    is faithful to reality.
-    """
+    """Negative pin: ``?max_total_rows=disabled`` is rejected, so omitting it
+    from the warning is faithful to parser behaviour."""
     from sqlalchemydqlite.base import _parse_url_int_or_none
 
     with pytest.raises(sa_exc.ArgumentError, match="must be a positive integer or 'none'"):

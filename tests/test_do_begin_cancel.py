@@ -1,10 +1,5 @@
-"""Pin: ``do_begin``'s finally closes the cursor even when
-``cursor.execute("BEGIN")`` raises CancelledError.
-
-Existing tests cover OperationalError mid-BEGIN. The CancelledError
-case (greenlet-cancelled mid-BEGIN under the async dialect) was
-uncovered by the audit — this file pins it.
-"""
+"""Pin: ``do_begin``'s finally closes the cursor even when ``execute("BEGIN")`` raises
+CancelledError (greenlet-cancelled mid-BEGIN under the async dialect)."""
 
 from __future__ import annotations
 
@@ -30,11 +25,8 @@ def test_do_begin_closes_cursor_on_cancel() -> None:
 
 
 def test_do_begin_does_not_mask_begin_exception_with_close_failure() -> None:
-    """Pin: a transport-class close-time failure must NOT replace the
-    BEGIN-time exception. ``finally``'s narrow try/except for
-    DatabaseError / InterfaceError / DqliteConnectionError / OSError
-    swallows the close failure with a DEBUG log — the BEGIN exception
-    stays the active one."""
+    """A transport-class close-time failure must not replace the BEGIN-time exception (the
+    finally swallows it with a DEBUG log)."""
     from dqliteclient.exceptions import DqliteConnectionError
     from dqlitedbapi.exceptions import OperationalError
 

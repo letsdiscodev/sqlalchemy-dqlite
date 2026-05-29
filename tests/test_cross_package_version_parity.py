@@ -1,21 +1,6 @@
-"""Cross-package version parity pin.
-
-The four packages (``dqlitewire``, ``dqliteclient``, ``dqlitedbapi``,
-``sqlalchemydqlite``) are co-released on the same version cadence —
-``sqlalchemydqlite`` declares the other three as runtime dependencies
-and is the natural umbrella in the dependency graph. Each package
-already has a local ``test_version.py`` that pins its own
-``__version__`` against its own ``pyproject.toml``, but no test
-catches the case where one package's version is bumped without the
-others. This test pins inter-package agreement and lives in the
-umbrella package so a release-discipline lapse surfaces at the top
-of the stack.
-
-If a future release deliberately desynchronises versions (e.g. a
-patch-level wire fix that does not warrant a full stack revision),
-this test should be updated to reflect the new contract — not
-deleted silently.
-"""
+"""Cross-package version parity pin: the four co-released packages must
+share one version. Lives in the umbrella package (sqlalchemydqlite). If a
+release deliberately desyncs versions, update this contract, don't delete."""
 
 from __future__ import annotations
 
@@ -44,13 +29,8 @@ def test_all_four_packages_share_the_same_version() -> None:
 
 
 def _top_level_names_imported_by(downstream: ModuleType, producer: str) -> set[str]:
-    """Walk a downstream package's source tree and collect every name
-    imported from the curated ``<producer>`` top level (i.e. ``from
-    <producer> import X`` — not from any submodule like
-    ``<producer>.constants`` / ``<producer>.messages.*``). The bare
-    top-level ``from`` form is the documented stable surface; this
-    helper feeds the per-producer pin tests below.
-    """
+    """Names imported via bare ``from <producer> import X`` (not from
+    submodules) across a downstream package's source tree."""
     src_root = pathlib.Path(next(iter(downstream.__path__)))
     names: set[str] = set()
     for path in src_root.rglob("*.py"):
@@ -69,18 +49,9 @@ def _assert_top_level_imports_resolve(
     producer: ModuleType,
     downstreams: tuple[ModuleType, ...],
 ) -> None:
-    """Shared assertion body — every name imported via
-    ``from <producer> import X`` across the listed downstream
-    packages must resolve at the ``<producer>`` top level.
-
-    A name resolves when either (a) it appears in ``dir(producer)``
-    (an attribute / re-export) or (b) ``<producer>.<name>`` is itself
-    an importable submodule. Python's ``from pkg import sub`` triggers
-    the submodule import even when ``pkg.__init__`` hasn't pre-imported
-    ``sub`` — so a downstream's ``from dqlitedbapi import aio`` is a
-    valid top-level form even though ``aio`` is a subpackage rather
-    than a re-exported name.
-    """
+    """Every ``from <producer> import X`` name must resolve: either in
+    ``dir(producer)`` or as an importable submodule (``from pkg import
+    sub`` triggers the submodule import even without a re-export)."""
     import importlib
 
     available = set(dir(producer))
@@ -104,34 +75,19 @@ def _assert_top_level_imports_resolve(
 
 
 def test_wire_top_level_imports_resolve_against_current_wire() -> None:
-    """Every ``from dqlitewire import X`` across the three downstream
-    packages must resolve against wire's currently-loaded ``dir()``.
-
-    A symbol added to wire after a version bump without lifting the
-    downstream's ``dqlite-wire>=X`` floor would still satisfy this
-    in-repo test (we always import editable wire here), but it pins
-    the curated public-surface invariant: every name downstream code
-    spells under the top-level ``from dqlitewire import ...`` form is
-    an actual top-level export. The PyPI-install-time floor-match
-    half is mitigated by release discipline (always bump wire when
-    adding a public symbol consumed downstream).
-    """
+    """Every ``from dqlitewire import X`` across the downstream packages
+    must resolve against wire's top level. Pins the public-surface
+    invariant only; the editable import can't catch a missing >= floor."""
     _assert_top_level_imports_resolve(dqlitewire, (dqliteclient, dqlitedbapi, sqlalchemydqlite))
 
 
 def test_client_top_level_imports_resolve_against_current_client() -> None:
-    """Sibling pin to the wire test for the next layer up: every
-    ``from dqliteclient import X`` across the dbapi and SA packages
-    must resolve against client's ``dir()``. A future client public-
-    surface rename would otherwise drift unnoticed until import-time
-    fails downstream rather than at the producer test suite.
-    """
+    """Every ``from dqliteclient import X`` across dbapi and SA must
+    resolve against client's top level."""
     _assert_top_level_imports_resolve(dqliteclient, (dqlitedbapi, sqlalchemydqlite))
 
 
 def test_dbapi_top_level_imports_resolve_against_current_dbapi() -> None:
-    """Sibling pin to the client test for the next layer up: every
-    ``from dqlitedbapi import X`` in the SA package must resolve
-    against dbapi's ``dir()``. SA is the only direct consumer.
-    """
+    """Every ``from dqlitedbapi import X`` in SA must resolve against
+    dbapi's top level."""
     _assert_top_level_imports_resolve(dqlitedbapi, (sqlalchemydqlite,))

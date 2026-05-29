@@ -1,12 +1,5 @@
-"""DateTime / Date processors log a warning on unparseable ISO8601 strings.
-
-The column-type contract promises ``datetime.datetime`` / ``datetime.date``
-objects. A silent pass-through of a malformed ``str`` hides real
-data-integrity problems from every downstream consumer (ORM filters,
-``func.max``, serialisation, ordering). The processors keep forgiving
-the bad row (so a stray legacy value doesn't abort a full read) but
-emit a WARNING so operators can see and repair it.
-"""
+"""DateTime/Date processors forgive an unparseable ISO8601 string (return it raw)
+but log a WARNING so a silent malformed value doesn't hide data-integrity problems."""
 
 from __future__ import annotations
 
@@ -32,7 +25,6 @@ class TestDqliteDateTimeParseError:
         assert proc is not None
         with caplog.at_level(logging.WARNING, logger="sqlalchemydqlite.base"):  # type: ignore[attr-defined]
             result = proc("2024-01-02T03:04:05")
-        # A valid ISO value parses to datetime.
         import datetime as _dt
 
         assert isinstance(result, _dt.datetime)

@@ -1,15 +1,5 @@
-"""Pin: SQLAlchemy ``INSERT ... ON CONFLICT`` (UPSERT) round-trips
-correctly through the dqlite SA dialect.
-
-SQLite >= 3.24 supports the UPSERT syntax. SA's SQLite dialect
-compiles ``sqlalchemy.dialects.sqlite.insert(...).on_conflict_do_update(...)``
-/ ``on_conflict_do_nothing(...)`` to that syntax. dqlite ships
-SQLite >= 3.35, so UPSERT is supported on the server, and the SA
-dialect inherits the compiler. There was no integration test
-exercising the path end-to-end.
-
-Pin: do-nothing on existing row leaves data unchanged; do-update
-replaces; UPSERT on a non-existent row acts as plain INSERT.
+"""Pin SQLAlchemy ``INSERT ... ON CONFLICT`` (UPSERT) round-trips end-to-end
+through the dqlite SA dialect.
 """
 
 from __future__ import annotations
@@ -78,8 +68,7 @@ def test_upsert_do_update_replaces_row(
 def test_upsert_on_non_existent_row_acts_as_plain_insert(
     upsert_table: tuple[Engine, Table],
 ) -> None:
-    """UPSERT on a row that doesn't yet exist must insert. The conflict
-    branch is never reached."""
+    """UPSERT on a non-existent row inserts; the conflict branch is never reached."""
     engine, t = upsert_table
     with engine.begin() as conn:
         stmt = sqlite_insert(t).values(id=42, v="fresh").on_conflict_do_nothing()
@@ -94,17 +83,15 @@ def test_upsert_on_non_existent_row_acts_as_plain_insert(
 def test_upsert_excluded_alias_replaces_with_proposed_value(
     upsert_table: tuple[Engine, Table],
 ) -> None:
-    """The ``excluded`` alias references the proposed (rejected by
-    conflict) row's column values, so a do_update can write the
-    proposed value into the existing row without restating the
-    literal."""
+    """The ``excluded`` alias references the proposed row's values, letting
+    do_update write them into the existing row without restating the literal."""
     engine, t = upsert_table
     with engine.begin() as conn:
         conn.execute(t.insert().values(id=1, v="original"))
         stmt = sqlite_insert(t).values(id=1, v="proposed")
         stmt = stmt.on_conflict_do_update(
             index_elements=["id"],
-            set_={"v": stmt.excluded.v},  # use proposed value
+            set_={"v": stmt.excluded.v},
         )
         conn.execute(stmt)
 

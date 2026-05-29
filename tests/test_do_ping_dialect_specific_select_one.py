@@ -1,15 +1,4 @@
-"""Pin: ``do_ping`` (sync and async) routes through
-``self._dialect_specific_select_one`` rather than a hard-coded
-``"SELECT 1"`` literal.
-
-SA's ``DefaultDialect.do_ping`` (``engine/default.py:736-769``) calls
-``cursor.execute(self._dialect_specific_select_one)``. The cached
-property compiles ``select(1)`` against the dialect, so dialects can
-inject a custom rendering by overriding the property (or, for tests,
-monkeypatching it). Pinning the dispatch through the property protects
-the override from drifting back to a literal that silently bypasses
-test-harness injection and any future dqlite-specific rendering.
-"""
+"""Pin: ``do_ping`` (sync/async) dispatches through ``_dialect_specific_select_one``."""
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock

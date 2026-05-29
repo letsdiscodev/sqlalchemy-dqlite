@@ -1,13 +1,4 @@
-"""``AsyncAdaptedConnection._handle_exception`` matches SA's
-aiosqlite normalisation hook.
-
-SA's reference dialect routes every adapter-level exception through
-``_handle_exception`` so a subclass can remap driver-layer quirks in
-one place. Our adapter previously had no such hook, forcing any
-future renormalisation to touch every try-block. Default behaviour is
-identity re-raise; the test pins that contract and the subclass-remap
-extension point.
-"""
+"""``AsyncAdaptedConnection._handle_exception`` default is identity re-raise; subclasses remap."""
 
 from __future__ import annotations
 
@@ -21,8 +12,6 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection
 
 
 def _make_adapter() -> AsyncAdaptedConnection:
-    # Build an AsyncAdaptedConnection skeleton without running the
-    # constructor (the real constructor takes an AsyncConnection).
     adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
     adapter._connection = MagicMock()
     return adapter

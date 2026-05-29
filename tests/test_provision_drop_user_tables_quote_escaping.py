@@ -1,19 +1,6 @@
-"""Pin: ``_drop_user_tables`` quotes embedded ``"`` in identifiers.
-
-SQLite's identifier syntax requires that a delimited identifier
-escape an embedded ``"`` as ``""``. A table named ``foo"bar``
-(legal in SQLite because identifiers can carry arbitrary text when
-double-quoted) would otherwise render as
-``DROP TABLE IF EXISTS "foo"bar"`` — a syntax error.
-
-The per-drop ``except Exception`` swallow inside
-``_drop_user_tables`` would then mask the failure and the schema-
-reset sweep promised by the docstring ("Best-effort drop of every
-user-visible table") would silently half-complete.
-
-Pin: the DDL emitted for a quote-bearing identifier must use the
-doubled-quote escape so SQLite parses the full table name.
-"""
+"""Pin: ``_drop_user_tables`` doubles an embedded ``"`` in identifiers per
+SQLite's delimited-identifier syntax — else ``foo"bar`` yields invalid DDL
+that the per-drop swallow would silently mask."""
 
 from __future__ import annotations
 
@@ -24,8 +11,7 @@ import sqlalchemydqlite.provision as provision
 
 
 def _make_engine_with_tables(table_names: list[str]) -> MagicMock:
-    """Build a mock engine: only the ``type='table'`` SELECT returns
-    rows (the helper now queries trigger/view/index/table in turn)."""
+    """Mock engine where only the ``type='table'`` SELECT returns rows."""
 
     conn = MagicMock()
     sql_calls: list[str] = []
@@ -60,10 +46,6 @@ def _make_engine_with_tables(table_names: list[str]) -> MagicMock:
 
 
 def test_drop_escapes_embedded_double_quote_in_identifier() -> None:
-    """A table named ``foo"bar`` must be dropped as
-    ``DROP TABLE IF EXISTS "foo""bar"`` — doubled quote per SQLite's
-    delimited-identifier syntax.
-    """
     eng = _make_engine_with_tables(['foo"bar'])
     provision._drop_user_tables(eng)
 
@@ -72,9 +54,7 @@ def test_drop_escapes_embedded_double_quote_in_identifier() -> None:
 
 
 def test_drop_escapes_multiple_embedded_double_quotes() -> None:
-    """Doubling must apply to every ``"`` in the identifier, not just
-    the first occurrence.
-    """
+    """Doubling applies to every ``"``, not just the first."""
     eng = _make_engine_with_tables(['a"b"c'])
     provision._drop_user_tables(eng)
 
@@ -83,9 +63,7 @@ def test_drop_escapes_multiple_embedded_double_quotes() -> None:
 
 
 def test_drop_leaves_quote_free_identifier_unchanged() -> None:
-    """The quote-doubling step must be a no-op for the common case
-    of an identifier with no embedded ``"``.
-    """
+    """Quote-doubling is a no-op for an identifier with no embedded ``"``."""
     eng = _make_engine_with_tables(["plain"])
     provision._drop_user_tables(eng)
 

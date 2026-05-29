@@ -1,19 +1,7 @@
-"""Pin: ``SQLiteDialect_pysqlite.colspecs[sqltypes.Time]`` is the
-SQLite ``TIME`` class, NOT absent.
-
-The dialect's colspecs-block comment previously claimed "pysqlite
-has no Time colspec at all", motivating the ``sqltypes.Time:
-_DqliteTime`` override. The claim was wrong: pysqlite inherits
-``sqltypes.Time: TIME`` from ``SQLiteDialect.colspecs`` via
-``util.update_copy`` (pysqlite does not remove the entry and does
-not override). The correct rationale for the dqlite override is
-that the inherited SQLite ``TIME`` calls ``processors.str_to_time``
-on the raw cell and would raise ``TypeError`` on the already-
-decoded ``datetime.time`` instances dqlitedbapi returns.
-
-This pin defends the corrected comment from drifting back to the
-old incorrect claim.
-"""
+"""``SQLiteDialect_pysqlite.colspecs[sqltypes.Time]`` is SQLite ``TIME``,
+inherited (not absent). The dqlite override exists because that inherited
+``TIME`` calls ``str_to_time`` and would raise on the already-decoded
+``datetime.time`` dqlitedbapi returns."""
 
 from __future__ import annotations
 

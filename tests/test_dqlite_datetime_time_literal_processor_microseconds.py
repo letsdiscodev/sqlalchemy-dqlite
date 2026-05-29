@@ -1,22 +1,6 @@
-"""Pin: ``_DqliteDateTime.literal_processor`` and
-``_DqliteTime.literal_processor`` always emit the six-digit
-microsecond suffix, matching pysqlite's
-``_storage_format = "...%(microsecond)06d"`` byte-for-byte.
-
-The inherited ``sqltypes.DateTime`` / ``sqltypes.Time`` literal
-renderers delegate to ``_RenderISO8601NoT`` whose body calls
-``value.isoformat()``; that omits the fractional component when
-``microsecond == 0``. Pysqlite's ``DATETIME`` / ``TIME`` inherit
-``_DateTimeMixin.literal_processor`` which builds the literal from
-the storage format and always emits the suffix. A SQL literal of
-the form ``WHERE col = 'YYYY-MM-DD HH:MM:SS.000000'`` written by a
-pysqlite sibling does NOT match the ``'YYYY-MM-DD HH:MM:SS'`` form
-rendered by dqlite's inherited path.
-
-Cross-writer literal-string predicate matching is the SA-side
-``datetime_literals`` requirement's promise; the override closes
-the gap.
-"""
+"""Pin: ``_DqliteDateTime`` / ``_DqliteTime`` literal_processor always emit the six-digit
+microsecond suffix (matching pysqlite); the inherited isoformat path omits it at zero,
+breaking cross-writer literal-string predicate matching."""
 
 from __future__ import annotations
 
@@ -62,9 +46,6 @@ def test_time_literal_nonzero_microseconds_unchanged() -> None:
 
 
 def test_datetime_literal_widens_date_to_midnight() -> None:
-    """Cross-check: bare ``date`` rendered by the DateTime literal
-    processor widens to midnight with the .000000 suffix, mirroring
-    the bind-side widen branch."""
     proc = _datetime_literal()
     assert proc is not None
     assert proc(datetime.date(2021, 3, 15)) == "'2021-03-15 00:00:00.000000'"

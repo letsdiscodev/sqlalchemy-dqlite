@@ -1,15 +1,5 @@
-"""Pin: ``DqliteDialect_aio.connect()`` remaps loop-state RuntimeError
-shapes raised by the eager ``await_only(raw_conn.connect())`` arm to
-``dbapi.OperationalError`` — the same discipline every other
-``await_only`` site in this adapter applies.
-
-The connect path was the sole remaining ``await_only`` site that
-did NOT route through ``_handle_exception``. A
-cross-loop / closed-loop / nested-loop RuntimeError from
-``raw_conn.connect()`` would propagate bare past SA's
-``_handle_dbapi_exception`` classifier (gated on ``dbapi.Error``)
-and ``engine.dispose()`` would retain the broken slot.
-"""
+"""Pin: ``connect()`` remaps loop-state RuntimeError from ``raw_conn.connect()`` to
+``OperationalError`` so SA's disconnect classifier (gated on ``dbapi.Error``) evicts the slot."""
 
 from __future__ import annotations
 
@@ -24,8 +14,7 @@ from sqlalchemydqlite.aio import DqliteDialect_aio
 
 
 def _make_dialect_with_inner(side_effect: Exception) -> DqliteDialect_aio:
-    """Build a dialect whose ``loaded_dbapi.connect()`` returns an
-    inner whose async ``.connect()`` raises ``side_effect``."""
+    """Dialect whose inner async ``.connect()`` raises ``side_effect``."""
     dialect = DqliteDialect_aio.__new__(DqliteDialect_aio)
     inner = MagicMock()
     inner.connect = AsyncMock(side_effect=side_effect)
@@ -52,10 +41,7 @@ def _make_dialect_with_inner(side_effect: Exception) -> DqliteDialect_aio:
 async def test_connect_remaps_loop_state_runtime_error_to_operational_error(
     msg: str, expected_substring: str
 ) -> None:
-    """Each loop-state RuntimeError variant from ``raw_conn.connect()``
-    must surface as ``OperationalError`` with the canonical remap
-    substring, so SA's pool invalidates the slot rather than letting
-    the bare RuntimeError leak past ``_handle_dbapi_exception``."""
+    """Each loop-state RuntimeError surfaces as OperationalError with the remap substring."""
     dialect = _make_dialect_with_inner(RuntimeError(msg))
 
     def _do_connect() -> Any:
@@ -76,12 +62,7 @@ async def test_connect_remaps_loop_state_runtime_error_to_operational_error(
 async def test_connect_remaps_loop_state_programming_error_to_operational_error(
     msg: str, expected_substring: str
 ) -> None:
-    """The dbapi-layer ``AsyncConnection`` raises ``ProgrammingError``
-    (not ``RuntimeError``) on cross-loop reuse. The helper's filter
-    ``isinstance(hop, (RuntimeError, ProgrammingError))`` exists
-    precisely to catch this. Symmetric with the ``_handle_exception``
-    site's ProgrammingError coverage in
-    ``test_async_handle_exception_cause_walk.py``."""
+    """Cross-loop reuse raises ProgrammingError (not RuntimeError); the helper filter catches it."""
     from dqlitedbapi.exceptions import ProgrammingError as _DbapiProgrammingError
 
     dialect = _make_dialect_with_inner(_DbapiProgrammingError(msg))
@@ -95,8 +76,7 @@ async def test_connect_remaps_loop_state_programming_error_to_operational_error(
 
 @pytest.mark.asyncio
 async def test_connect_does_not_remap_unrelated_runtime_error() -> None:
-    """A RuntimeError without any loop-state substring must propagate
-    bare (matching prior behavior for the non-load-bearing path)."""
+    """A RuntimeError without a loop-state substring must propagate bare."""
     dialect = _make_dialect_with_inner(RuntimeError("some other problem"))
 
     def _do_connect() -> Any:
@@ -107,20 +87,14 @@ async def test_connect_does_not_remap_unrelated_runtime_error() -> None:
 
 
 def test_connect_helper_returns_normally_when_no_loop_state_match() -> None:
-    """Direct unit test on the remap helper: returns without raising
-    when the cause-chain carries no loop-state substring. Callers
-    must follow up with their own re-raise."""
+    """Helper returns without raising when the cause-chain has no loop-state substring."""
     from sqlalchemydqlite.aio import _remap_loop_state_runtime_error
 
-    # Non-matching message — helper returns None without raising.
     _remap_loop_state_runtime_error(RuntimeError("unrelated"))
 
 
 def test_connect_helper_walks_cause_chain() -> None:
-    """An outer exception wrapping a loop-state RuntimeError via
-    ``raise X from Y`` must still trigger the remap — the helper
-    walks the cause chain. Mirrors the discipline in base.py's
-    ``is_disconnect``."""
+    """An outer exception wrapping a loop-state RuntimeError via ``from`` must still remap."""
     from sqlalchemydqlite.aio import _remap_loop_state_runtime_error
 
     try:

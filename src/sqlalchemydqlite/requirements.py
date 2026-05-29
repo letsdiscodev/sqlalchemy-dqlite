@@ -1,14 +1,6 @@
 """SQLAlchemy test suite requirements for dqlite dialect."""
 
-# The ``exclusions.open()`` / ``closed()`` helpers are genuinely untyped
-# at their source in ``sqlalchemy.testing.exclusions``, so mypy reports
-# ``no-untyped-call`` (for the invocation) and ``no-any-return`` (for
-# the return, since the helper's inferred type is ``Any``) on every
-# single call below if we don't silence them. Narrowing each property's
-# return annotation to ``compound`` (the actual runtime type) is still
-# worthwhile — it gives IDE/hover signal and catches typos where a
-# property returns a non-``compound`` object — but the two call-site
-# silences have to stay until SA adds annotations upstream.
+# exclusions.open()/closed() are untyped upstream; silence until SA annotates them.
 # mypy: disable-error-code="no-untyped-call, no-any-return"
 
 from typing import Any
@@ -21,84 +13,38 @@ __all__ = ["Requirements"]
 
 
 class Requirements(SuiteRequirements):
-    """Test suite requirements for dqlite dialect.
-
-    Override requirements that dqlite doesn't support.
-    """
+    """Test suite requirements for dqlite dialect."""
 
     @property
     def datetime_literals(self) -> compound:
-        """SA's SQLite ``_DateTimeMixin.literal_processor`` emits
-        ISO8601 string literals (e.g. ``'2012-10-15 12:57:18'``).
-        dqlite stores them as TEXT and decodes via the same ISO8601
-        path used for parameterised binds — no extra failure surface.
-
-        The previous closure rationale ("SQLite doesn't have native
-        datetime literals") conflated "no native datetime-typed
-        literal syntax" with "the dialect can't render a literal at
-        all". SA's literal_processor side-steps that exactly by
-        rendering as a string. Verified against the live cluster
-        for ``DateTime``, ``Date``, and ``Time``."""
+        """SA renders datetime literals as ISO8601 TEXT, which dqlite round-trips."""
         return exclusions.open()
 
     @property
     def time_microseconds(self) -> compound:
-        """The dbapi's ``_iso8601_from_time`` emits microsecond
-        precision via ``.{microsecond:06d}`` and the result decoder
-        round-trips through ``time.fromisoformat`` which accepts µs
-        precision, so the dialect preserves microseconds end-to-end."""
+        """Microseconds round-trip end-to-end via ISO8601 encode/decode."""
         return exclusions.open()
 
     @property
     def datetime_historic(self) -> compound:
-        """SA's default SQLite DATETIME storage format is TEXT/ISO8601
-        (``%Y-%m-%d %H:%M:%S.%f``), which has no lower bound. Verified
-        against the live cluster: ``datetime(1850, 11, 10, 11, 52, 35)``
-        round-trips losslessly.
-
-        The base ``SuiteRequirements`` default (``closed()``) is
-        conservative for backends that store datetimes as int ticks
-        (Unix-time integer with a 1970 floor); SQLite text storage
-        doesn't share that limit. The previous closure rationale
-        ("SQLite date range limitation") was wrong — it described a
-        constraint that doesn't apply to SA's default SQLite storage
-        format."""
+        """SQLite stores datetimes as ISO8601 TEXT (no lower bound); base default
+        closed() targets int-tick backends with a 1970 floor, which doesn't apply."""
         return exclusions.open()
 
     @property
     def date_historic(self) -> compound:
-        """Same rationale as :attr:`datetime_historic` — SA's SQLite
-        DATE storage is TEXT/ISO8601, no lower bound. Verified
-        against the live cluster: ``date(1727, 6, 11)`` round-trips
-        losslessly. SA's base ``SuiteRequirements`` default is
-        ``closed()`` (conservative for int-tick storage backends);
-        opening here is the symmetric fix to the
-        ``datetime_historic`` opening above."""
+        """Same as datetime_historic: SQLite DATE is ISO8601 TEXT, no lower bound."""
         return exclusions.open()
 
     @property
     def datetime_timezone(self) -> compound:
-        """Target dialect supports timezone-aware ``datetime`` values.
-
-        ``_DqliteDateTime.result_processor`` honours the type's
-        ``timezone`` flag and re-attaches UTC for naive cells / converts
-        through UTC for non-UTC inputs (see ``base.py``). ISO8601 TEXT
-        storage round-trips the offset.
-
-        SA's ``SuiteRequirements`` default is ``closed()``; opening
-        here exercises the compliance suite's tz battery (e.g.
-        ``DateTimeTZTest``) against the dialect's tz round-trip
-        instead of skipping silently."""
+        """tz-aware datetimes: _DqliteDateTime honours the timezone flag and
+        ISO8601 TEXT round-trips the offset."""
         return exclusions.open()
 
     @property
     def time_timezone(self) -> compound:
-        """Target dialect supports timezone-aware ``time`` values.
-
-        Symmetric with :attr:`datetime_timezone` — ``_DqliteTime``
-        handles tz-aware times via the same ISO8601 path. SA's base
-        default is ``closed()``; opening here unlocks the compliance
-        suite's ``TimeTZTest`` cases."""
+        """tz-aware times via the same ISO8601 path as datetime_timezone."""
         return exclusions.open()
 
     @property
@@ -118,57 +64,15 @@ class Requirements(SuiteRequirements):
 
     @property
     def skip_autocommit_rollback(self) -> compound:
-        """Open so the SA compliance suite's autocommit-rollback
-        fast-path tests run; the dialect's ``detect_autocommit_setting``
-        returns False unconditionally (see
-        :meth:`DqliteDialect.detect_autocommit_setting` at
-        ``base.py``), so the fast-path itself never fires through
-        this dialect. Opening the requirement exercises SA's
-        surrounding skip-detection machinery (the fast-path tests
-        run no-op-equivalent against our slow-path) for cross-
-        version SA compatibility coverage.
-
-        Regression-catch for ``detect_autocommit_setting`` itself
-        — a future change wrongly returning True would silently
-        break SA-managed transactional atomicity — is NOT in scope
-        here; pinned by the dedicated unit test
-        ``tests/test_detect_autocommit_setting.py``.
-        """
+        """Open so the suite's autocommit-rollback tests run; detect_autocommit_setting
+        returns False, so the fast-path never fires through this dialect."""
         return exclusions.open()
 
     @property
     def temp_table_reflection(self) -> compound:
-        """SA's ``_default_multi_reflect`` (engine/default.py) routes
-        ``ObjectScope.DEFAULT`` through ``get_table_names``
-        (``sqlite_master``) and ``ObjectScope.TEMPORARY`` through
-        ``get_temp_table_names`` (``sqlite_temp_master``), keeping
-        the two scopes segregated. The pysqlite reflection methods
-        we inherit from ``SQLiteDialect_pysqlite`` implement both
-        correctly and dqlite serves both relations identically to
-        SQLite — verified at two levels:
-
-        * SQL-surface: ``sqlite_temp_master`` and
-          ``PRAGMA temp.table_info`` work end-to-end against the
-          cluster.
-        * Scoping (load-bearing for xdist): TEMP TABLE creates are
-          per-connection, NOT shared across wire connections — see
-          ``tests/integration/test_temp_table_scoping_per_connection.py``
-          for the live cross-connection isolation pin. Without that
-          scoping, parallel xdist workers would corrupt each
-          other's ``sqlite_temp_master`` reflection.
-
-        The full ``ComponentReflectionTest`` battery — single-table
-        temp reflection plus the temp-scope ``test_get_multi_*``
-        parametrize variants — passes when this is opened together
-        with ``temp_table_names`` and ``has_temp_table`` (see
-        overrides below)."""
+        """Temp-table reflection works; TEMP creates are per-connection (load-bearing
+        for xdist worker isolation of sqlite_temp_master)."""
         return exclusions.open()
-
-    # --- Baseline declarations mirroring SQLite behavior ------------
-    # These don't change the effective default (SuiteRequirements already
-    # returns exclusions.open() for most), but make the dqlite contract
-    # explicit so a future maintainer running the SQLAlchemy compliance
-    # suite has a single source of truth to adjust.
 
     @property
     def ctes(self) -> compound:
@@ -237,21 +141,12 @@ class Requirements(SuiteRequirements):
 
     @property
     def temp_table_names(self) -> compound:
-        """SQLite (and dqlite) supports listing temporary table
-        names via ``sqlite_temp_master``. SA's base default is
-        ``closed()``; opening here is required so the suite's
-        ``test_get_multi_*`` tests under ``ObjectScope.TEMPORARY``
-        receive the temp-table dimension in their expected
-        results (see ``test_reflection.py::_resolve_names``)."""
+        """Listing temp table names via sqlite_temp_master."""
         return exclusions.open()
 
     @property
     def has_temp_table(self) -> compound:
-        """SQLite (and dqlite) supports checking a single temp
-        table via ``PRAGMA temp.table_info(...)``. SA's base
-        default is ``closed()``; we have the capability so we
-        open it for parity with the rest of the temp-table
-        reflection contract."""
+        """Checking a single temp table via PRAGMA temp.table_info(...)."""
         return exclusions.open()
 
     @property
@@ -261,8 +156,7 @@ class Requirements(SuiteRequirements):
 
     @property
     def sane_rowcount(self) -> compound:
-        """UPDATE / DELETE rowcount is truthful. dqlite forwards the server's
-        sqlite3_changes() verbatim via ResultResponse.rows_affected."""
+        """Rowcount forwards the server's sqlite3_changes() via rows_affected."""
         return exclusions.open()
 
     @property
@@ -284,80 +178,33 @@ class Requirements(SuiteRequirements):
 
     @property
     def independent_connections(self) -> compound:
-        """dqlite's Raft consensus gives every connection an independent
-        transactional view of the database — concurrent connections do
-        not share cache state, so the compliance suite's two-connection
-        visibility checks pass unchanged."""
+        """Raft gives each connection an independent transactional view (no shared cache)."""
         return exclusions.open()
 
     @property
     def reflects_pk_names(self) -> compound:
-        """SQLite (and therefore dqlite) reflects explicitly-named PK
-        constraints — ``CONSTRAINT email_ad_pk PRIMARY KEY (...)`` is
-        round-trippable through ``insp.get_pk_constraint``. The base
-        ``SuiteRequirements`` default is ``closed()`` (most RDBMS do
-        not preserve PK names through reflection); override here so
-        the suite's ``fail_if(reflects_pk_names)`` block correctly
-        asserts the name comes back rather than xfailing."""
+        """SQLite reflects explicitly-named PK constraints; base default is closed()."""
         return exclusions.open()
 
     @property
     def parens_in_union_contained_select_w_limit_offset(self) -> compound:
-        """SQLite (and therefore dqlite) rejects parenthesised
-        SELECTs inside UNION when LIMIT/OFFSET is present:
-        ``(SELECT ... LIMIT N) UNION (SELECT ... LIMIT N)`` raises
-        ``near "UNION": syntax error``. The base requirement is
-        ``open()``; close it for dqlite parity with SQLite's
-        documented limitation."""
+        """SQLite rejects parenthesised SELECTs in UNION with LIMIT/OFFSET."""
         return exclusions.closed()
 
     @property
     def parens_in_union_contained_select_wo_limit_offset(self) -> compound:
-        """SQLite (and therefore dqlite) rejects parenthesised
-        SELECTs inside UNION when LIMIT/OFFSET is NOT present:
-        ``(SELECT ...) UNION (SELECT ...)`` raises
-        ``near "UNION": syntax error``. The base requirement is
-        ``open()``; close it for dqlite parity with SQLite's
-        documented limitation."""
+        """SQLite rejects parenthesised SELECTs in UNION even without LIMIT/OFFSET."""
         return exclusions.closed()
 
     @property
     def implicitly_named_constraints(self) -> compound:
-        """SQLite (and therefore dqlite) does NOT implicitly name
-        UNIQUE / CHECK / FK constraints — ``PRAGMA foreign_key_list()``
-        and ``PRAGMA index_list()`` return ``None`` / empty strings
-        for the constraint name when the DDL omitted it. The base
-        ``SuiteRequirements`` default is ``open()`` (most RDBMS DO
-        synthesise names); override here so the suite's
-        ``fail_if(implicitly_named_constraints)`` blocks correctly
-        xfail the assertion that names are non-None on auto-named
-        SQLite constraints."""
+        """SQLite does NOT implicitly name UNIQUE/CHECK/FK constraints; base is open()."""
         return exclusions.closed()
 
     @property
     def schemas(self) -> compound:
-        """SQLite supports schema-qualified table names via
-        ``ATTACH DATABASE <file> AS <schema>``; dqlite does NOT.
-
-        The pysqlite reference hook attaches a sidecar SQLite file
-        as the ``test_schema`` schema via a ``connect``-event listener.
-        dqlite has no equivalent: the cluster-side ``ATTACH`` would
-        need to bind a second cluster database, but the protocol
-        opens one database per ``DqliteConnection`` — there is no
-        runtime path to materialise a second database object on the
-        same socket. The compliance suite's schema-qualified DDL
-        (e.g. ``CREATE TABLE test_schema.users (...)``) therefore
-        fails with ``unknown database test_schema``.
-
-        Mark schemas closed until either:
-        1. dqlite gains a multi-database-per-connection primitive, or
-        2. The provision module grows a sidecar ATTACH path that
-           opens an in-process SQLite file (loses cluster semantics
-           but unlocks the suite's schema tests).
-
-        Closing skips ~700 schema-qualified compliance tests; the
-        ones that exercise pure-default-schema behaviour continue
-        to run."""
+        """No ATTACH DATABASE: the protocol opens one database per connection, so
+        schema-qualified names cannot bind a second database."""
         return exclusions.closed()
 
     @property
@@ -378,111 +225,58 @@ class Requirements(SuiteRequirements):
 
     @property
     def order_by_label_with_expression(self) -> compound:
-        """``ORDER BY <label>`` where the label refers back to an
-        expression in the SELECT list — SQLite allows this; dqlite
-        inherits. Re-pin locally so an upstream SQLiteDialect flip
-        cannot silently skip these compliance cases."""
+        """ORDER BY <label> referring to a SELECT-list expression."""
         return exclusions.open()
 
     def get_order_by_collation(self, config: Any) -> str:
-        """SQLite supports ``ORDER BY <col> COLLATE NOCASE``; dqlite
-        inherits. The base ``SuiteRequirements`` raises
-        ``NotImplementedError`` here, which makes the
-        ``order_by_collation`` requirement skip ``CollateTest``. Return
-        a real collation so those cases run — the SQLite dialect's own
-        test requirements return ``NOCASE`` too."""
+        """Real collation so CollateTest runs (base raises NotImplementedError)."""
         return "NOCASE"
 
     @property
     def cross_schema_fk_reflection(self) -> compound:
-        """SQLite's FK reflection is single-schema only — ``ATTACH``ed
-        schemas do not surface cross-schema FK relationships through
-        ``PRAGMA foreign_key_list``. dqlite inherits the limitation."""
+        """SQLite FK reflection is single-schema only (PRAGMA foreign_key_list)."""
         return exclusions.closed()
 
     @property
     def regexp_match(self) -> compound:
-        """The portable ``col.regexp_match(pattern)`` operator compiles
-        to ``col REGEXP ?``, which SQLite dispatches to a user-defined
-        ``regexp`` function. pysqlite registers that function via
-        ``dbapi_connection.create_function`` on every new connection
-        (see ``SQLiteDialect_pysqlite.on_connect``); dqlite is a network
-        DBAPI and has no ``create_function`` hook — registering a
-        server-side function would require persisting into Raft state
-        across all nodes, which is not part of the dqlite protocol.
-
-        Running the compliance suite's ``regexp_match`` cases against
-        dqlite would therefore hit ``OperationalError: no such function:
-        regexp``. Close the requirement so the suite skips those cases
-        instead of failing.
-        """
+        """REGEXP needs a UDF via create_function, which the dqlite network DBAPI
+        has no hook for."""
         return exclusions.closed()
 
     @property
     def insert_executemany_returning(self) -> compound:
-        """INSERT ... RETURNING with executemany() — dqlite supports
-        it via the dialect pin ``insert_executemany_returning = True``
-        (see ``base.py``) and the ``test_bulk_dml_returning.py``
-        integration test. SA's default returns
-        ``only_if(dialect.insert_executemany_returning)`` — so this
-        is already effective-open via the dialect flag, but the
-        explicit declaration is drift-defense (mirrors the pattern
-        used by ``insert_returning`` / ``update_returning`` /
-        ``delete_returning`` above).
-        """
+        """INSERT ... RETURNING with executemany()."""
         return exclusions.open()
 
     @property
     def empty_inserts_executemany(self) -> compound:
-        """``INSERT DEFAULT VALUES`` with executemany(). SA's default
-        returns ``self.empty_inserts``, which we already declare as
-        open above. Pinning this explicitly makes the contract
-        explicit at the executemany site for future maintainers."""
+        """INSERT DEFAULT VALUES with executemany()."""
         return exclusions.open()
 
     @property
     def ctes_with_update_delete(self) -> compound:
-        """CTEs riding a normal UPDATE / DELETE. SQLite >= 3.35 (the
-        minimum dqlite ships) supports ``WITH ... UPDATE`` and
-        ``WITH ... DELETE``. SA's base default is ``closed()`` —
-        explicitly opening this is the only behaviour-changing
-        declaration in this set."""
+        """WITH ... UPDATE/DELETE; SQLite >= 3.35 (dqlite minimum)."""
         return exclusions.open()
 
     @property
     def foreign_key_ddl(self) -> compound:
-        """FOREIGN KEY DDL phrases. SQLite supports the syntax;
-        dqlite inherits. The existing
-        ``foreign_key_constraint_reflection`` declaration implies
-        this; pin it explicitly for grep parity."""
+        """FOREIGN KEY DDL phrases."""
         return exclusions.open()
 
     @property
     def named_constraints(self) -> compound:
-        """Named ``UNIQUE`` / ``CHECK`` / ``PRIMARY KEY`` /
-        ``FOREIGN KEY`` constraints in DDL. SQLite-native; dqlite
-        inherits."""
+        """Named UNIQUE/CHECK/PRIMARY KEY/FOREIGN KEY constraints in DDL."""
         return exclusions.open()
 
     @property
     def unicode_connections(self) -> compound:
-        """Non-ASCII bind / result data. dqlite's wire protocol is
-        UTF-8 end to end; the dbapi cursors return native ``str`` for
-        TEXT columns. The existing ``unicode_ddl`` declaration
-        implies the connection-level support; pin it explicitly."""
+        """Non-ASCII bind/result data; the wire protocol is UTF-8 end to end."""
         return exclusions.open()
 
     @property
     def graceful_disconnects(self) -> compound:
-        """``InterfaceError`` on closed-connection ``execute()`` — the
-        dbapi (sync and async) raises per PEP 249, and the SA adapter
-        layer honours that. Existing tests pin every branch of
-        ``_check_in_use`` and the closed-state PEP 249 contracts."""
+        """InterfaceError on closed-connection execute() per PEP 249."""
         return exclusions.open()
-
-    # SuiteRequirements properties below default to ``closed()`` upstream;
-    # opening them adds compliance-suite coverage for SQL features that
-    # SQLite (and therefore dqlite) supports natively.
 
     @property
     def nullsordering(self) -> compound:
@@ -508,52 +302,24 @@ class Requirements(SuiteRequirements):
         SQLite 3.3+ supports."""
         return exclusions.open()
 
-    # --- Capability declarations for SA-default-closed requirements ----
-    # These four batches mirror the upstream
-    # ``sqlalchemy.testing.requirements.SuiteRequirements`` defaults
-    # that closed silently for features dqlite actually supports
-    # (SQLite ≥ 3.35 / JSON1 / dqlite wire codec). Declare each
-    # explicitly so the SA compliance suite exercises the capability
-    # rather than skipping with the silent upstream default. Closed
-    # entries name the dialect-specific reason (UDF primitive,
-    # SQLite operator absence, etc.) so the skip message in
-    # compliance-suite output is informative.
-
-    # --- JSON1 capabilities (SQLite >= 3.9; dqlite-server ships it) ----
-
     @property
     def json_type(self) -> compound:
-        """dqlite's server-side SQLite is built with JSON1 enabled
-        (the default for SQLite ≥ 3.9, which dqlite requires). The
-        wire codec round-trips JSON strings end-to-end via the TEXT
-        affinity path; the inherited ``SQLiteDialect`` JSON colspecs
-        compile to SQLite's ``json_extract`` / ``json_array`` /
-        ``json_object`` functions natively."""
+        """Server-side SQLite has JSON1 enabled (default for SQLite >= 3.9)."""
         return exclusions.open()
 
     @property
     def json_array_indexes(self) -> compound:
-        """SQLite JSON1 supports numeric array indexes via
-        ``json_extract(col, '$[0]')``; inherited from
-        ``SQLiteDialect``."""
+        """JSON1 numeric array indexes via json_extract(col, '$[0]')."""
         return exclusions.open()
-
-    # --- UUID / computed columns / identity / lastrowid ----------------
 
     @property
     def uuid_data_type(self) -> compound:
-        """SA's ``Uuid`` colspec round-trips through BLOB storage on
-        SQLite-flavoured dialects; dqlite's wire codec preserves
-        BLOB cells verbatim."""
+        """Uuid round-trips through BLOB storage; the wire codec preserves BLOB cells."""
         return exclusions.open()
 
     @property
     def computed_columns(self) -> compound:
-        """SQLite ≥ 3.31 supports ``GENERATED ALWAYS AS (...) STORED |
-        VIRTUAL``, and the inherited SQLite reflection round-trips the
-        GENERATED column metadata (``sqltext`` / ``persisted``) over
-        dqlite — ``ComputedReflectionTest`` passes. Matches the SQLite
-        dialect, which enables this for SQLite ≥ 3.31."""
+        """GENERATED ALWAYS AS columns; SQLite >= 3.31."""
         return exclusions.open()
 
     @property
@@ -566,10 +332,7 @@ class Requirements(SuiteRequirements):
 
     @property
     def computed_columns_default_persisted(self) -> compound:
-        # A GENERATED column with no STORED/VIRTUAL keyword reflects as
-        # ``persisted=False`` on SQLite/dqlite; SA only declares this
-        # requirement for backends where the default is persisted
-        # (PostgreSQL). Kept closed to match the SQLite dialect.
+        # GENERATED without STORED/VIRTUAL reflects as persisted=False on SQLite.
         return exclusions.closed()
 
     @property
@@ -578,152 +341,92 @@ class Requirements(SuiteRequirements):
 
     @property
     def autoincrement_without_sequence(self) -> compound:
-        """SQLite uses ``INTEGER PRIMARY KEY AUTOINCREMENT`` directly;
-        no separate sequence object."""
+        """INTEGER PRIMARY KEY AUTOINCREMENT; no separate sequence object."""
         return exclusions.open()
 
     @property
     def dbapi_lastrowid(self) -> compound:
-        """``Cursor.lastrowid`` is implemented on the dqlite dbapi
-        cursor and survives ``cursor.close()`` (matching stdlib
-        ``sqlite3.Cursor``), so SQLAlchemy's ``CursorResult.lastrowid``
-        — which reads ``cursor.lastrowid`` lazily after the cursor is
-        closed — returns the real rowid after an INSERT. Open: the
-        SQLite reference (pysqlite/aiosqlite) opens this too."""
+        """Cursor.lastrowid survives cursor.close(), which SA's CursorResult relies on
+        (it reads lastrowid lazily after close)."""
         return exclusions.open()
 
     @property
     def supports_lastrowid(self) -> compound:
-        """See ``dbapi_lastrowid`` above; the dialect's
-        ``postfetch_lastrowid`` is True and ``cursor.lastrowid`` is
-        readable after close, so lastrowid-based PK recovery works."""
+        """See dbapi_lastrowid; lastrowid-based PK recovery works."""
         return exclusions.open()
 
     @property
     def identity_columns(self) -> compound:
-        """SQLite does NOT support SQL-standard ``GENERATED ... AS
-        IDENTITY`` syntax — it uses ``INTEGER PRIMARY KEY
-        AUTOINCREMENT`` instead. Closed deliberately; the SA
-        compliance suite's ``IdentityTest`` cases expect this for
-        SQLite-flavoured dialects."""
+        """SQLite has no GENERATED ... AS IDENTITY; uses INTEGER PRIMARY KEY
+        AUTOINCREMENT instead."""
         return exclusions.closed()
-
-    # --- check_constraint / recursive_fk / tuple_in / values / fetch_first ---
 
     @property
     def check_constraint_reflection(self) -> compound:
-        """SQLite stores CHECK constraints in ``sqlite_master.sql``;
-        the inherited ``SQLiteDialect.get_check_constraints`` parses
-        them back, and the reflection round-trips over dqlite. Matches
-        the SQLite dialect, which enables this. (The ``use_schema=True``
-        compliance variants are skipped separately in the compliance
-        conftest because dqlite has no schemas, not via this flag.)"""
+        """CHECK constraints reflected from sqlite_master.sql."""
         return exclusions.open()
 
     @property
     def recursive_fk_cascade(self) -> compound:
-        """``ON DELETE CASCADE`` on a self-referential FK works on
-        SQLite ≥ 3.6.19 (``recursive_triggers`` PRAGMA defaults on
-        for FK actions). dqlite inherits."""
+        """ON DELETE CASCADE on a self-referential FK; SQLite >= 3.6.19."""
         return exclusions.open()
 
     @property
     def tuple_in(self) -> compound:
-        """``WHERE (x, y) IN ((1, 2), (3, 4))`` works on SQLite ≥
-        3.0."""
+        """WHERE (x, y) IN ((1, 2), (3, 4)); SQLite >= 3.0."""
         return exclusions.open()
 
     @property
     def table_value_constructor(self) -> compound:
-        """SQLite ≥ 3.0 accepts ``VALUES (1, 2), (3, 4)`` as a
-        row-source, but SA's compliance suite emits a
-        ``Tuple``-bound IN comparison whose compiled form combines
-        VALUES with a CTE shape SQLite does not fully accept on
-        every test platform. Closed pending a tighter pin of the
-        compiled SQL on this dialect; underlying VALUES clause
-        works in user SQL."""
+        """Closed: the suite's compiled VALUES+CTE shape isn't accepted everywhere,
+        though the bare VALUES clause works in user SQL."""
         return exclusions.closed()
 
     @property
     def fetch_first(self) -> compound:
-        """SQLite ≥ 3.35 nominally accepts the ``FETCH FIRST n
-        ROWS`` syntax, but SA's compliance suite generates the SQL
-        through its compiler that emits ``LIMIT``/``OFFSET`` for
-        SQLite-flavoured dialects regardless of the requirement
-        flag. The resulting tests probe behaviour that compiles
-        but does not exercise FETCH FIRST on this dialect. Closed
-        so the compliance harness does not run no-op coverage
-        labelled as fetch_first."""
+        """Closed: SA's compiler emits LIMIT/OFFSET for SQLite, so these tests
+        never actually exercise FETCH FIRST."""
         return exclusions.closed()
 
     @property
     def server_defaults(self) -> compound:
-        """``column DEFAULT (expression)`` is server-evaluated;
-        SQLite supports it and dqlite inherits."""
+        """column DEFAULT (expression) is server-evaluated."""
         return exclusions.open()
 
     @property
     def expression_server_defaults(self) -> compound:
-        """``column DEFAULT (3 * 5)`` — a server-evaluated *expression*
-        default, not just a literal. SQLite supports expression
-        defaults and reflects them, so the expression variants of the
-        server-default reflection tests run (the sibling
-        ``server_defaults`` is already open)."""
+        """column DEFAULT (3 * 5) — a server-evaluated expression default."""
         return exclusions.open()
 
     @property
     def float_or_double_precision_behaves_generically(self) -> compound:
-        """SQLite stores every REAL as an 8-byte IEEE-754 double
-        regardless of a declared ``Float(p)`` / ``Double(p)`` precision,
-        so the precision argument does not truncate — generic float
-        behavior. The reference SQLite dialect opens this; dqlite
-        inherits. Un-skips the ``Double(53)`` / ``Float(8)`` variants of
-        ``ReturningTest::test_insert_w_floats``."""
+        """SQLite stores every REAL as an 8-byte double, so Float(p)/Double(p)
+        precision does not truncate."""
         return exclusions.open()
 
     @property
     def foreign_key_constraint_name_reflection(self) -> compound:
-        """dqlite reflects an explicit FOREIGN KEY constraint name from
-        ``sqlite_master.sql`` (e.g. ``get_foreign_keys`` returns the
-        declared ``name``). SQLite supports this and the reference
-        dialect opens it; dqlite inherits, so ``LongNameBlowoutTest``
-        actually asserts the reflected FK name instead of skipping the
-        comparison."""
+        """Explicit FK constraint name reflected from sqlite_master.sql."""
         return exclusions.open()
 
     @property
     def percent_schema_names(self) -> compound:
-        """``%`` and spaces in table/column names round-trip via SQLite
-        identifier quoting (this requirement is about quoted identifiers,
-        not DB schemas, despite the name). The reference SQLite dialect
-        opens it; dqlite inherits the conservative base-closed default.
-        Opening it un-skips ``PercentSchemaNamesTest``."""
+        """% and spaces in quoted identifiers (the name is misleading: not DB schemas)."""
         return exclusions.open()
 
     @property
     def comment_reflection(self) -> compound:
-        """SQLite does NOT support inline column comments; the
-        ``sqlite_master.sql`` round-trip does not preserve any
-        out-of-band comment column. Closed by design — the explicit
-        declaration encodes the audit intent so a later sweep does
-        not repeatedly re-discover the gap."""
+        """SQLite has no inline column comments to reflect."""
         return exclusions.closed()
-
-    # --- SQLite-specific feature markers (operators / indexes) --------
 
     @property
     def indexes_with_expressions(self) -> compound:
-        """SQLite ≥ 3.9 supports indexes on expressions:
-        ``CREATE INDEX ix ON t(lower(col))``. dqlite inherits."""
+        """Indexes on expressions, e.g. CREATE INDEX ix ON t(lower(col)); SQLite >= 3.9."""
         return exclusions.open()
 
     @property
     def reflect_tables_no_columns(self) -> compound:
-        """SQLite's parser rejects ``CREATE TABLE t()`` with
-        ``near ")": syntax error`` — a zero-column table cannot be
-        provisioned, so the reflection round-trip cannot run.
-        Closed; the test gap is upstream-SQLite, not dqlite-
-        specific."""
+        """SQLite's parser rejects CREATE TABLE t(); a zero-column table can't exist."""
         return exclusions.closed()
 
     @property
@@ -734,13 +437,7 @@ class Requirements(SuiteRequirements):
 
     @property
     def regexp_replace(self) -> compound:
-        """Same rationale as :py:attr:`regexp_match`: SQLite's
-        ``regexp_replace`` requires a UDF registered via
-        ``Connection.create_function``; the dqlite wire protocol has
-        no UDF primitive. Declared closed explicitly so the
-        dqlite-specific rejection rationale is visible in
-        compliance-suite skip messages rather than relying on the
-        silent upstream default."""
+        """Needs a UDF via create_function, like regexp_match; dqlite has no hook."""
         return exclusions.closed()
 
     @property
@@ -760,11 +457,7 @@ class Requirements(SuiteRequirements):
 
     @property
     def supports_bitwise_xor(self) -> compound:
-        """SQLite has no native XOR operator, but SA compiles
-        ``bitwise_xor`` to the ``(a | b) & ~(a & b)`` fallback, which
-        runs over dqlite — ``BitwiseTest``'s XOR variant passes. Matches
-        the SQLite dialect, which enables this (it only fails on
-        Oracle < 21)."""
+        """No native XOR; SA compiles to the (a | b) & ~(a & b) fallback."""
         return exclusions.open()
 
     @property
@@ -774,89 +467,66 @@ class Requirements(SuiteRequirements):
 
     @property
     def infinity_floats(self) -> compound:
-        """SQLite stores IEEE 754 infinities; the wire codec
-        preserves them via ``struct.pack/unpack('<d')``."""
+        """IEEE 754 infinities preserved via the wire codec's struct '<d' packing."""
         return exclusions.open()
 
     @property
     def ctes_with_values(self) -> compound:
-        """``WITH cte AS (VALUES ...)`` — SQLite ≥ 3.8.3 supports a
-        VALUES row-source inside a CTE; matches the SQLite dialect.
-        (Companion to the already-open ``ctes`` /
-        ``ctes_with_update_delete``.)"""
+        """WITH cte AS (VALUES ...); SQLite >= 3.8.3."""
         return exclusions.open()
 
     @property
     def update_from(self) -> compound:
-        """``UPDATE ... FROM`` — SQLite ≥ 3.33 supports it; dqlite
-        ships SQLite ≥ 3.35. Matches the SQLite dialect."""
+        """UPDATE ... FROM; SQLite >= 3.33."""
         return exclusions.open()
 
     @property
     def foreign_key_constraint_option_reflection_ondelete(self) -> compound:
-        """Reflection of a foreign key's ``ON DELETE`` action via the
-        inherited ``PRAGMA foreign_key_list``. dqlite does not enforce
-        foreign keys by default, but the declared action still
-        round-trips through reflection. Matches the SQLite dialect."""
+        """ON DELETE action reflected via PRAGMA foreign_key_list (dqlite doesn't
+        enforce FKs by default, but the declared action still round-trips)."""
         return exclusions.open()
 
     @property
     def foreign_key_constraint_option_reflection_onupdate(self) -> compound:
-        """Reflection of a foreign key's ``ON UPDATE`` action; see
-        :meth:`foreign_key_constraint_option_reflection_ondelete`."""
+        """ON UPDATE action reflected; see foreign_key_constraint_option_reflection_ondelete."""
         return exclusions.open()
 
     @property
     def fk_constraint_option_reflection_ondelete_noaction(self) -> compound:
-        """Reflection of ``ON DELETE NO ACTION``; see
-        :meth:`foreign_key_constraint_option_reflection_ondelete`."""
+        """ON DELETE NO ACTION; see foreign_key_constraint_option_reflection_ondelete."""
         return exclusions.open()
 
     @property
     def fk_constraint_option_reflection_ondelete_restrict(self) -> compound:
-        """Reflection of ``ON DELETE RESTRICT``; see
-        :meth:`foreign_key_constraint_option_reflection_ondelete`."""
+        """ON DELETE RESTRICT; see foreign_key_constraint_option_reflection_ondelete."""
         return exclusions.open()
 
     @property
     def fk_constraint_option_reflection_onupdate_restrict(self) -> compound:
-        """Reflection of ``ON UPDATE RESTRICT``; see
-        :meth:`foreign_key_constraint_option_reflection_ondelete`."""
+        """ON UPDATE RESTRICT; see foreign_key_constraint_option_reflection_ondelete."""
         return exclusions.open()
 
     @property
     def indexes_check_column_order(self) -> compound:
-        """Reflected indexes report their columns in declared order
-        (inherited ``PRAGMA index_info``). Matches the SQLite dialect,
-        which enables this unconditionally."""
+        """Reflected indexes report columns in declared order (PRAGMA index_info)."""
         return exclusions.open()
 
     @property
     def temporary_views(self) -> compound:
-        """``CREATE TEMPORARY VIEW`` and temp-view reflection work over
-        dqlite (which is not a file database). Matches the SQLite
-        dialect; companion to the already-open ``views`` /
-        ``temporary_tables`` / ``temp_table_reflection``."""
+        """CREATE TEMPORARY VIEW and temp-view reflection."""
         return exclusions.open()
 
     @property
     def nvarchar_types(self) -> compound:
-        """``NVARCHAR`` / ``NCHAR`` type reflection round-trips via the
-        inherited SQLite type affinity. Matches the SQLite dialect."""
+        """NVARCHAR/NCHAR type reflection via SQLite type affinity."""
         return exclusions.open()
 
     @property
     def precision_numerics_retains_significant_digits(self) -> compound:
-        """A ``Numeric`` value's trailing significant digits round-trip
-        (e.g. ``Decimal('1.000')``). Matches the SQLite dialect (which
-        only fails this on Oracle)."""
+        """Numeric trailing significant digits round-trip, e.g. Decimal('1.000')."""
         return exclusions.open()
 
     @property
     def inline_check_constraint_reflection(self) -> compound:
-        """Reflection of column-level (inline) CHECK constraints via the
-        inherited ``SQLiteDialect.get_check_constraints``. Matches the
-        SQLite dialect; companion to the open ``check_constraint_reflection``.
-        (The ``use_schema=True`` compliance variants are skipped in the
-        compliance conftest because dqlite has no schemas.)"""
+        """Reflection of column-level (inline) CHECK constraints."""
         return exclusions.open()

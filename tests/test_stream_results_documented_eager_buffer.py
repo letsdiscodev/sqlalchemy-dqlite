@@ -1,23 +1,6 @@
-"""Pin: ``stream_results=True`` / ``yield_per`` get the documented
-eager-buffer contract on the dqlite dialect.
-
-The async ``AsyncAdaptedCursor`` adapter (``aio.py:42-72``) eagerly
-fetches all rows during ``execute()`` within the greenlet context, then
-serves fetch* calls synchronously from the buffer — a deliberate
-divergence from SA's streaming contract that's a consequence of the
-greenlet-eager-fetch pattern. The sync side has the same eager-fetch
-shape via the underlying dbapi cursor.
-
-SA exposes no per-dialect rejection hook and peak memory is hard to
-assert in a unit test, so this pin is narrower than a peak-memory
-assertion: the call returns ``len(rows) == N`` and no rows are lost,
-which is the contract a future maintainer wiring up true streaming
-on one side but forgetting the other could break.
-
-Integration test against the cluster on localhost:9001 — exercises the
-real adapter path on a real connection. No grey-box buffer inspection;
-only the public-API row count.
-"""
+"""``stream_results=True`` / ``yield_per`` still eagerly buffer all rows on
+the dqlite dialect (a deliberate divergence from SA streaming); the pin is
+that no rows are lost (count matches), checked via the public-API row count."""
 
 from __future__ import annotations
 
@@ -48,9 +31,6 @@ def test_sync_stream_results_returns_all_rows(cluster_address: str) -> None:
             )
             rows = list(result)
 
-        # Even with stream_results=True, the dqlite adapter eagerly
-        # buffers (documented divergence). The contract pin: no rows
-        # lost, count matches.
         assert len(rows) == _ROW_COUNT
         assert [r[0] for r in rows] == list(range(_ROW_COUNT))
     finally:
@@ -88,10 +68,7 @@ async def test_async_stream_results_returns_all_rows(cluster_address: str) -> No
 
 @pytest.mark.integration
 def test_sync_yield_per_returns_all_rows(cluster_address: str) -> None:
-    """``yield_per`` chunks rows from the already-buffered deque
-    (``arraysize`` semantics on the adapter); the total row count
-    must still match.
-    """
+    """``yield_per`` chunks from the already-buffered deque; count still matches."""
     host, port = cluster_address.split(":")
     engine = create_engine(f"dqlite://{host}:{port}/default")
     try:

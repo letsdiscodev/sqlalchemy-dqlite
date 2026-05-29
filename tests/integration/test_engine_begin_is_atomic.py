@@ -1,26 +1,7 @@
-"""``engine.begin()`` blocks are atomic: rollback-on-exception undoes
-all writes inside the block.
+"""``engine.begin()`` blocks are atomic: rollback-on-exception undoes all writes.
 
-The historical behaviour (before ``do_begin`` was overridden) was that
-no ``BEGIN`` was sent over the wire: every INSERT auto-committed at
-the dqlite server, the subsequent ROLLBACK was a no-op, and partial
-state from a failed transaction silently persisted. This was a
-systemic violation of transactional atomicity affecting every
-SA-managed write.
-
-Pin the corrected contract from multiple angles:
-
-- Sync and async ``engine.begin()`` rollback-on-exception undoes
-  the rows.
-- Multi-statement blocks roll back ALL writes, not just the last.
-- Explicit ``connection.begin()`` (the lower-level analogue of
-  ``engine.begin()``) has the same atomicity.
-- ORM unit-of-work pattern (``session.flush()`` then raise then
-  ``session.rollback()``) undoes the flushed writes — the canonical
-  consequence the bug had on user-visible ORM behaviour.
-- A wire-trace test confirms ``BEGIN`` is actually emitted before
-  the first DML inside the block — the load-bearing assertion that
-  the fix is in place.
+Before ``do_begin`` was overridden, no BEGIN reached the wire: every INSERT
+auto-committed, the ROLLBACK was a no-op, and partial failed-tx state persisted.
 """
 
 from __future__ import annotations
@@ -45,8 +26,7 @@ class _AtomicRow(_Base):  # type: ignore[misc,valid-type]
 
 
 class _ForcedRollback(Exception):
-    """Sentinel exception raised inside ``engine.begin()`` blocks to
-    drive the rollback path."""
+    """Sentinel raised inside begin() blocks to drive the rollback path."""
 
 
 @pytest.mark.integration
@@ -87,10 +67,7 @@ class TestEngineBeginIsAtomic:
             await engine.dispose()
 
     async def test_engine_begin_multi_insert_full_rollback(self, async_engine_url: str) -> None:
-        """All N writes in a multi-statement block roll back together
-        — the bug's worst surface was that some rows persisted while
-        others did not, depending on whether the exception fired
-        before or after a particular statement."""
+        """All N writes in a multi-statement block roll back together."""
         engine = create_async_engine(async_engine_url)
         try:
             async with engine.begin() as conn:
@@ -113,8 +90,7 @@ class TestEngineBeginIsAtomic:
             await engine.dispose()
 
     def test_connection_begin_rollback_undoes_writes(self, engine_url: str) -> None:
-        """``engine.connect().begin()`` is the lower-level analogue of
-        ``engine.begin()`` — both route through ``do_begin``."""
+        """``connection.begin()`` routes through ``do_begin`` like ``engine.begin()``."""
         engine = create_engine(engine_url)
         try:
             with engine.begin() as conn:
@@ -139,13 +115,8 @@ class TestEngineBeginIsAtomic:
     async def test_engine_begin_ddl_rollback_undoes_create_table(
         self, async_engine_url: str
     ) -> None:
-        """SQLite/dqlite does NOT auto-commit DDL (unlike some other
-        databases). Inside a real ``engine.begin()`` a ``CREATE TABLE``
-        followed by an exception MUST be rolled back. The bug
-        previously hid this: every DDL auto-committed, leaving a
-        half-finished schema state visible to the next caller.
-
-        Pin: after the rollback, the table does not exist."""
+        """SQLite/dqlite does NOT auto-commit DDL: a CREATE TABLE then exception
+        inside ``engine.begin()`` must roll back, leaving no table."""
         engine = create_async_engine(async_engine_url)
         try:
             async with engine.begin() as conn:
@@ -156,9 +127,6 @@ class TestEngineBeginIsAtomic:
                     await conn.execute(text("CREATE TABLE atomic_ddl (id INTEGER PRIMARY KEY)"))
                     raise _ForcedRollback("after CREATE TABLE")
 
-            # The CREATE TABLE was inside a real transaction that
-            # rolled back; the table must NOT exist. Probe via
-            # SELECT and expect OperationalError("no such table").
             from sqlalchemy.exc import OperationalError
 
             async with engine.connect() as conn:
@@ -192,8 +160,7 @@ class TestEngineBeginIsAtomic:
 
 @pytest.mark.integration
 class TestSessionFlushRollbackUndoesWrites:
-    """ORM unit-of-work pattern: the broken state of tx-064 silently
-    committed flushed rows when the session was rolled back."""
+    """ORM unit-of-work: tx-064 silently committed flushed rows on rollback."""
 
     def test_sync_session_flush_then_rollback_undoes_writes(self, engine_url: str) -> None:
         engine = create_engine(engine_url)
@@ -245,9 +212,7 @@ class TestSessionFlushRollbackUndoesWrites:
 
 @pytest.mark.integration
 class TestEngineBeginEmitsBeginOverWire:
-    """Wire-trace pin: BEGIN must actually be sent before the first
-    DML inside an ``engine.begin()`` block. This is the canonical
-    "tx-064 fix is in place" assertion."""
+    """Wire-trace pin: BEGIN is actually sent before the first DML (tx-064 fix)."""
 
     async def test_async_engine_begin_emits_begin_before_dml(self, async_engine_url: str) -> None:
         import dqliteclient.connection as cc
@@ -273,13 +238,8 @@ class TestEngineBeginEmitsBeginOverWire:
             finally:
                 cc.DqliteConnection.execute = orig_execute
 
-            # The trace MUST start with a BEGIN form; the INSERT MUST
-            # follow; the COMMIT MUST close it. Other entries (pool
-            # reset ROLLBACKs etc.) are tolerated. Bare ``BEGIN`` is
-            # rewritten by the dbapi cursor's ``BEGIN IMMEDIATE``
-            # intercept (default on, writer-safe); accept either
-            # literal at this layer — the rewrite is covered by the
-            # dbapi-side unit tests.
+            # Accept either BEGIN literal: the dbapi rewrite to BEGIN IMMEDIATE
+            # is covered by dbapi-side unit tests. Other entries are tolerated.
             begin_idx = next(
                 (i for i, s in enumerate(recorded) if s in ("BEGIN", "BEGIN IMMEDIATE")),
                 None,
@@ -290,9 +250,9 @@ class TestEngineBeginEmitsBeginOverWire:
             assert begin_idx < insert_idx < commit_idx, f"unexpected order: {recorded!r}"
         finally:
             await engine.dispose()
-            # Be paranoid about restoration in case of test infrastructure failure.
+            # Restore again in case the test body bailed before the inner finally.
             cc.DqliteConnection.execute = orig_execute
 
 
-# Suppress unused-import warning for asyncio (tests use it implicitly via pytest-asyncio).
+# asyncio is used implicitly via pytest-asyncio; reference it to suppress F401.
 _ = asyncio

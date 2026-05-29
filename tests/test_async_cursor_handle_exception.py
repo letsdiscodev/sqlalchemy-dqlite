@@ -1,12 +1,5 @@
-"""AsyncAdaptedCursor.execute / executemany must route errors through
-the parent connection's _handle_exception hook, mirroring SA's
-reference AsyncAdapt_aiosqlite_cursor pattern.
-
-The hook is the single place to remap driver-layer quirks
-(loop-mismatch ``RuntimeError``, client-layer subclass shape, etc.)
-without editing every execute / executemany / commit / rollback call
-site. This test pins that the cursor methods route through it.
-"""
+"""AsyncAdaptedCursor.execute / executemany route errors through the parent
+connection's _handle_exception hook (the single place to remap driver quirks)."""
 
 from __future__ import annotations
 
@@ -58,8 +51,6 @@ def test_execute_routes_error_through_handle_exception(
 
     def remap(error: BaseException) -> None:
         captured.append(error)
-        # Override turns the raw RuntimeError into something else,
-        # demonstrating the centralized-remap intent.
         raise ValueError("remapped") from error
 
     conn_adapter = MagicMock()
@@ -86,14 +77,14 @@ def test_executemany_routes_error_through_handle_exception(
 
     def remap(error: BaseException) -> None:
         captured.append(error)
-        raise error  # default identity re-raise
+        raise error
 
     conn_adapter = MagicMock()
     conn_adapter._connection = _FakeConnection()
     conn_adapter._handle_exception = remap
 
     cur = AsyncAdaptedCursor(conn_adapter)
-    cur._rows = deque([(1,)])  # pre-populate to exercise the reset
+    cur._rows = deque([(1,)])  # exercise the reset
     with pytest.raises(RuntimeError):
         cur.executemany("INSERT INTO t VALUES (?)", [[1]])
     assert len(captured) == 1

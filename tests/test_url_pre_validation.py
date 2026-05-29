@@ -1,22 +1,10 @@
-"""Pin: SA URL pre-validation surfaces structural / host-shape errors
-at engine-construction time, not at first checkout.
+"""Pin: SA URL pre-validation raises ArgumentError at engine construction (not first
+checkout) for userinfo, fragment, and bad host shape.
 
-Three structural URL features dqlite does not accept; each must
-raise ``ArgumentError`` from ``create_connect_args``:
-
-1. Userinfo of any shape (bare `@`, empty username, empty password,
-   or filled credentials). The earlier guard used ``or`` (truthy
-   check), so empty-string username + None password silently
-   passed.
-2. Fragment (URI ``#frag`` portion). SA's ``URL`` does not strip it,
-   so the fragment leaks into the trailing query value and produces
-   a misleading parse error pointing at the value, not at the misplaced
-   ``#``.
-3. Invalid host shape (IDN, comma-separated, etc.). The dbapi layer
-   already rejects these via ``InterfaceError``, but the failure
-   surfaces only at first ``engine.connect()``. Pre-validate at the
-   SA layer so engine construction fails immediately with a clear
-   ``ArgumentError``.
+Userinfo: earlier guard used ``or`` (truthy), so empty username + None password slipped
+through. Fragment: SA's URL doesn't strip it, so it leaks into the trailing query value and
+yields a misleading parse error. Bad host shape would otherwise surface only as a deferred
+InterfaceError at first connect().
 """
 
 from __future__ import annotations
@@ -64,14 +52,12 @@ class TestHostShapePreValidation:
         ],
     )
     def test_invalid_host_shape_rejected_at_construction(self, bad_url: str) -> None:
-        """Host shape that the client rejects must surface as
-        ArgumentError from create_engine, not as a deferred
-        InterfaceError from first engine.connect()."""
+        """Bad host shape surfaces as ArgumentError at create_engine, not deferred to connect()."""
         with pytest.raises(ArgumentError, match="host|address|hostname"):
             create_engine(bad_url)
 
     def test_valid_host_passes(self) -> None:
-        """Sanity: ordinary hosts still construct."""
+        """Ordinary hosts still construct."""
         eng = create_engine("dqlite://localhost:9001/db")
         assert eng is not None
         eng.dispose()

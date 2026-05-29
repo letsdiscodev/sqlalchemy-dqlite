@@ -1,17 +1,6 @@
-"""Pin: every call site that wraps ``await_only`` routes the
-loop-mismatch ``RuntimeError`` through ``_handle_exception`` so the
-remap fires regardless of which method tripped it.
-
-The remap covers ``commit`` / ``rollback`` / ``execute`` /
-``executemany`` / ``close``. Without per-site coverage a future
-refactor that splits a call out of the ``try/except BaseException``
-envelope (e.g. adding an early-return fast path or moving the
-``await_only`` inside a helper) silently regresses the classification
-on that path, and SA's pool stops invalidating slots when the wrong
-loop touches them.
-
-Each test runs through SA's ``greenlet_spawn`` so ``await_only`` works.
-"""
+"""Every ``await_only`` call site routes loop-mismatch RuntimeError
+through ``_handle_exception`` so the remap fires regardless of which
+method tripped it (commit / rollback / execute / executemany / close)."""
 
 from __future__ import annotations
 
@@ -71,9 +60,8 @@ async def test_rollback_propagates_other_runtimeerrors_unchanged() -> None:
 
 
 def _make_cursor_with_failing_inner(method: str, exc: BaseException) -> AsyncAdaptedCursor:
-    """Build an ``AsyncAdaptedCursor`` whose underlying cursor raises
-    ``exc`` from ``method`` (one of ``execute``/``executemany``).
-    """
+    """Cursor whose inner cursor raises ``exc`` from ``method``
+    (execute/executemany)."""
     adapter = _make_adapter()
     inner_cursor = MagicMock()
     setattr(inner_cursor, method, AsyncMock(side_effect=exc))

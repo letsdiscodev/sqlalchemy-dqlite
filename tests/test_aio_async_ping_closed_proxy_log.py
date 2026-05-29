@@ -1,16 +1,5 @@
-"""Pin: ``DqliteDialect_aio._async_ping`` emits a ``logger.debug``
-line before raising the closed-proxy ``InterfaceError`` fast-path.
-
-The fast-path triggers when SA's pool calls ``do_ping`` on a
-connection whose adapter has already been closed (the weakref-proxy
-swap in ``AsyncAdaptedConnection.close``). The ``InterfaceError``
-raise is correct — it routes through ``do_ping``'s outer catch tuple
-so the pool retires the slot — but without a log line the operator
-sees a silent slot retirement and cannot distinguish "wire ping
-failed" from "adapter was already closed at checkout". Sibling
-close()/terminate()/transport-class arms in the same module emit
-DEBUG signal on analogous slot-retirement transitions.
-"""
+"""``_async_ping`` emits a DEBUG line before raising the closed-proxy ``InterfaceError``
+so the operator can tell "already closed at checkout" from a real wire-ping failure."""
 
 from __future__ import annotations
 
@@ -26,8 +15,7 @@ from sqlalchemydqlite.aio import DqliteDialect_aio  # noqa: I001
 
 
 class _ClosedishAdapter:
-    """Minimal adapter shape: ``_connection`` is a ``weakref.proxy``
-    so the closed-proxy fast-path fires."""
+    """Minimal adapter whose ``_connection`` is a ``weakref.proxy`` (fires the fast-path)."""
 
     def __init__(self) -> None:
         target: Any = type("Inner", (), {})()

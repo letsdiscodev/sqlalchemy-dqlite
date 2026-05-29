@@ -1,15 +1,5 @@
 """AsyncAdaptedCursor honours the PEP 249 closed-cursor contract on
-setinputsizes / setoutputsize.
-
-The underlying ``AsyncCursor`` raises ``InterfaceError`` when those
-methods are called after ``close()``. The adapter previously
-implemented both as bare ``pass`` statements, silently succeeding on
-closed cursors and hiding the bug from callers migrating between the
-two cursor types. It also kept the narrow "cursor is closed"
-``InterfaceError`` branch in ``is_disconnect`` from firing on
-adapter-managed cursors. A ``_closed`` flag — set in ``close()`` —
-gates both methods.
-"""
+setinputsizes / setoutputsize, gated by a ``_closed`` flag set in ``close()``."""
 
 from __future__ import annotations
 

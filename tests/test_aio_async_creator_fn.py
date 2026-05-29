@@ -1,18 +1,6 @@
 """``connect_args={"async_creator_fn": ...}`` injects a custom factory.
 
-SA convention (asyncpg.py:937, aiosqlite.py:399, aiomysql): callers
-inject a pre-built async connection (or a wrapped factory) via
-``connect_args={"async_creator_fn": my_factory}``. Pin behaviour:
-- The pop precedes the kwarg-allowlist validation (the hook key is not
-  on the allowlist).
-- The default-factory ``loaded_dbapi.connect`` is NOT invoked when the
-  hook is supplied.
-- The two-step shape is preserved — ``raw_conn.connect()`` is awaited
-  on the creator-returned object.
-
-Tests run inside a greenlet (via ``greenlet_spawn``) because
-``DqliteDialect_aio.connect`` calls ``await_only(...)`` which needs
-SA's greenlet context.
+Tests run inside a greenlet (``greenlet_spawn``) because ``connect`` calls ``await_only``.
 """
 
 from typing import Any
@@ -26,8 +14,7 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection, DqliteDialect_aio
 
 
 class _FakeConn:
-    """Minimal stub satisfying the ``AsyncConnection`` shape that
-    ``AsyncAdaptedConnection`` calls into."""
+    """Minimal stub satisfying the ``AsyncConnection`` shape."""
 
     def __init__(self) -> None:
         self.connected = False
@@ -45,7 +32,7 @@ class _FakeConn:
 
 async def test_connect_honours_async_creator_fn() -> None:
     dialect = DqliteDialect_aio()
-    dialect.loaded_dbapi = MagicMock()  # would-be default factory
+    dialect.loaded_dbapi = MagicMock()
 
     called: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     fake = _FakeConn()
@@ -68,10 +55,7 @@ async def test_connect_honours_async_creator_fn() -> None:
 
 
 async def test_connect_async_creator_fn_kwarg_does_not_trip_allowlist() -> None:
-    """The kwarg pop must precede ``_validate_connect_kwargs``;
-    otherwise the strict allowlist raises ``ArgumentError`` before the
-    hook gets a chance.
-    """
+    """The kwarg pop must precede ``_validate_connect_kwargs`` (the key is not allowlisted)."""
     dialect = DqliteDialect_aio()
     dialect.loaded_dbapi = MagicMock()
 
@@ -82,13 +66,10 @@ async def test_connect_async_creator_fn_kwarg_does_not_trip_allowlist() -> None:
         database="mydb",
         async_creator_fn=lambda *a, **kw: fake,
     )
-    # No raise — the test would fail with ArgumentError if the pop
-    # were placed after allowlist validation.
 
 
 async def test_connect_without_creator_uses_default_loaded_dbapi() -> None:
-    """Regression guard: when the hook is absent, the existing
-    ``loaded_dbapi.connect`` path runs unchanged."""
+    """Regression guard: when the hook is absent, the ``loaded_dbapi.connect`` path runs."""
     dialect = DqliteDialect_aio()
 
     fake = _FakeConn()
@@ -103,23 +84,8 @@ async def test_connect_without_creator_uses_default_loaded_dbapi() -> None:
 
 
 async def test_async_creator_fn_idempotent_connect_safe_to_double_call() -> None:
-    """Pin the documented contract: a creator returning an already-
-    connected dbapi-shaped object whose ``connect()`` is idempotent
-    must NOT double-open the transport.
-
-    The dialect always awaits ``raw_conn.connect()`` after the
-    creator runs; the contract is that creator-returned objects
-    expose an idempotent ``connect()``. The dbapi's own
-    ``AsyncConnection.connect`` already has that property — so a
-    creator that wraps a pre-built dbapi connection works without
-    modification.
-
-    Without this pin, a refactor that drops the second ``connect()``
-    call (matching SA's aiosqlite shape) would silently break
-    creators returning unopened conns; or a refactor that adds
-    re-open semantics to dbapi.connect would silently break
-    pre-opened-creator users.
-    """
+    """The dialect always awaits ``raw_conn.connect()`` after the creator runs; an
+    already-connected creator result with an idempotent ``connect()`` must not double-open."""
     dialect = DqliteDialect_aio()
     dialect.loaded_dbapi = MagicMock()
 
@@ -130,7 +96,6 @@ async def test_async_creator_fn_idempotent_connect_safe_to_double_call() -> None
             connect_calls[0] += 1
             if connect_calls[0] == 1:
                 self.connected = True
-            # Subsequent calls: no-op (idempotent contract).
 
     fake = IdempotentFakeConn()
     # Pre-connect to simulate a creator that opens before returning.
@@ -145,19 +110,13 @@ async def test_async_creator_fn_idempotent_connect_safe_to_double_call() -> None
         async_creator_fn=lambda *a, **kw: fake,
     )
 
-    # Two ``connect()`` invocations total — pre-call by the test
-    # plus the dialect's unconditional re-call. The fake observed
-    # both as benign no-ops because its own ``connect`` is
-    # idempotent — the contract spelled out in the dialect docstring.
+    # Two connect() calls: the test's pre-call plus the dialect's unconditional re-call.
     assert connect_calls[0] == 2
     assert fake.connected is True
 
 
 def test_connect_unknown_kwarg_still_raises_argumenterror() -> None:
-    """Defence-in-depth: the allowlist still rejects truly unknown
-    kwargs even with the new pop in place. ``_validate_connect_kwargs``
-    runs before any ``await_only(...)`` call, so this raises
-    synchronously and does not need a greenlet."""
+    """The allowlist still rejects unknown kwargs; this raises synchronously (no greenlet)."""
     dialect = DqliteDialect_aio()
     dialect.loaded_dbapi = MagicMock()
 

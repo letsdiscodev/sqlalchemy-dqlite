@@ -1,23 +1,4 @@
-"""Behavioural pins for the second 2026-05 SA-side audit round.
-
-- ``AsyncAdaptedConnection`` exposes a ``dbapi`` attribute mirroring
-  SA's reference connector. Third-party instrumentation
-  (Sentry / Datadog wrappers) hard-getattrs this to reach the dbapi
-  module's exception classes.
-- ``AsyncAdaptedCursor.rownumber`` raises ``NotSupportedError``
-  rather than ``AttributeError`` (which would escape the
-  ``dbapi.Error`` hierarchy).
-- ``AsyncAdaptedCursor.scroll`` validates ``mode`` BEFORE the
-  unconditional NotSupportedError, surfacing caller typos as
-  ``ProgrammingError`` (PEP 249 §6.1.1).
-- ``DqliteDialect_aio`` is_disconnect classifies an
-  ``OperationalError`` carrying ``code=SQLITE_IOERR_NOT_LEADER``
-  (10250) or ``SQLITE_IOERR_LEADERSHIP_LOST`` (10506) as
-  disconnect via the extended-code arm — pin against silent
-  regression that primary-masks the code on the exception.
-- ``_DqliteDateTime`` / ``_DqliteTime`` ``result_processor`` closures
-  pass ``None`` through unchanged.
-"""
+"""Behavioural pins for the second 2026-05 SA-side audit round."""
 
 from unittest.mock import MagicMock
 
@@ -33,28 +14,22 @@ from sqlalchemydqlite.base import _DqliteDate, _DqliteDateTime, _DqliteTime
 
 
 def test_async_adapted_connection_exposes_dbapi_attribute() -> None:
-    """SA reference connector parity: AsyncAdaptedConnection has
-    a ``dbapi`` attribute. Third-party introspection hard-getattrs
-    it to reach the dbapi module's exception classes. The
-    constructor mirrors SA's reference shape
-    ``(self, dbapi, connection)``."""
+    """SA reference parity: ``AsyncAdaptedConnection(dbapi, connection)`` exposes
+    a ``dbapi`` attribute that third-party introspection hard-getattrs."""
     sentinel = MagicMock(name="dbapi_module")
     adapter = AsyncAdaptedConnection(sentinel, MagicMock())
     assert adapter.dbapi is sentinel
 
 
 def test_async_adapted_connection_dbapi_kwarg_optional() -> None:
-    """Backward compatibility: legacy call sites that pass only
-    the connection (single positional arg) still work; ``dbapi``
-    defaults to None. The runtime detection in ``__init__`` checks
-    whether the second positional argument was supplied."""
+    """Legacy call sites passing only the connection still work; ``dbapi`` defaults
+    to None."""
     adapter = AsyncAdaptedConnection(MagicMock())
     assert adapter.dbapi is None
 
 
 def test_async_adapted_cursor_rownumber_raises_notsupported() -> None:
-    """Pin: rownumber is not a counter; reading it raises
-    NotSupportedError (a dbapi.Error) rather than AttributeError."""
+    """Reading rownumber raises NotSupportedError (a dbapi.Error), not AttributeError."""
     adapter = AsyncAdaptedConnection(MagicMock())
     cur = AsyncAdaptedCursor(adapter)
     with pytest.raises(NotSupportedError, match="rownumber"):
@@ -62,8 +37,7 @@ def test_async_adapted_cursor_rownumber_raises_notsupported() -> None:
 
 
 def test_async_adapted_cursor_rownumber_on_closed_raises_interfaceerror() -> None:
-    """Closed-cursor guard fires before NotSupportedError so the
-    generic stale-cursor diagnostic is preserved."""
+    """Closed-cursor guard fires before NotSupportedError."""
     from dqlitedbapi.exceptions import InterfaceError
 
     adapter = AsyncAdaptedConnection(MagicMock())
@@ -74,10 +48,8 @@ def test_async_adapted_cursor_rownumber_on_closed_raises_interfaceerror() -> Non
 
 
 def test_async_adapted_cursor_scroll_invalid_mode_raises_programming_error() -> None:
-    """PEP 249 §6.1.1: scroll(value, mode) validator. Caller typos
-    surface as ProgrammingError BEFORE the unconditional
-    NotSupportedError so cross-driver code catches them via
-    ``except ProgrammingError:``."""
+    """PEP 249 §6.1.1: scroll validates ``mode`` before the unconditional
+    NotSupportedError, so caller typos surface as ProgrammingError."""
     adapter = AsyncAdaptedConnection(MagicMock())
     cur = AsyncAdaptedCursor(adapter)
     with pytest.raises(ProgrammingError, match="must be 'relative' or 'absolute'"):
@@ -85,8 +57,7 @@ def test_async_adapted_cursor_scroll_invalid_mode_raises_programming_error() -> 
 
 
 def test_async_adapted_cursor_scroll_valid_mode_raises_notsupported() -> None:
-    """Positive control: valid modes raise NotSupportedError
-    (dqlite cursors are not scrollable)."""
+    """Positive control: valid modes raise NotSupportedError (cursors aren't scrollable)."""
     adapter = AsyncAdaptedConnection(MagicMock())
     cur = AsyncAdaptedCursor(adapter)
     with pytest.raises(NotSupportedError):
@@ -97,11 +68,8 @@ def test_async_adapted_cursor_scroll_valid_mode_raises_notsupported() -> None:
 
 @pytest.mark.parametrize("code", [10250, 10506])
 def test_is_disconnect_classifies_extended_leader_codes(code: int) -> None:
-    """Pin: the extended SQLite codes SQLITE_IOERR_NOT_LEADER /
-    SQLITE_IOERR_LEADERSHIP_LOST classify as disconnect via the
-    code-based arm. A future helper that "helpfully" primary-masks
-    the code on the exception attribute would silently break leader-
-    flip detection — this pin guards the masking-invariant."""
+    """Extended leader-flip codes classify as disconnect via the code-based arm;
+    primary-masking the code on the exception would silently break detection."""
     from dqlitedbapi.exceptions import OperationalError
 
     dialect = DqliteDialect_aio()

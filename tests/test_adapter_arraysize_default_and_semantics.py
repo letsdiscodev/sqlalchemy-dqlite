@@ -1,13 +1,6 @@
-"""Pin: ``AsyncAdaptedCursor.arraysize`` default + deque-only semantic.
-
-PEP 249 §6.1.2 says ``arraysize`` defaults to ``1`` and governs the
-per-``fetchmany`` batch size. The adapter satisfies that contract — but
-its ``arraysize`` is semantically **deque-only**: dqlite's wire layer
-delivers the entire result set up-front in a single RTT, so changing
-``arraysize`` does not influence any wire prefetch. Pin both: the
-default, and the deque-pop semantic, so a future refactor that
-accidentally couples wire prefetch to ``arraysize`` (or diverges from
-the PEP 249 default) trips this test.
+"""Pin ``AsyncAdaptedCursor.arraysize``: PEP 249 default of 1, and its
+deque-only semantic. dqlite delivers the full result set in one RTT, so
+``arraysize`` governs only ``fetchmany`` batch size, never wire prefetch.
 """
 
 from __future__ import annotations
@@ -39,11 +32,8 @@ def test_adapter_arraysize_default_matches_pep249() -> None:
 
 
 def test_adapter_arraysize_governs_deque_pop_not_wire_prefetch() -> None:
-    """``arraysize`` controls the batch size of ``fetchmany``'s pop from
-    the pre-drained deque. The deque is already populated (single wire
-    RTT delivered the full result set up-front); ``arraysize`` does not
-    trigger any further fetches.
-    """
+    """``arraysize`` sizes ``fetchmany``'s pop from the pre-drained deque,
+    triggering no further fetches."""
     cur = _make_cursor()
     rows: list[tuple[Any, ...]] = [(i,) for i in range(10)]
     cur._rows = deque(rows)
@@ -58,7 +48,5 @@ def test_adapter_arraysize_governs_deque_pop_not_wire_prefetch() -> None:
     assert second == rows[3:6]
     assert third == rows[6:9]
     assert fourth == rows[9:10]
-    # The connection-level cursor was never touched — no wire RTT was
-    # triggered by changing ``arraysize`` or by the four fetchmany
-    # calls. Pin: deque-only governance.
+    # Connection-level cursor untouched: no wire RTT from arraysize or fetchmany.
     cur._connection.cursor.assert_not_called()

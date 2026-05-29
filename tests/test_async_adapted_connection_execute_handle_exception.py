@@ -1,16 +1,5 @@
 """Pin: ``AsyncAdaptedConnection.execute`` routes ``self.cursor()``
-failures through ``_handle_exception``.
-
-The cursor-level path (``AsyncAdaptedCursor.execute``) wraps the
-entire try-frame with ``self._adapt_connection._handle_exception``
-so cross-loop / loop-closed RuntimeErrors get remapped to
-``OperationalError`` before SA's classifier sees them.
-``AsyncAdaptedConnection.execute`` is the convenience method that
-SA-internal code paths (e.g. ``dialects/sqlite/provision.py``)
-invoke directly; it previously DID NOT route ``cursor()`` failures
-through the same hook, so the same fault remapped differently
-depending on which entry point was taken. Pin the single-discipline
-restructure.
+failures through ``_handle_exception``, like the cursor-level path.
 """
 
 from __future__ import annotations
@@ -33,12 +22,8 @@ def _make_adapted() -> Any:
 def test_execute_cursor_failure_routed_through_handle_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A ``RuntimeError("Event loop is closed")`` raised by
-    ``self.cursor()`` must be remapped to ``OperationalError`` via
-    ``_handle_exception`` — mirroring the cursor-level execute path —
-    so SA's ``is_disconnect`` classifier sees a dbapi.Error subclass
-    and the pool invalidates the slot.
-    """
+    """A loop-closed ``RuntimeError`` from ``cursor()`` is remapped to
+    ``OperationalError`` so SA's ``is_disconnect`` invalidates the slot."""
     adapted = _make_adapted()
 
     def _boom(self: Any) -> Any:
@@ -55,8 +40,7 @@ def test_execute_cursor_runtime_error_cross_loop_remapped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A cross-loop ``RuntimeError`` from ``cursor()`` is remapped to
-    ``OperationalError`` with the ``event-loop mismatch:`` prefix.
-    """
+    ``OperationalError`` with the ``event-loop mismatch:`` prefix."""
     adapted = _make_adapted()
 
     def _boom(self: Any) -> Any:
@@ -72,10 +56,7 @@ def test_execute_cursor_runtime_error_cross_loop_remapped(
 def test_execute_cursor_unrelated_error_not_remapped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unrelated error (no cross-loop wording) propagates as-is —
-    the routing widens the cross-loop remap, it doesn't blanket-rewrap
-    every failure as ``OperationalError``.
-    """
+    """An unrelated error propagates as-is; only cross-loop faults remap."""
     adapted = _make_adapted()
 
     class _OurError(Exception):

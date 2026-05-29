@@ -1,26 +1,8 @@
-"""Pin the compliance conftest's stale-fragment fail-loud check.
-
-The compliance ``conftest.py`` hooks ``pytest_collection_modifyitems``
-to apply a hand-maintained skip list (``_SCHEMA_USING_PARAMETRIZE_SKIPS``).
-SA's parametrize-id rendering is a private contract, so a future SA
-upgrade that renames or recombines axes can leave a fragment matching
-zero collected tests — silently no-op'ing the skip and surfacing the
-unexpected test execution as a confusing pass / fail later.
-
-Pin three behaviours:
-
-1. An empty fragment raises ``pytest.UsageError`` (would match every
-   nodeid).
-2. A stale fragment (matches no collected test) raises ``pytest.UsageError``.
-3. A fragment that DOES match at least one nodeid is accepted (the
-   matching test gets the skip marker).
-
-The conftest module is loaded only when running ``pytest tests/compliance/``
-(it brings in SA's plugin which would replace pytest's own collection
-for the rest of the suite). To unit-test the hook, import the module
-file directly via ``importlib`` so this regular-tests run loads the
-file as a plain Python module.
-"""
+"""Pin the compliance conftest's stale-fragment fail-loud check: an
+empty or non-matching ``_SCHEMA_USING_PARAMETRIZE_SKIPS`` fragment raises
+``UsageError`` rather than silently no-op'ing when an SA upgrade renames
+parametrize axes. Loaded via ``importlib`` since the conftest brings in
+SA's plugin and would hijack collection for the rest of the suite."""
 
 from __future__ import annotations
 
@@ -36,9 +18,7 @@ _CONFTEST_PATH = Path(__file__).parent / "compliance" / "conftest.py"
 
 
 def _load_conftest_module() -> ModuleType:
-    """Load the compliance conftest as a regular module so we can call
-    ``pytest_collection_modifyitems`` directly with synthetic items.
-    """
+    """Load the conftest as a plain module to call its hook directly."""
     spec = importlib.util.spec_from_file_location("_compliance_conftest_under_test", _CONFTEST_PATH)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -57,10 +37,7 @@ class _FakeItem:
 
 
 def _no_op_sa_modify(*_args: Any, **_kwargs: Any) -> None:
-    """Stand-in for SA's plugin hook when invoking the conftest's
-    hook directly. The real hook does requirement-based exclusion;
-    for the unit test we don't need that, just the pre/post snapshot
-    logic."""
+    """Stand-in for SA's plugin hook; we only need the snapshot logic."""
     return None
 
 
@@ -108,15 +85,12 @@ def test_matching_fragment_marks_item_skipped(monkeypatch: pytest.MonkeyPatch) -
 def test_pre_delegation_snapshot_survives_sa_filter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If SA's hook deselects items (removing them from the list), the
-    pre-snapshot must still credit any fragment that matched a removed
-    item. Otherwise SA's requirement gating would falsely flag our
-    fragment as stale."""
+    """A fragment matching an item that SA's hook later deselects must
+    still count, else requirement gating would falsely flag it stale."""
     mod = _load_conftest_module()
 
     def _sa_filter(_session: Any, _config: Any, items: list[Any]) -> None:
-        # Simulate SA removing the matching item via requirement gating.
-        items.clear()
+        items.clear()  # simulate SA requirement-gating removal
 
     monkeypatch.setattr(mod, "_sa_modify_items", _sa_filter)
     monkeypatch.setattr(
@@ -125,5 +99,4 @@ def test_pre_delegation_snapshot_survives_sa_filter(
         ("matching_fragment",),
     )
     items: list[Any] = [_FakeItem("matching_fragment_in_nodeid")]
-    # No UsageError: pre-snapshot saw the match before SA filtered.
     mod.pytest_collection_modifyitems(None, None, items)

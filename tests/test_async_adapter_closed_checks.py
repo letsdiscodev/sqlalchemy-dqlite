@@ -1,8 +1,6 @@
-"""``AsyncAdaptedCursor``'s fetch / optional-extension methods must
-raise ``InterfaceError("cursor is closed")`` after the cursor is
-closed. The adapter buffers rows into its own deque so a closed cursor
-would previously return silently-drained-empty lists; PEP 249 §6.1.2
-says operations on a closed cursor must raise.
+"""``AsyncAdaptedCursor`` fetch / optional-extension methods raise
+``InterfaceError("cursor is closed")`` after close (PEP 249 §6.1.2);
+otherwise the deque-backed reads would silently return empty lists.
 """
 
 from __future__ import annotations
@@ -39,10 +37,8 @@ def test_fetchall_after_close_raises() -> None:
 
 
 def test_callproc_after_close_raises_interface_not_not_supported() -> None:
-    """On a closed cursor, the InterfaceError must be preferred over
-    NotSupportedError — the closed-state is the more actionable root
-    cause for the user.
-    """
+    """On a closed cursor, InterfaceError wins over NotSupportedError —
+    closed-state is the more actionable root cause."""
     with pytest.raises(InterfaceError, match="cursor is closed"):
         _closed_cursor().callproc("p")
 
@@ -58,8 +54,7 @@ def test_scroll_after_close_raises_interface_not_not_supported() -> None:
 
 
 def test_callproc_on_open_cursor_still_raises_not_supported() -> None:
-    """Regression guard: the open-cursor behaviour (raise
-    NotSupportedError) must survive the closed-check addition."""
+    """Open-cursor callproc still raises NotSupportedError."""
     cur = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
     cur._rows = deque()
     cur.arraysize = 1

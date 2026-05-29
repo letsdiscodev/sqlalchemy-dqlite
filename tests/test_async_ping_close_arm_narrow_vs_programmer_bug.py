@@ -1,12 +1,6 @@
-"""Pin: async ``_async_ping``'s cursor-close arm catches the SAME
-transport-class tuple as the sync sibling — programmer bugs from a
-refactor regression (``AttributeError`` / ``TypeError`` /
-``ValueError``) propagate rather than being silently DEBUG-logged.
-
-The prior ``except (Exception, asyncio.CancelledError)`` swallowed
-shapes the sync sibling at ``base.py`` (``do_ping``) deliberately
-lets propagate.
-"""
+"""Pin: ``_async_ping``'s close arm catches the same transport-class tuple
+as the sync sibling — programmer bugs (``AttributeError`` etc.) propagate
+rather than being silently DEBUG-logged."""
 
 from __future__ import annotations
 
@@ -23,7 +17,6 @@ async def test_async_ping_close_arm_propagates_attribute_error_from_refactor() -
 
     cursor = MagicMock()
     cursor.execute = AsyncMock()
-    # Simulate a refactor break: ``cursor.close`` raises AttributeError.
     cursor.close = MagicMock(side_effect=AttributeError("simulated refactor break"))
 
     inner_conn = MagicMock()
@@ -37,8 +30,7 @@ async def test_async_ping_close_arm_propagates_attribute_error_from_refactor() -
 
 
 async def test_async_ping_close_arm_still_absorbs_oserror_transport_class() -> None:
-    """Sanity: legitimate transport-class failures stay absorbed
-    (DEBUG-logged, ping still returns True)."""
+    """Sanity: legitimate transport-class failures stay absorbed (ping returns True)."""
     dialect = DqliteDialect_aio()
 
     cursor = MagicMock()
@@ -51,6 +43,5 @@ async def test_async_ping_close_arm_still_absorbs_oserror_transport_class() -> N
     dbapi_connection = MagicMock()
     dbapi_connection._connection = inner_conn
 
-    # No raise — the OSError is absorbed at the close arm.
-    result = await greenlet_spawn(dialect.do_ping, dbapi_connection)
+    result = await greenlet_spawn(dialect.do_ping, dbapi_connection)  # OSError absorbed
     assert result is True

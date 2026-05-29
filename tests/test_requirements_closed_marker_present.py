@@ -1,14 +1,6 @@
-"""Pin: every requirement we deliberately mark ``exclusions.closed()``
-must still surface as ``enabled=False`` to the SA compliance suite.
-
-The compliance suite gates each test on
-``Requirements.<name>.enabled``. A typo in the property name silently
-re-opens the gate — the suite then runs the test, which fails with
-cluster-side ``OperationalError: unknown database test_schema`` (or
-similar) rather than skip-side "dialect closes schemas". This pin
-fences the gate integrity so a refactor that renames a property
-fails loudly at the unit-test level.
-"""
+"""Pin: every deliberately-``closed()`` requirement still surfaces as
+``enabled=False`` — a property rename would silently re-open the gate and
+make the suite run (and fail) tests dqlite doesn't support."""
 
 from __future__ import annotations
 
@@ -22,9 +14,8 @@ def req() -> Requirements:
     return Requirements()
 
 
-# Each name here is documented as deliberately closed in the requirements
-# module. If the property is renamed without updating this list, the
-# accompanying ``enabled=False`` assertion will surface the rename.
+# Each name is deliberately closed in the requirements module; a rename
+# trips the ``enabled=False`` assertion below.
 _EXPECTED_CLOSED = (
     "two_phase_transactions",
     "parens_in_union_contained_select_w_limit_offset",
@@ -38,10 +29,7 @@ _EXPECTED_CLOSED = (
 
 @pytest.mark.parametrize("name", _EXPECTED_CLOSED)
 def test_closed_requirement_present_and_disabled(req: Requirements, name: str) -> None:
-    """The property exists AND surfaces as disabled. A rename or a
-    silent change from ``exclusions.closed()`` to ``open()`` /
-    ``only_on(...)`` re-enables the SA compliance test that depends
-    on it; this pin fails loudly when that happens."""
+    """The property exists and surfaces as disabled."""
     assert hasattr(req, name), (
         f"Requirements.{name} expected to exist (closed() in source) "
         f"but is missing — likely a rename"

@@ -1,10 +1,5 @@
-"""``sqltypes.Time`` is mapped to ``_DqliteTime`` in
-``DqliteDialect.colspecs``. dqlitedbapi decodes ISO8601 time
-payloads into native ``datetime.time`` instances; pysqlite's
-upstream ``TIME.result_processor`` calls ``str_to_time`` on the raw
-cell and would raise ``TypeError`` on a ``datetime.time`` argument.
-The Dqlite-specific processor pins the right handling.
-"""
+"""Time maps to _DqliteTime: dqlitedbapi yields native datetime.time, but pysqlite's
+TIME.result_processor calls str_to_time and would raise TypeError on a time argument."""
 
 from __future__ import annotations
 

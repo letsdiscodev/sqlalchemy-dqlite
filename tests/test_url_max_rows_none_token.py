@@ -1,12 +1,5 @@
-"""Pin: ``?max_total_rows=none`` (and ``?max_continuation_frames=none``)
-disable the cap, mirroring the dbapi ``connect(max_total_rows=None)``
-capability so URL-driven config (twelve-factor, env-var-driven engines)
-can express the same intent.
-
-Without the literal ``"none"`` token, operators configuring SA via DSN
-strings have no way to disable the row/frame cap — a regression for
-the URL-vs-Python API parity.
-"""
+"""Pin: ?max_total_rows=none and ?max_continuation_frames=none disable the cap, matching
+the dbapi connect(...=None) capability so DSN-driven config has URL/Python parity."""
 
 from __future__ import annotations
 
@@ -43,9 +36,7 @@ class TestMaxTotalRowsNoneToken:
         assert kwargs["max_total_rows"] == 5000
 
     def test_zero_still_rejected(self) -> None:
-        """Negative pin: zero is still out-of-range — only the literal
-        ``"none"`` disables. ``0`` would be ambiguous (no rows allowed?
-        unbounded?)."""
+        """Zero stays out-of-range (ambiguous); only "none" disables the cap."""
         dialect = DqliteDialect()
         url = make_url("dqlite://host:19001/db?max_total_rows=0")
         with pytest.raises(ArgumentError, match="out of range"):
@@ -78,8 +69,7 @@ class TestMaxContinuationFramesNoneToken:
         assert kwargs["max_continuation_frames"] == 500
 
     def test_above_dialect_ceiling_rejected(self) -> None:
-        """The dialect's defense-in-depth 1_000_000 frame ceiling is
-        still enforced for integer values."""
+        """The dialect's 1_000_000 frame ceiling is still enforced for integer values."""
         dialect = DqliteDialect()
         url = make_url("dqlite://host:19001/db?max_continuation_frames=99999999")
         with pytest.raises(ArgumentError, match="out of range"):

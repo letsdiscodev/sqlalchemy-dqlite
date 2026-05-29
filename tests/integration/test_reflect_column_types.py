@@ -1,9 +1,5 @@
-"""Lock in reflected column type-class identity.
-
-ischema_names inherited from pysqlite covers the tokens dqlite emits
-at DDL time (INTEGER, TEXT, REAL, BLOB, NUMERIC, DATE, DATETIME, ...).
-If a future pysqlite change alters the mapping, a reflected column
-might silently land in NULLTYPE. This test is the canary.
+"""Lock in reflected column type-class identity; a pysqlite ischema_names
+change could silently land a reflected column in NULLTYPE. This is the canary.
 """
 
 from collections.abc import Generator
@@ -71,13 +67,9 @@ class TestReflectColumnTypes:
         assert isinstance(cols["ratio"]["type"], types.Float | types.Numeric)
         assert isinstance(cols["created"]["type"], types.DateTime)
         assert isinstance(cols["birthday"]["type"], types.Date)
-        # TIME may reflect to Time, String, or DateTime depending on the
-        # pysqlite version's ischema_names — the union accommodates the
-        # documented uncertainty. The no-NullType assertion below still
-        # applies, which is the main contract we care about.
+        # TIME reflects to Time/String/DateTime depending on pysqlite version.
         assert isinstance(cols["start_time"]["type"], types.Time | types.String | types.DateTime)
         assert isinstance(cols["flag"]["type"], BOOLEAN_LIKE)
 
-        # No column landed in NullType.
         for name, c in cols.items():
             assert not isinstance(c["type"], types.NullType), f"column {name} reflected to NullType"

@@ -1,14 +1,5 @@
-"""Pin: ``is_disconnect`` cause-chain walk classifies OSError nodes
-deeper than the bare exception as disconnect.
-
-The bare-``e`` OSError check covers only the direct case (top-level
-exception is an OSError). A user wrapper or middleware that catches
-OSError and re-raises a non-OSError above it routes through the walk;
-without a per-node OSError classification, the OSError sitting under
-the wrapper layer is invisible — the substring scan only catches the
-case where the wrapper put a transport-shaped substring in its
-message.
-"""
+"""is_disconnect's cause-chain walk classifies OSError nodes deeper than
+the bare exception (the bare-e check only covers the top-level case)."""
 
 from __future__ import annotations
 
@@ -16,19 +7,16 @@ from sqlalchemydqlite.base import DqliteDialect
 
 
 def test_oserror_at_root_classified() -> None:
-    """Sanity / control: bare-``e`` OSError still classified."""
+    """Control: bare-e OSError still classified."""
     e = OSError("Connection reset by peer")
     assert DqliteDialect().is_disconnect(e, None, None) is True
 
 
 def test_oserror_via_cause_chain_classified() -> None:
-    """A user wrapper that catches OSError and re-raises a different
-    class — the OSError sits as ``__cause__``. Pin the walk classifies
-    it (without this fix, the bare-``e`` check sees only the wrapper
-    class and returns False)."""
+    """OSError sitting as __cause__ under a different wrapper class → True."""
 
     class _UserWrapper(Exception):
-        """Stand-in for a user retry/middleware layer."""
+        pass
 
     try:
         try:
@@ -40,9 +28,7 @@ def test_oserror_via_cause_chain_classified() -> None:
 
 
 def test_oserror_via_context_chain_classified() -> None:
-    """``__context__`` (no ``from``) is also walked. Pin the same
-    behaviour for an OSError sitting under an implicit-chained
-    wrapper."""
+    """__context__ (no ``from``) is also walked."""
 
     class _UserWrapper(Exception):
         pass
@@ -60,8 +46,7 @@ def test_oserror_via_context_chain_classified() -> None:
 
 
 def test_non_oserror_with_no_disconnect_substring_not_classified() -> None:
-    """Negative pin: a wrapper exception with no OSError or
-    disconnect-substring must NOT be classified as disconnect."""
+    """A wrapper with no OSError and no disconnect substring → False."""
 
     class _UserWrapper(Exception):
         pass

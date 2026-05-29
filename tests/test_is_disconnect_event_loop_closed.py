@@ -1,14 +1,4 @@
-"""Pin: ``is_disconnect`` classifies an ``OperationalError`` carrying
-the ``"event loop closed"`` substring as a disconnect.
-
-The async dialect's ``_handle_exception`` (in ``aio.py``) remaps
-``RuntimeError("Event loop is closed")`` to
-``OperationalError(f"event loop closed: {msg}")`` when the asyncio
-machinery has been torn down between checkout and the operation. The
-substring scanned by ``_dqlite_disconnect_messages`` must include
-``"event loop closed"`` so the SA pool invalidates the slot — without
-this entry the next checkout would hit the same dead loop.
-"""
+"""is_disconnect classifies an OperationalError with the ``"event loop closed"`` substring."""
 
 from __future__ import annotations
 
@@ -30,15 +20,13 @@ def test_event_loop_closed_case_insensitive() -> None:
 
 
 def test_unrelated_event_loop_message_not_classified() -> None:
-    """Negative pin: a message that mentions ``"event loop"`` but not
-    the canonical ``"event loop closed"`` substring must not match."""
+    """A message mentioning "event loop" but not "event loop closed" must not match."""
     e = OperationalError("event loop is happy and healthy", code=None)
     assert DqliteDialect().is_disconnect(e, None, None) is False
 
 
 def test_event_loop_closed_via_cause_walk() -> None:
-    """The substring scan walks ``__cause__`` and ``__context__``, so a
-    SA wrapper around the remapped error must still classify."""
+    """The substring scan walks __cause__/__context__, so a wrapped error still classifies."""
     inner = OperationalError("event loop closed: Event loop is closed", code=None)
 
     class _SAWrapperError(Exception):

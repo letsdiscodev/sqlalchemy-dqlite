@@ -1,28 +1,5 @@
-"""Pin: ``_drop_user_tables`` + ``_dqlite_run_reap_dbs`` invariants.
-
-dqlite has no ``DROP DATABASE`` primitive, so the provisioning hooks
-implement a "drop every user-visible schema object" workaround. Load-
-bearing invariants:
-
-1. The ``sqlite_master`` WHERE clause uses ``NOT LIKE 'sqlite_%'`` —
-   underscore-anchored, NOT ``sqlite%`` which would also spare
-   user-named ``sqlitefoo``.
-2. The cleanup wraps the loop in ``PRAGMA foreign_keys=OFF`` /
-   ``PRAGMA foreign_keys=ON`` so an FK-graph drop in arbitrary
-   ``sqlite_master`` order does not leave a parent leaked.
-3. Each successful DROP is committed individually; a per-drop
-   failure rolls back to a clean state so the next iteration
-   does not inherit a poisoned autobegin transaction.
-4. The four ``sqlite_master.type`` values (trigger / view / index /
-   table) are all queried; the module docstring's "every user-
-   visible schema object" promise covers more than just tables.
-5. ``connect`` failures are debug-logged and do NOT propagate.
-6. ``run_reap_dbs`` force-rewrites a ``dqlite+aio://`` input to the
-   bare sync drivername; otherwise ``create_engine`` would route to
-   the async dialect that needs ``create_async_engine``.
-7. ``run_reap_dbs`` disposes the engine in ``finally`` so a
-   ``_drop_user_tables`` failure does not leak the engine.
-"""
+"""Pin: ``_drop_user_tables`` + ``_dqlite_run_reap_dbs`` invariants — dqlite
+has no ``DROP DATABASE``, so these hooks drop every user-visible object."""
 
 from __future__ import annotations
 
@@ -40,10 +17,8 @@ import sqlalchemydqlite.provision as provision
 def _make_engine_with_objects(
     objects_by_type: dict[str, list[str]],
 ) -> MagicMock:
-    """Build a mock engine whose ``connect()`` context manager yields
-    a connection where ``exec_driver_sql(SELECT...)`` returns rows
-    matching the requested type (filtered via the second positional
-    argument)."""
+    """Mock engine whose ``exec_driver_sql(SELECT...)`` returns rows matching
+    the requested type (from the second positional arg)."""
 
     conn = MagicMock()
     sql_calls: list[tuple[str, Any]] = []
@@ -89,17 +64,12 @@ def test_drops_each_listed_user_table() -> None:
 
 
 def test_select_uses_underscore_anchored_sqlite_filter() -> None:
-    """Pin the WHERE clause shape on the per-type SELECT: ``type=?``
-    and ``NOT LIKE 'sqlite_%'``. Without the underscore, the filter
-    would spare user tables named ``sqlitefoo`` AND drop internal
-    ``sqlite_master``-class tables."""
+    """Pin per-type SELECT: ``type=?`` and ``NOT LIKE 'sqlite_%'`` — the
+    underscore anchor avoids sparing user tables named ``sqlitefoo``."""
     eng = _make_engine_with_objects({})
     provision._drop_user_tables(eng)
     selects = [call for call in eng._conn._sql_calls if call[0].startswith("SELECT name")]
     assert selects, "expected per-type SELECT(s)"
-    # Per-type SELECTs use a parameterised type filter — pin both
-    # the WHERE clause shape and that all four obj_types were
-    # queried in dependency order.
     for sql, _args in selects:
         assert "type=?" in sql
         assert "NOT LIKE 'sqlite_%'" in sql
@@ -108,9 +78,8 @@ def test_select_uses_underscore_anchored_sqlite_filter() -> None:
 
 
 def test_per_drop_failure_does_not_abort_loop() -> None:
-    """A DROP that raises is debug-logged; subsequent drops still run
-    and the per-drop commit / rollback cycle keeps the connection
-    state clean."""
+    """A DROP that raises is debug-logged; subsequent drops still run and the
+    per-drop commit/rollback cycle keeps connection state clean."""
 
     conn = MagicMock()
     sql_calls: list[str] = []
@@ -153,16 +122,14 @@ def test_per_drop_failure_does_not_abort_loop() -> None:
         'DROP TABLE IF EXISTS "first"',
         'DROP TABLE IF EXISTS "second"',
     ]
-    # Failed first drop triggered exactly one rollback to clear the
-    # autobegin transaction.
+    # Failed first drop triggered exactly one rollback to clear autobegin.
     assert rollback_count[0] == 1
 
 
 def test_connect_failure_swallowed_and_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """If ``eng.connect`` raises, the helper logs at DEBUG and
-    returns; the exception does NOT propagate."""
+    """``eng.connect`` failure logs at DEBUG and does not propagate."""
     eng = MagicMock()
     eng.connect.side_effect = RuntimeError("connect failed")
 
@@ -176,10 +143,8 @@ def test_connect_failure_swallowed_and_logged(
 def test_run_reap_dbs_forces_sync_drivername_when_input_is_aio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``dqlite+aio://...`` input must be rewritten to the bare
-    ``dqlite://`` drivername before ``create_engine`` is called;
-    otherwise SA would route to the async dialect that requires
-    ``create_async_engine`` and crash."""
+    """``dqlite+aio://`` input is rewritten to bare ``dqlite://`` before
+    ``create_engine``; else SA routes to the async dialect and crashes."""
     captured_urls: list[sa_url.URL] = []
 
     def _fake_create_engine(rewritten_url: Any) -> Any:
@@ -200,8 +165,7 @@ def test_run_reap_dbs_forces_sync_drivername_when_input_is_aio(
 def test_run_reap_dbs_disposes_engine_when_drop_user_tables_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Engine ``dispose()`` runs in ``finally`` so a failing
-    ``_drop_user_tables`` does not leak the engine."""
+    """Engine ``dispose()`` runs in ``finally`` so a failing drop doesn't leak it."""
     eng = MagicMock()
     eng.dispose = MagicMock()
 
@@ -220,8 +184,7 @@ def test_run_reap_dbs_disposes_engine_when_drop_user_tables_raises(
 def test_run_reap_dbs_continues_to_next_ident_on_per_ident_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A per-ident failure (e.g. ``create_engine`` raising for one
-    follower) lands in DEBUG; subsequent idents still get processed."""
+    """A per-ident failure lands in DEBUG; subsequent idents still processed."""
     create_attempts: list[Any] = []
 
     def _fake_create_engine(rewritten_url: Any) -> Any:
@@ -241,9 +204,8 @@ def test_run_reap_dbs_continues_to_next_ident_on_per_ident_failure(
 
 
 def test_drops_triggers_views_indexes_and_tables_in_dependency_order() -> None:
-    """The four sqlite_master object types are queried and dropped in
-    trigger → view → index → table order so referential dependencies
-    are unwound cleanly even with FK enforcement off."""
+    """Queried/dropped in trigger -> view -> index -> table order so
+    referential dependencies unwind cleanly even with FK enforcement off."""
     eng = _make_engine_with_objects(
         {
             "trigger": ["trg1"],
@@ -255,12 +217,10 @@ def test_drops_triggers_views_indexes_and_tables_in_dependency_order() -> None:
     provision._drop_user_tables(eng)
 
     drops = [call[0] for call in eng._conn._sql_calls if call[0].startswith("DROP")]
-    # Each verb appears with its matching object name.
     assert 'DROP TRIGGER IF EXISTS "trg1"' in drops
     assert 'DROP VIEW IF EXISTS "v_summary"' in drops
     assert 'DROP INDEX IF EXISTS "ix_x"' in drops
     assert 'DROP TABLE IF EXISTS "t_data"' in drops
-    # Trigger before view before index before table.
     trigger_pos = drops.index('DROP TRIGGER IF EXISTS "trg1"')
     view_pos = drops.index('DROP VIEW IF EXISTS "v_summary"')
     index_pos = drops.index('DROP INDEX IF EXISTS "ix_x"')
@@ -271,8 +231,7 @@ def test_drops_triggers_views_indexes_and_tables_in_dependency_order() -> None:
 def test_survivor_probe_emits_warning_when_objects_leak(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A non-empty survivor count after the loop fires a WARNING-tier
-    record so operators can spot a cleanup gap."""
+    """A non-empty survivor count fires a WARNING so operators spot a cleanup gap."""
     conn = MagicMock()
 
     def _exec(sql: str, *args: Any) -> Any:

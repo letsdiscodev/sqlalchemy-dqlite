@@ -1,11 +1,5 @@
-"""Pin: ``import sqlalchemydqlite`` triggers ``import dqlitewire`` at
-module-load time.
-
-See ``python-dqlite-client/tests/test_transitive_wire_import.py``
-for the rationale: the wire-layer free-threading guard is inherited
-transitively, so a future lazification of the wire import would
-silently drop the guard at this entry point.
-"""
+"""Pin: importing sqlalchemydqlite eagerly imports dqlitewire, so the wire-layer
+free-threading guard is inherited; lazifying the import would silently drop it here."""
 
 from __future__ import annotations
 

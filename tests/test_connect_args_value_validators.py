@@ -1,12 +1,6 @@
-"""Pin: ``connect_args={...}`` per-key values are validated against the
-same per-key validators that the URL-query path enforces.
-
-The unknown-key check rejects keys not in ``_URL_QUERY_ALLOWED``;
-the per-key value validators (e.g. ``close_timeout`` floor 0.01s)
-must run on both the URL-query path AND the ``connect_args`` path.
-This test pins the ``connect_args`` value-range arm so a regression
-that bypasses the validators for ``connect_args`` is caught.
-"""
+"""``connect_args={...}`` per-key values run the same validators as the
+URL-query path (e.g. ``close_timeout`` 0.01s floor), so connect_args
+can't bypass them."""
 
 from __future__ import annotations
 
@@ -24,17 +18,12 @@ def test_connect_args_close_timeout_below_floor_raises() -> None:
 
 
 def test_connect_args_close_timeout_below_floor_carries_fin_flush_rationale() -> None:
-    """The diagnostic carries the FIN-flush / TIME_WAIT explanation —
-    same operator-facing surface as the dbapi-layer wrap and the
-    direct ``DqliteConnection`` / ``ConnectionPool`` callers."""
+    """The diagnostic carries the FIN-flush rationale, same as the
+    dbapi-layer wrap."""
     dialect = DqliteDialect()
     with pytest.raises(ArgumentError) as exc:
         dialect._validate_connect_kwargs({"close_timeout": 0.0001})
-    assert "FIN flushes" in str(exc.value), (
-        "close_timeout floor diagnostic must include the FIN-flush "
-        "rationale so SA-URL operators understand the reason for "
-        "the 0.01s floor; same surface as the dbapi-layer wrap."
-    )
+    assert "FIN flushes" in str(exc.value)
 
 
 def test_connect_args_close_timeout_at_floor_accepted() -> None:
@@ -72,13 +61,8 @@ def test_connect_args_unknown_key_still_raises() -> None:
         dialect._validate_connect_kwargs({"not_a_known_key": 1})
 
 
-# --- isolation_level=AUTOCOMMIT diagnostic parity ------------------
-# The engine-level rejection at base.py:1035-1037 surfaces the
-# dedicated _AUTOCOMMIT_REJECTION_MSG when create_engine(...,
-# isolation_level="AUTOCOMMIT") is used. The connect_args= overlay path
-# previously fell through to the generic "Unknown dqlite connect kwarg"
-# message — same root cause, less helpful diagnostic. Pin parity so
-# both paths surface the dedicated message.
+# connect_args isolation_level=AUTOCOMMIT must surface the dedicated
+# _AUTOCOMMIT_REJECTION_MSG, matching the engine-level rejection.
 
 
 def test_connect_args_isolation_level_autocommit_dedicated_message() -> None:
@@ -91,50 +75,39 @@ def test_connect_args_isolation_level_autocommit_dedicated_message() -> None:
 
 
 def test_connect_args_isolation_level_autocommit_case_insensitive() -> None:
-    """Engine-level uses ``iso_level.upper() == "AUTOCOMMIT"``; the
-    connect_args path must mirror the same case-insensitive compare."""
+    """The compare is case-insensitive, matching engine-level."""
     from sqlalchemydqlite.base import _AUTOCOMMIT_REJECTION_MSG
 
     dialect = DqliteDialect()
     for spelling in ("autocommit", "AutoCommit", "AUTOCOMMIT"):
         with pytest.raises(ArgumentError) as exc:
             dialect._validate_connect_kwargs({"isolation_level": spelling})
-        assert _AUTOCOMMIT_REJECTION_MSG in str(exc.value), (
-            f"connect_args isolation_level={spelling!r} must surface "
-            f"the dedicated AUTOCOMMIT diagnostic, matching engine-level."
-        )
+        assert _AUTOCOMMIT_REJECTION_MSG in str(exc.value)
 
 
 def test_connect_args_isolation_level_other_value_directs_to_engine_level() -> None:
-    """``isolation_level`` is routed only via the engine-level kwarg
-    (``create_engine(isolation_level=...)``). connect_args carrying
-    SERIALIZABLE (or any non-AUTOCOMMIT value) gets a directional
-    message pointing at the right layer rather than the misleading
-    generic "Unknown kwarg" / "check for typos" rejection."""
+    """A non-AUTOCOMMIT ``isolation_level`` in connect_args gets a message
+    pointing at the engine-level kwarg, not the generic "Unknown" one."""
     dialect = DqliteDialect()
     with pytest.raises(ArgumentError, match="create_engine"):
         dialect._validate_connect_kwargs({"isolation_level": "SERIALIZABLE"})
 
 
 def test_connect_args_isolation_level_none_directs_to_engine_level() -> None:
-    """``None`` is a legitimate stdlib ``isolation_level`` value (the
-    autocommit shape). It still belongs on the engine-level kwarg; the
-    directional message applies."""
+    """``None`` (the stdlib autocommit shape) also gets the directional
+    engine-level message."""
     dialect = DqliteDialect()
     with pytest.raises(ArgumentError, match="create_engine"):
         dialect._validate_connect_kwargs({"isolation_level": None})
 
 
-# --- Issue: connect_args bypass for converter-side bounds -----------
-# Three URL-query keys carried bounds inside the converter only
-# (validator=None) and were silently bypassing connect_args validation.
-# Pin each bypass scenario raises ArgumentError, plus the bool-rejection
-# tightening on timeout / close_timeout.
+# Three URL-query keys carried bounds in the converter only (validator=None)
+# and bypassed connect_args validation; pin each, plus bool rejection on
+# timeout/close_timeout.
 
 
 def test_connect_args_max_total_rows_above_cap_raises() -> None:
-    """``max_total_rows`` URL path caps at 2**31 - 1; connect_args path
-    must reject the same out-of-range int."""
+    """``max_total_rows`` URL path caps at 2**31 - 1; connect_args too."""
     dialect = DqliteDialect()
     with pytest.raises(ArgumentError, match="max_total_rows"):
         dialect._validate_connect_kwargs({"max_total_rows": 10**12})
@@ -164,10 +137,8 @@ def test_connect_args_max_total_rows_in_range_accepted() -> None:
 
 
 def test_connect_args_max_total_rows_bool_raises() -> None:
-    """``bool`` is a subclass of ``int`` in Python; ``True`` would
-    otherwise pass the ``0 < v <= upper`` predicate as the integer 1.
-    Reject explicitly so connect_args=={'max_total_rows': True}` is
-    surfaced as a config error rather than silently capping at 1."""
+    """``bool`` subclasses ``int``; ``True`` would pass as 1, so reject
+    it explicitly rather than silently capping at 1."""
     dialect = DqliteDialect()
     with pytest.raises(ArgumentError, match="max_total_rows"):
         dialect._validate_connect_kwargs({"max_total_rows": True})
@@ -192,8 +163,7 @@ def test_connect_args_max_continuation_frames_in_range_accepted() -> None:
 
 
 def test_connect_args_max_continuation_frames_none_accepted() -> None:
-    """``None`` mirrors the URL ``?max_continuation_frames=none`` token
-    that disables the defence-in-depth ceiling — keep parity."""
+    """``None`` disables the ceiling, mirroring the URL ``=none`` token."""
     dialect = DqliteDialect()
     dialect._validate_connect_kwargs({"max_continuation_frames": None})
 
@@ -205,11 +175,8 @@ def test_connect_args_max_continuation_frames_bool_raises() -> None:
 
 
 def test_connect_args_trust_server_heartbeat_string_raises() -> None:
-    """URL path's strict bool parser rejects free-form strings; the
-    connect_args path must too. ``"yes"`` is truthy as a Python value
-    but the URL parser would have decoded it to True via the named
-    token set. Bypass would let a typo like ``"flase"`` reach the
-    consumer as a truthy non-empty string."""
+    """Strict bool: reject free-form strings on connect_args too, else a
+    typo like ``"flase"`` reaches the consumer as a truthy string."""
     dialect = DqliteDialect()
     with pytest.raises(ArgumentError, match="trust_server_heartbeat"):
         dialect._validate_connect_kwargs({"trust_server_heartbeat": "yes"})
@@ -232,10 +199,8 @@ def test_connect_args_trust_server_heartbeat_false_accepted() -> None:
 
 
 def test_connect_args_timeout_bool_raises() -> None:
-    """``True > 0`` and ``math.isfinite(True)`` are both True, so the
-    pre-tightening validator silently accepted ``timeout=True``.
-    Reject ``bool`` explicitly. URL path can never carry a bool
-    (always converts a string), so this is a connect_args-only quirk."""
+    """``True > 0`` and ``isfinite(True)`` both pass, so reject ``bool``
+    explicitly (connect_args-only; URL always carries a string)."""
     dialect = DqliteDialect()
     with pytest.raises(ArgumentError, match="timeout"):
         dialect._validate_connect_kwargs({"timeout": True})

@@ -1,21 +1,6 @@
-"""Pin: ``AsyncAdaptedConnection.close()`` and ``.terminate()`` run
-the synchronous ``_force_close_transport`` fallback when an outer
-``asyncio.CancelledError`` lands on the awaited inner work, and then
-re-raise the cancel.
-
-The same fallback shape covers ``MissingGreenlet`` (SA's pool
-finalising a fairy from a non-greenlet context). This test closes
-the parallel gap on the cancellation axis: SA's pool calls
-``do_close`` or ``do_terminate`` from inside an outer
-``asyncio.timeout()`` / ``asyncio.shield`` cancel during
-``engine.dispose()``. Without the catch, the cancel propagates
-before the sync fallback runs and the underlying writer transport
-leaks (SA's pool absorbs the cancel as ``BaseException``).
-
-The tests use ``greenlet_spawn`` so the inner ``await_only`` calls
-are valid; the fake connection's awaited methods raise
-``CancelledError`` to simulate the cancel landing on the await.
-"""
+"""close() and terminate() run the sync _force_close_transport fallback when an
+outer CancelledError lands on the awaited inner work, then re-raise the cancel —
+otherwise the writer transport leaks (SA's pool absorbs the cancel)."""
 
 from __future__ import annotations
 
@@ -31,10 +16,8 @@ _FORCE_CLOSE_CALLS: list[str] = []
 
 
 class _ProbedAdapter(AsyncAdaptedConnection):
-    """Subclass overrides ``_force_close_transport`` to record
-    invocations. The parent's ``__slots__`` prevents per-instance
-    monkey-patching, so a subclass with a method override is the
-    cleanest way to probe."""
+    """Records _force_close_transport calls; subclassed because the parent's
+    __slots__ blocks per-instance monkey-patching."""
 
     def _force_close_transport(self) -> None:
         _FORCE_CLOSE_CALLS.append("force_close")
@@ -75,18 +58,14 @@ async def test_terminate_force_closes_transport_on_cancel_then_propagates() -> N
 
 @pytest.mark.asyncio
 async def test_close_rollback_cancel_with_close_succeeding_propagates_cancel() -> None:
-    """When rollback raises CancelledError and close succeeds, the
-    CancelledError still propagates — preserving asyncio's
-    "cancellation propagates" contract. ``force_close`` does NOT
-    fire because the close ran cleanly. This is the contract pinned
-    by the sibling test
-    ``test_close_runs_close_after_rollback_raise.py``."""
+    """Rollback CancelledError + clean close: the cancel still propagates and
+    force_close does NOT fire (close ran cleanly)."""
     _FORCE_CLOSE_CALLS.clear()
     adapter = _ProbedAdapter.__new__(_ProbedAdapter)
     inner = MagicMock()
     inner.address = "localhost:9001"
     inner.rollback = AsyncMock(side_effect=asyncio.CancelledError())
-    inner.close = AsyncMock()  # succeeds
+    inner.close = AsyncMock()
     adapter._connection = inner
     calls = _FORCE_CLOSE_CALLS
 

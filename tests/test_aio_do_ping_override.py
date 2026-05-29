@@ -1,12 +1,5 @@
-"""``DqliteDialect_aio`` overrides ``do_ping`` for the async fast path.
-
-The inherited sync ``DqliteDialect.do_ping`` routes through the
-``AsyncAdaptedCursor`` adapter and pays three ``await_only`` hops per
-checkout. The override runs ``SELECT 1`` directly through the dbapi
-async cursor in a single hop and routes loop-state RuntimeErrors
-through the adapter's ``_handle_exception`` so SA's ``is_disconnect``
-classifier evicts the broken slot.
-"""
+"""``DqliteDialect_aio`` overrides ``do_ping`` to run ``SELECT 1`` in a single async hop and
+route loop-state RuntimeErrors through ``_handle_exception`` so SA evicts the broken slot."""
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -17,21 +10,12 @@ from sqlalchemydqlite.aio import DqliteDialect_aio
 
 
 def test_aio_dialect_overrides_do_ping_locally() -> None:
-    """Drift defence: the override must live on the async dialect's
-    own class, not be picked up via MRO. A future refactor that moves
-    the override would be caught here.
-    """
+    """The override must live on the async dialect's own class, not be inherited via MRO."""
     assert "do_ping" in DqliteDialect_aio.__dict__
 
 
 async def test_do_ping_select_1_returns_true_on_healthy_connection() -> None:
-    """Healthy path: ``SELECT 1`` succeeds, ``do_ping`` returns True.
-
-    Execute alone proves the RTT — matching the sync sibling
-    ``DqliteDialect.do_ping`` and SA's ``DefaultDialect.do_ping``.
-    The fetchone() round-trip was dropped to halve ping latency
-    without losing the liveness signal.
-    """
+    """Healthy path: execute alone proves the RTT (no fetchone), and do_ping returns True."""
     dialect = DqliteDialect_aio()
 
     cursor = MagicMock()
@@ -53,10 +37,7 @@ async def test_do_ping_select_1_returns_true_on_healthy_connection() -> None:
 
 
 async def test_do_ping_returns_false_on_loop_state_runtime_error() -> None:
-    """Loop-state RuntimeError must classify as ping-fail (return
-    False) rather than propagate. ``_handle_exception`` re-raises as
-    ``OperationalError``; the outer ``do_ping`` catches that arm.
-    """
+    """Loop-state RuntimeError classifies as ping-fail (False) via the OperationalError remap."""
     dialect = DqliteDialect_aio()
 
     cursor = MagicMock()
@@ -66,10 +47,6 @@ async def test_do_ping_returns_false_on_loop_state_runtime_error() -> None:
     inner_conn = MagicMock()
     inner_conn.cursor = MagicMock(return_value=cursor)
 
-    # ``_handle_exception`` re-raises as OperationalError; the
-    # adapter's plumbing is exercised directly via the
-    # ``dbapi_connection`` mock — wire the override up to the real
-    # AsyncAdaptedConnection method by binding it.
     from sqlalchemydqlite.aio import AsyncAdaptedConnection
 
     dbapi_connection: Any = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
@@ -80,8 +57,7 @@ async def test_do_ping_returns_false_on_loop_state_runtime_error() -> None:
 
 
 async def test_do_ping_returns_false_on_operational_error() -> None:
-    """``OperationalError`` (transport/server errors classified as
-    disconnect by the dbapi) classifies as ping-fail."""
+    """``OperationalError`` classifies as ping-fail."""
     from dqlitedbapi.exceptions import OperationalError as DbapiOperationalError
 
     dialect = DqliteDialect_aio()
@@ -101,11 +77,7 @@ async def test_do_ping_returns_false_on_operational_error() -> None:
 
 
 async def test_do_ping_returns_false_on_oserror_from_cursor_call() -> None:
-    """Drift defence: a live socket-RST during ``cursor()`` itself
-    (raised from the inner sync ``cursor()`` call inside
-    ``_async_ping``) must classify as ping-fail. The wrapper's
-    ``OSError`` arm absorbs it without leaking past
-    ``_do_ping_w_event``'s ``loaded_dbapi.Error`` filter."""
+    """An OSError from the inner ``cursor()`` call classifies as ping-fail, not a leak."""
     dialect = DqliteDialect_aio()
 
     inner_conn = MagicMock()

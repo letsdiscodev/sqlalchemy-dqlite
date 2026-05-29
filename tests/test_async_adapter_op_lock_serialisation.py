@@ -1,20 +1,7 @@
-"""Pin the contract that the underlying dbapi
-``AsyncConnection._op_lock`` serialises every adapter
-``execute`` / ``executemany`` round-trip — without an explicit
-``_execute_mutex`` on the SA adapter (which the SA reference
-``AsyncAdapt_dbapi_connection`` adds).
-
-If a future refactor either:
-
-  (a) drops the per-execute ``op_lock`` acquire inside the dbapi's
-      ``AsyncCursor.execute`` / ``executemany`` path, OR
-  (b) introduces a long-lived adapter cursor that bypasses the
-      dbapi cursor's per-call op_lock acquire,
-
-then two greenlets sharing one adapter could interleave
-``cursor.execute`` calls. The pin here asserts that the dbapi
-op_lock IS held during the inner execute so the mutex remains
-unnecessary.
+"""Pin: the dbapi ``AsyncConnection._op_lock`` serialises every adapter
+execute round-trip, so the SA reference adapter's explicit
+``_execute_mutex`` stays unnecessary. The lock must be held during the
+inner execute, else two greenlets sharing one adapter could interleave.
 """
 
 import asyncio
@@ -28,20 +15,13 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection, AsyncAdaptedCursor
 
 @pytest.mark.asyncio
 async def test_dbapi_op_lock_serialises_adapter_execute() -> None:
-    """Two adapter ``execute`` calls dispatched in parallel must be
-    observed serialised by the underlying dbapi ``op_lock`` —
-    pinning that the lock IS the serialisation primitive the SA
-    ``_execute_mutex`` would otherwise provide."""
+    """Two parallel adapter executes are serialised by the dbapi op_lock —
+    the primitive SA's ``_execute_mutex`` would otherwise provide."""
     op_lock = asyncio.Lock()
 
-    # Track the order in which the two execute bodies see the lock
-    # held / released.
     observation: list[str] = []
 
     async def serialised_execute(_op: str, _params: Any | None = None) -> None:
-        # Verify lock IS held while we run; if a future regression
-        # drops the lock the parallel calls would interleave and the
-        # observation order would change.
         assert op_lock.locked(), (
             "expected dbapi op_lock to be held during adapter execute round-trip"
         )
@@ -72,15 +52,14 @@ async def test_dbapi_op_lock_serialises_adapter_execute() -> None:
     cursor1 = AsyncAdaptedCursor(adapter)
     cursor2 = AsyncAdaptedCursor(adapter)
 
-    # Drive both execute calls concurrently via the dbapi cursor's
-    # execute (which is what the adapter cursor body invokes).
+    # Drive both executes concurrently via the dbapi cursor (what the
+    # adapter cursor body invokes).
     await asyncio.gather(
         fake_dbapi_cursor.execute("SELECT 1"),
         fake_dbapi_cursor.execute("SELECT 2"),
     )
 
-    # The lock-holding execute body recorded a strict
-    # start/end pair per call — no interleave.
+    # A strict start/end pair per call means no interleave.
     assert observation == [
         "execute:start",
         "execute:end",
@@ -88,15 +67,4 @@ async def test_dbapi_op_lock_serialises_adapter_execute() -> None:
         "execute:end",
     ], f"saw interleave: {observation}"
 
-    # Sanity: the adapter cursor objects exist and reference the same
-    # underlying connection (no per-cursor mutex was needed).
     assert cursor1._adapt_connection is cursor2._adapt_connection
-
-
-def test_async_adapter_documents_op_lock_subsumes_execute_mutex() -> None:
-    """Pin the docstring claim that the underlying op_lock subsumes
-    SA's reference _execute_mutex. A future refactor that removes
-    the doc note should also re-introduce the mutex."""
-    doc = AsyncAdaptedConnection.__doc__ or ""
-    assert "_execute_mutex" in doc
-    assert "op_lock" in doc

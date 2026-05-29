@@ -1,12 +1,8 @@
-"""Pins the invariant that dqlite ignores ``PRAGMA read_uncommitted``.
+"""Pin: dqlite ignores ``PRAGMA read_uncommitted``.
 
-``DqliteDialect.get_isolation_level`` returns the literal
-``"SERIALIZABLE"`` without consulting the connection because dqlite
-has no mechanism to weaken isolation — every statement goes through
-Raft consensus. If upstream dqlite ever grows a read-replica or
-snapshot-isolation mode, this test fails loudly and signals that
-``get_isolation_level`` (and ``get_isolation_level_values``) must
-start introspecting rather than returning a constant.
+get_isolation_level returns the constant "SERIALIZABLE" because every statement
+goes through Raft; if dqlite grows a weaker mode this fails and signals that
+get_isolation_level[_values] must start introspecting.
 """
 
 from __future__ import annotations
@@ -17,18 +13,8 @@ from sqlalchemy import create_engine, text
 
 @pytest.mark.integration
 def test_pragma_read_uncommitted_cannot_weaken_isolation(engine_url: str) -> None:
-    """``PRAGMA read_uncommitted`` cannot weaken isolation on dqlite.
-    Upstream either rejects the PRAGMA with "not authorized" (the
-    current behaviour) or returns ``0`` (the inherited stdlib sqlite3
-    default-in-shared-cache-mode read behaviour). Either outcome pins
-    the invariant: a caller asking for weaker isolation does NOT get
-    it.
-
-    If this ever returns a non-zero value without raising, dqlite has
-    acquired a weaker isolation mode and ``DqliteDialect."
-    get_isolation_level`` / ``get_isolation_level_values`` must stop
-    returning a constant and start introspecting.
-    """
+    """Either dqlite rejects the PRAGMA ("not authorized") or returns 0; both pin
+    that a caller cannot weaken isolation. A non-zero result means it can."""
     from sqlalchemy.exc import DatabaseError
 
     engine = create_engine(engine_url)
@@ -37,12 +23,8 @@ def test_pragma_read_uncommitted_cannot_weaken_isolation(engine_url: str) -> Non
             try:
                 result = conn.execute(text("PRAGMA read_uncommitted")).scalar()
             except DatabaseError as exc:
-                # dqlite's authorizer currently rejects the PRAGMA
-                # outright with SQLite primary code 23 (SQLITE_AUTH),
-                # which routes to ``DatabaseError`` per stdlib parity
-                # (CPython util.c::get_exception_class default arm).
-                # That's a stronger invariant than "returns 0" —
-                # weaker isolation literally cannot be requested.
+                # dqlite's authorizer rejects with SQLITE_AUTH (23), which routes
+                # to DatabaseError per stdlib parity — stronger than "returns 0".
                 assert "not authorized" in str(exc).lower(), (
                     f"PRAGMA rejected but with unexpected message: {exc}"
                 )

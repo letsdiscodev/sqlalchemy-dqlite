@@ -1,18 +1,6 @@
-"""Pin: the ISO8601-parse-failure log path in the Date / Time / DateTime
-result_processors must truncate server-controlled TEXT before formatting
-into ``logger.warning(..., %r, ...)``.
-
-The wire layer caps each TEXT cell at ``_MAX_TEXT_VALUE_SIZE = 16 MiB``.
-A malicious or compromised server returning oversized TEXT for a column
-the SA dialect maps to ``DateTime`` / ``Date`` / ``Time`` produces a
-~32 MiB log line per row (``%r`` roughly doubles the size with quoting
-escapes). Multiplied across a result set, this is a DoS vector against
-operator log infrastructure (rsyslog, journald rate limiters, log
-shippers).
-
-Pin that the emitted log message stays bounded regardless of input
-size, and that a truncation marker is present.
-"""
+"""ISO8601-parse-failure log path in the Date/Time/DateTime processors must
+truncate server-controlled TEXT before ``%r`` formatting, else an oversized
+TEXT cell (up to the wire's 16 MiB cap) is a per-row log-infra DoS vector."""
 
 from __future__ import annotations
 
@@ -22,10 +10,6 @@ import pytest
 
 from sqlalchemydqlite.base import _DqliteDate, _DqliteDateTime, _DqliteTime
 
-# Bound chosen to bracket the operator-useful range and reject any
-# >= 1 KiB log lines on this path. Even with the truncation marker
-# overhead, the emitted record's raw message (logger record.message)
-# should comfortably fit under this cap.
 _LOG_LINE_MAX_BYTES = 4096
 
 
@@ -50,11 +34,9 @@ def test_unparseable_iso8601_log_truncates_oversized_server_text(
     with caplog.at_level(logging.WARNING, logger="sqlalchemydqlite.base"):
         result = proc(huge)
 
-    # Defensive contract: pass through on parse failure (matches existing
-    # processor behaviour — the warning is forensic only).
+    # Pass through on parse failure; the warning is forensic only.
     assert result == huge
 
-    # Exactly one warning should fire.
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1, f"expected 1 warning, got {len(warnings)}"
 
@@ -65,9 +47,7 @@ def test_unparseable_iso8601_log_truncates_oversized_server_text(
         f"log line is {len(encoded)} bytes; expected < {_LOG_LINE_MAX_BYTES} "
         "(server-controlled TEXT must be truncated before %r formatting)."
     )
-    # Truncation marker / shape: the formatted message MUST NOT contain
-    # a 1 MiB+ run of the input character — that would mean we logged
-    # the full input.
+    # A 1 MiB+ run of the input char would mean we logged the full input.
     assert "X" * (1024 * 1024) not in formatted, (
         "formatted log line contains a 1 MiB run of input character — truncation is missing."
     )

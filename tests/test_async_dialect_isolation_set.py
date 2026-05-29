@@ -1,18 +1,5 @@
-"""Pin async-dialect ``set_isolation_level`` parity with the sync path.
-
-The sync ``DqliteDialect.set_isolation_level`` is well-pinned by
-``test_dialect.py::TestIsolationLevel``. The async ``DqliteDialect_aio``
-inherits that method without override; SA's async pool resets isolation
-between checkouts via ``set_isolation_level(conn, None)`` on the async
-dialect class, so a future async-only override that diverges from the
-sync semantics would break async pool checkouts silently.
-
-Mirror the four sync test cases on the async dialect class:
-- ``None`` → no-op, no cursor/attribute access on the dbapi conn.
-- ``"SERIALIZABLE"`` → no-op, no warning.
-- ``"AUTOCOMMIT"`` → ArgumentError with the dqlite-specific message.
-- unknown (``"READ UNCOMMITTED"``) → ArgumentError ("only supports SERIALIZABLE").
-"""
+"""Pin async-dialect ``set_isolation_level`` parity with the sync path:
+``DqliteDialect_aio`` inherits without override and must not diverge."""
 
 from __future__ import annotations
 
@@ -27,12 +14,9 @@ from sqlalchemydqlite.aio import DqliteDialect_aio
 
 class TestAsyncDialectSetIsolationLevel:
     def test_none_is_rejected_with_argument_error(self) -> None:
-        """SA's async pool's reset path goes through the dialect-local
-        ``reset_isolation_level`` no-op override, NOT through
-        ``set_isolation_level(conn, None)``. Pin the strict-reject-
-        None behaviour on the async dialect; mirrors the sync
-        sibling and the pysqlite parent's ``KeyError``-on-None
-        contract."""
+        """SA's async pool resets isolation via the ``reset_isolation_level``
+        no-op override, not ``set_isolation_level(conn, None)``, so None is
+        strictly rejected here."""
         from sqlalchemy.exc import ArgumentError
 
         dialect = DqliteDialect_aio()

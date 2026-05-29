@@ -1,17 +1,7 @@
-"""Pin: ``sqlalchemy.JSON`` column type round-trips correctly through
-the dqlite SA dialect.
+"""Pin: ``sqlalchemy.JSON`` round-trips through the dqlite SA dialect.
 
-SA's SQLite dialect supports ``JSON`` via SQLite's JSON1 functions.
-dqlite ships SQLite >= 3.35 so JSON1 is bundled; the SA dialect
-inherits the JSON support from ``SQLiteDialect``. There was no
-integration test exercising this end-to-end — this file closes
-that gap.
-
-The serialization path is:
-``dict | list → JSON-stringify → wire TEXT → server`` and the
-read-back is the inverse. Any silent encoding bug (Unicode,
-embedded NULL handling, surrogate handling) on the JSON-string would
-surface here.
+Exercises the dict|list → JSON-string → wire TEXT path end-to-end so a silent
+Unicode / embedded-NULL / surrogate encoding bug would surface here.
 """
 
 from __future__ import annotations
@@ -97,30 +87,22 @@ def test_json_nested_round_trip(json_table: tuple[Engine, Table]) -> None:
 
 @pytest.mark.integration
 def test_json_sql_null_distinct_from_json_null(json_table: tuple[Engine, Table]) -> None:
-    """SQL NULL and JSON null are distinct values. Pin both round-trip
-    paths."""
+    """SQL NULL and JSON null both round-trip to Python None."""
     engine, t = json_table
     with engine.begin() as conn:
-        # SQL NULL — pass Python None directly via the column-level
-        # ``null()`` helper (per SA's JSON docs).
         conn.execute(t.insert().values(id=5, data=sa.null()))
-        # JSON null literal.
         conn.execute(t.insert().values(id=6, data=JSON.NULL))
 
         row5 = conn.execute(sa.select(t.c.data).where(t.c.id == 5)).fetchone()
         row6 = conn.execute(sa.select(t.c.data).where(t.c.id == 6)).fetchone()
         assert row5 is not None
         assert row6 is not None
-        assert row5[0] is None  # SQL NULL surfaces as Python None
-        assert row6[0] is None  # JSON null also surfaces as Python None
-        # Note: SA's JSON type collapses both to None on readback by
-        # default; the distinction is meaningful on insert via
-        # ``none_as_null``-aware columns. We don't pin that distinction
-        # here because it depends on column-level options not exercised
-        # by this test.
+        assert row5[0] is None
+        assert row6[0] is None
+        # SA collapses both to None on readback; the SQL-NULL vs JSON-null
+        # distinction needs none_as_null column options not exercised here.
 
 
-# Async sibling
 @pytest.fixture
 async def async_json_engine(async_engine_url: str) -> AsyncEngine:
     return create_async_engine(async_engine_url, future=True)

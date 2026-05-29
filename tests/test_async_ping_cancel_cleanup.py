@@ -1,25 +1,7 @@
-"""Pin: ``DqliteDialect_aio._async_ping`` cancel-recovery contract.
-
-`_async_ping` opens a raw dbapi cursor (NOT the SA adapter) and
-runs ``execute`` / ``fetchone`` / ``close``. The close arm's
-suppression scope was tightened to mirror
-``AsyncAdaptedCursor.execute``'s sibling discipline:
-``(Exception, asyncio.CancelledError)`` with a DEBUG record. This
-file pins:
-
-1. Cancel delivered at ``await cur.execute(...)`` propagates the
-   ``CancelledError`` while the ``finally`` arm still runs
-   ``cur.close()`` so the borrowed cursor does not leak.
-2. A ``CancelledError`` raised from inside ``cur.close()`` is
-   absorbed by the close arm and DEBUG-logged (the ping itself
-   already succeeded; retiring the slot now would defeat
-   pre-ping).
-3. A plain ``RuntimeError`` from ``cur.close()`` is likewise
-   absorbed.
-4. A dbapi disconnect-class error (``OperationalError`` with a
-   slot-fatal code) raised from close is no longer silent — the
-   DEBUG record exposes it so a flapping leader is observable.
-"""
+"""Pin: ``DqliteDialect_aio._async_ping`` cancel-recovery contract — the
+``finally`` arm always closes the borrowed cursor, the close arm absorbs
+cancel/transport errors with a DEBUG record (the ping already succeeded),
+and dbapi disconnect-class errors from close are logged not silent."""
 
 from __future__ import annotations
 
@@ -34,45 +16,31 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection, DqliteDialect_aio
 
 
 class _FakeInnerConnection:
-    """A stand-in ``AsyncConnection`` returning a configurable cursor.
-
-    Lets us inject ``execute`` / ``close`` coroutines that block,
-    raise, or cancel mid-await without bringing up the full
-    connection / event-loop machinery.
-    """
+    """Stand-in ``AsyncConnection`` returning a configurable cursor."""
 
     def __init__(self, cursor: Any) -> None:
         self._cursor = cursor
-        # SA's ``is_disconnect`` proxy-check uses
-        # ``weakref.ProxyTypes`` to detect a closed connection; this
-        # stand-in is a real object so the guard at the top of
-        # ``_async_ping`` does not short-circuit.
+        # A real object (not a dead proxy), so _async_ping's top-of-method
+        # proxy guard does not short-circuit.
 
     def cursor(self) -> Any:
         return self._cursor
 
 
 class _FakeAdaptedConnection:
-    """Stand-in ``AsyncAdaptedConnection`` exposing only the surface
-    that ``_async_ping`` reaches into.
-    """
+    """Stand-in ``AsyncAdaptedConnection`` exposing only what ``_async_ping`` uses."""
 
     def __init__(self, inner: _FakeInnerConnection) -> None:
         self._connection = inner
 
     def _handle_exception(self, error: BaseException) -> None:
-        # Mirror the real adapter: rewrap RuntimeError as the dialect
-        # expects. Tests below don't exercise this arm, but keep the
-        # surface honest.
         raise error
 
 
 @pytest.mark.asyncio
 async def test_async_ping_cancel_mid_execute_runs_close_in_finally() -> None:
-    """Cancel during ``await cur.execute(...)``: the cancel must
-    propagate out, and the ``finally`` arm must still call
-    ``cur.close()`` so the borrowed cursor does not leak.
-    """
+    """Cancel during ``await cur.execute(...)`` propagates, but ``finally``
+    still calls ``cur.close()`` so the borrowed cursor does not leak."""
     close_called: list[bool] = []
     execute_started = asyncio.Event()
 
@@ -80,8 +48,7 @@ async def test_async_ping_cancel_mid_execute_runs_close_in_finally() -> None:
 
     async def _execute(_sql: str) -> None:
         execute_started.set()
-        # Block forever — caller cancels the task.
-        await asyncio.Event().wait()
+        await asyncio.Event().wait()  # block forever; caller cancels
 
     def _close() -> None:
         close_called.append(True)
@@ -114,15 +81,8 @@ async def test_async_ping_cancel_mid_execute_runs_close_in_finally() -> None:
 async def test_async_ping_close_cancellederror_absorbed_and_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """If ``cur.close()`` raises ``CancelledError`` (e.g. a
-    re-delivered cancel during the close coroutine), the close arm
-    must absorb it — mirroring the sibling
-    ``AsyncAdaptedCursor.execute`` close discipline — and emit a
-    DEBUG record so the suppression is observable. The ping itself
-    already succeeded, so retiring the slot now would defeat the
-    point of pre-ping; ``KeyboardInterrupt`` / ``SystemExit`` still
-    propagate because the catch tuple excludes them.
-    """
+    """A ``CancelledError`` from ``cur.close()`` is absorbed and DEBUG-logged;
+    the ping already succeeded, so retiring the slot would defeat pre-ping."""
     close_called: list[bool] = []
 
     cursor = MagicMock()
@@ -152,8 +112,7 @@ async def test_async_ping_close_cancellederror_absorbed_and_logged(
     import logging
 
     with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.aio"):
-        # Must NOT raise — the close-arm CancelledError is suppressed.
-        await dialect._async_ping(adapted)
+        await dialect._async_ping(adapted)  # must not raise
 
     assert close_called == [True], "cur.close() must run on the happy path"
     msgs = "\n".join(rec.getMessage() for rec in caplog.records)
@@ -166,15 +125,8 @@ async def test_async_ping_close_cancellederror_absorbed_and_logged(
 
 @pytest.mark.asyncio
 async def test_async_ping_close_transport_class_exception_is_swallowed() -> None:
-    """A transport-class exception (``OSError`` /
-    ``DqliteConnectionError`` / dbapi.``DatabaseError``-tree) from
-    ``cur.close()`` on the happy path is absorbed by the narrow
-    catch tuple so the ping returns success. The earlier bare
-    ``RuntimeError`` test was relying on the over-broad
-    ``except Exception`` shape which has since been narrowed to
-    match the sync sibling — letting programmer-bug shapes
-    propagate. Use ``OSError`` (a real transport-class shape) here.
-    """
+    """A transport-class exception (here ``OSError``) from ``cur.close()`` is
+    absorbed by the narrow catch tuple so the ping returns success."""
     cursor = MagicMock()
 
     async def _execute(_sql: str) -> None:
@@ -198,21 +150,15 @@ async def test_async_ping_close_transport_class_exception_is_swallowed() -> None
     dialect = DqliteDialect_aio.__new__(DqliteDialect_aio)
     dialect._dialect_specific_select_one = "SELECT 1"
 
-    # Must not raise — OSError is in the narrow tuple.
-    await dialect._async_ping(adapted)
+    await dialect._async_ping(adapted)  # must not raise; OSError is in the narrow tuple
 
 
 @pytest.mark.asyncio
 async def test_async_ping_close_dbapi_error_is_logged_not_silent(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A dbapi disconnect-class error (CORRUPT / FORMAT / NOTADB)
-    raised by the close round-trip after a successful ping must be
-    observable in DEBUG logs. The previous
-    ``contextlib.suppress(Exception)`` silently absorbed these so a
-    flapping leader was invisible at the ping site; this test pins
-    the DEBUG emission so the suppression is no longer silent.
-    """
+    """A dbapi disconnect-class error from close after a successful ping must
+    be observable in DEBUG logs, not silently absorbed (flapping leader)."""
     from dqlitedbapi.exceptions import OperationalError
 
     cursor = MagicMock()
@@ -250,11 +196,8 @@ async def test_async_ping_close_dbapi_error_is_logged_not_silent(
 
 @pytest.mark.asyncio
 async def test_async_ping_dead_proxy_guard_unrelated_sanity() -> None:
-    """Sanity: the dead-proxy guard at the top of ``_async_ping``
-    still raises ``InterfaceError`` (covered by the sibling test,
-    pinned here to ensure the cancel-arm tests above don't shadow
-    the guard).
-    """
+    """Sanity: the dead-proxy guard still raises ``InterfaceError`` (so the
+    cancel-arm tests above don't shadow it)."""
     target = type("Dead", (), {})()
     proxy = weakref.proxy(target)
     del target

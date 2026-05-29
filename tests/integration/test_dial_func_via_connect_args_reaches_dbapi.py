@@ -1,15 +1,7 @@
-"""Pin: ``dial_func`` passed via SA ``connect_args=`` reaches the
-dbapi layer and is invoked on the dial.
+"""Pin: ``dial_func`` via SA ``connect_args=`` reaches the dbapi and is invoked.
 
-``_CONNECT_KWARG_ALLOWED`` (base.py) lists ``dial_func`` explicitly,
-but no end-to-end test verified the kwarg actually flows through the
-dialect's ``create_connect_args`` into the dbapi connect path. A
-custom dialer is the canonical way to inject TLS / unix-socket /
-test-only transport into the dial; a regression that drops it from
-the allowlist (or fails to forward it) would land silently.
-
-URL-side ``dial_func`` is correctly rejected at URL parse — covered
-by exclusion in existing URL-kwarg tests.
+A custom dialer is the way to inject TLS / unix-socket / test transport; a
+regression dropping it from the allowlist or failing to forward it lands silently.
 """
 
 from __future__ import annotations
@@ -23,10 +15,6 @@ from dqliteclient._dial import open_connection_with_keepalive
 
 
 def test_sync_dial_func_via_connect_args_routed_to_dbapi(engine_url: str) -> None:
-    """Sync dialect: pass a custom ``dial_func`` that delegates to the
-    default dialer but records its invocation; verify the dialer was
-    actually called during ``engine.connect()``.
-    """
     invocations: list[str] = []
 
     async def recording_dialer(address: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:

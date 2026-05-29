@@ -1,8 +1,5 @@
-"""Integration tests for supports_native_boolean = True.
-
-DDL for ``Column(Boolean)`` must not emit ``CHECK (col IN (0, 1))``
-because dqlite's wire protocol enforces the invariant natively.
-"""
+"""supports_native_boolean=True: Column(Boolean) DDL must not emit
+``CHECK (col IN (0, 1))`` since dqlite enforces the invariant natively."""
 
 from collections.abc import Generator
 
@@ -37,7 +34,6 @@ class TestNativeBoolean:
         engine.dispose()
 
     def test_ddl_does_not_emit_check_constraint(self, engine: Engine) -> None:
-        """With supports_native_boolean=True, no CHECK clause should appear."""
         with engine.connect() as conn:
             result = conn.execute(
                 text("SELECT sql FROM sqlite_master WHERE type='table' AND name='native_bool_test'")
@@ -55,10 +51,7 @@ class TestNativeBoolean:
             assert all(isinstance(r.flag, bool) for r in rows)
 
     def test_nullable_boolean_preserves_none(self, engine: Engine) -> None:
-        """A NULL in a nullable Boolean column reads back as ``None``,
-        not ``False`` — the NULL-vs-FALSE distinction must survive the
-        ORM layer, not just the raw client/DBAPI layers.
-        """
+        """NULL in a nullable Boolean reads back as None, not False, through the ORM."""
         with Session(engine) as s:
             s.add_all(
                 [
@@ -77,15 +70,12 @@ class TestNativeBoolean:
         insp = inspect(engine)
         cols = {c["name"]: c for c in insp.get_columns("native_bool_test")}
         assert "flag" in cols
-        # SQLAlchemy should be able to reflect the BOOLEAN type back.
-        # We accept either Boolean or the inherited SQLite numeric
-        # fallback, but assert type_affinity is Boolean.
+        # Accept Boolean or the inherited SQLite numeric fallback.
         from sqlalchemy import types
 
         assert cols["flag"]["type"].python_type is bool or isinstance(
             cols["flag"]["type"], types.Boolean
         )
-        # Non-null reflection works.
         assert cols["flag"]["nullable"] is False
 
 

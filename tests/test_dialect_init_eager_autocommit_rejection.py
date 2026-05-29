@@ -1,15 +1,5 @@
-"""Pin: ``DqliteDialect(__init__)`` and ``DqliteDialect_aio(__init__)``
-eagerly reject ``isolation_level="AUTOCOMMIT"`` at construction time
-— mirroring the eager ``paramstyle != 'qmark'`` rejection in the same
-``__init__``.
-
-The downstream ``set_isolation_level`` arm raises at SA's connect-
-listener step (``engine/default.py::_builtin_onconnect``) — too late.
-``create_engine(..., isolation_level="AUTOCOMMIT")`` constructs cleanly
-today, then surfaces ``ArgumentError`` at the first checkout with a
-confusing pool-side traceback. Reject at construction so the
-diagnostic points at the kwarg.
-"""
+"""Pin: ``__init__`` eagerly rejects ``isolation_level="AUTOCOMMIT"`` at construction so the
+diagnostic points at the kwarg, rather than surfacing later at first pool checkout."""
 
 from __future__ import annotations
 
@@ -31,18 +21,13 @@ class TestDialectInitEagerAutocommitRejection:
 
     @pytest.mark.parametrize("value", ["autocommit", "AutoCommit", "AUTOCOMMIT"])
     def test_init_rejects_case_variants(self, value: str) -> None:
-        """SA accepts only the spaceless ``AUTOCOMMIT`` form (case-
-        insensitive after ``.upper()``); underscored forms like
-        ``"AUTO_COMMIT"`` are filtered out by SA itself before
-        reaching ``set_isolation_level``. Match SA's narrow
-        spaceless form so we don't drift narrower than SA's filter."""
+        # SA accepts only the spaceless AUTOCOMMIT form (case-insensitive); match that
+        # narrow form so we don't drift narrower than SA's own filter.
         with pytest.raises(ArgumentError, match="AUTOCOMMIT"):
             DqliteDialect(isolation_level=value)
 
     def test_init_accepts_isolation_level_serializable(self) -> None:
         dialect = DqliteDialect(isolation_level="SERIALIZABLE")
-        # The on-connect listener key is set by SA's DefaultDialect
-        # __init__ when isolation_level is a recognised value.
         assert dialect._on_connect_isolation_level == "SERIALIZABLE"
 
     def test_init_accepts_no_isolation_level(self) -> None:

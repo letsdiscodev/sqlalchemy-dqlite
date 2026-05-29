@@ -1,9 +1,6 @@
-"""``regexp_match`` raises at compile time (no UDF on the wire).
-
-dqlite has no UDF primitive, so the inherited SQLite ``REGEXP`` operator
-cannot be honoured at execute. Raise at compile so the diagnostic
-surfaces before round-tripping to the cluster.
-"""
+"""``regexp_match`` raises at compile time: dqlite has no UDF, so the
+inherited SQLite ``REGEXP`` operator can't be honoured; fail before the
+round-trip."""
 
 import pytest
 from sqlalchemy import Column, Integer, MetaData, String, Table, select
@@ -41,10 +38,8 @@ def test_regexp_match_raises_at_compile_with_dqlite_diagnostic(
 
 
 def test_not_regexp_match_raises_at_compile(stmt_table: Table) -> None:
-    """Negated form ``~col.regexp_match(pattern)``: SA dispatches to
-    ``visit_not_regexp_match_op_binary`` which is a separate visitor on
-    the parent compiler — both must override.
-    """
+    """Negated form: SA dispatches to a separate
+    ``visit_not_regexp_match_op_binary`` visitor — both must override."""
     from dqlitedbapi.exceptions import NotSupportedError
 
     stmt = select(stmt_table).where(~stmt_table.c.name.regexp_match("foo"))
@@ -54,18 +49,14 @@ def test_not_regexp_match_raises_at_compile(stmt_table: Table) -> None:
 
 
 def test_async_dialect_inherits_dqlite_compiler() -> None:
-    """``DqliteDialect_aio`` inherits from ``DqliteDialect`` so the
-    statement-compiler binding propagates without a separate pin.
-    """
+    """The aio dialect inherits the statement-compiler binding."""
     assert DqliteDialect_aio.statement_compiler is DqliteCompiler
     assert DqliteDialect.statement_compiler is DqliteCompiler
 
 
 def test_dqlite_compiler_subclasses_sqlite_compiler() -> None:
-    """``DqliteCompiler`` MUST be a ``SQLiteCompiler`` subclass so all
-    other SQLite-specific compile rules (ON CONFLICT, RETURNING, etc.)
-    are inherited unchanged.
-    """
+    """``DqliteCompiler`` subclasses ``SQLiteCompiler`` so the other
+    SQLite compile rules (ON CONFLICT, RETURNING) are inherited."""
     from sqlalchemy.dialects.sqlite.base import SQLiteCompiler
 
     assert issubclass(DqliteCompiler, SQLiteCompiler)

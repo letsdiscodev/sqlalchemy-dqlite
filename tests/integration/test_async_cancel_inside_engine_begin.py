@@ -1,21 +1,8 @@
 """Cancellation inside ``async with engine.begin()`` rolls back, no leak.
 
-When a CancelledError fires inside the block (e.g. from
-``asyncio.timeout()``), SA's context manager must:
-
-- emit a ROLLBACK, not a COMMIT,
-- return the connection to the pool cleanly,
-- propagate the CancelledError unchanged.
-
-Pin two contracts:
-
-1. Cancellation mid-block rolls back uncommitted writes.
-2. Repeated cancellations don't leak pool slots — pool size stays
-   bounded.
-
-Cancellation-during-COMMIT is harder to drive deterministically
-(needs precise timing on the wire round-trip) and is left to a
-follow-up.
+A CancelledError mid-block must ROLLBACK (not COMMIT), return the connection
+to the pool, and propagate unchanged. Cancellation-during-COMMIT is covered
+in ``test_async_cancel_during_commit_invalidates_slot.py``.
 """
 
 from __future__ import annotations
@@ -44,8 +31,7 @@ class TestAsyncCancelInsideEngineBegin:
                         await asyncio.sleep(1.0)
                         await conn.execute(text("INSERT INTO async_cancel_rb (id) VALUES (2)"))
 
-            # Row 1 was inserted but the transaction was cancelled;
-            # implicit ROLLBACK MUST have undone it.
+            # Implicit ROLLBACK must have undone the cancelled row 1.
             async with engine.begin() as conn:
                 rows = (await conn.execute(text("SELECT id FROM async_cancel_rb"))).all()
             assert rows == []
@@ -55,8 +41,7 @@ class TestAsyncCancelInsideEngineBegin:
     async def test_repeated_cancellations_do_not_leak_pool_slots(
         self, async_engine_url: str
     ) -> None:
-        """After multiple cancellations mid-transaction, the pool size
-        stays bounded — no slot leak per cancelled task."""
+        """Repeated mid-transaction cancellations don't leak pool slots."""
         engine = create_async_engine(async_engine_url, pool_size=2, max_overflow=0)
         try:
             async with engine.begin() as conn:
@@ -69,8 +54,6 @@ class TestAsyncCancelInsideEngineBegin:
                             await conn.execute(text("SELECT 1"))
                             await asyncio.sleep(1.0)
 
-            # Pool checkedout should be 0 (all returned/discarded);
-            # checkedin + checkedout should be ≤ pool_size + max_overflow.
             pool = engine.pool
             checkedout = pool.checkedout()  # type: ignore[attr-defined]
             assert checkedout == 0, (

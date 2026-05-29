@@ -1,14 +1,6 @@
-"""Pin: ``terminate()`` and ``close()`` on ``AsyncAdaptedConnection``
-are idempotent — calling either twice (or one then the other) does
-not raise.
-
-SA's async pool may call ``do_terminate`` after a slot has already
-been closed by an earlier failure path (e.g., ``engine.dispose()``
-during a cascade where one connection's close raised and triggered
-forced reclaim of every checked-out slot). The dbapi
-``AsyncConnection.close`` is documented as idempotent; pin that the
-adapter preserves that property for both calls.
-"""
+"""``terminate()`` and ``close()`` are idempotent — calling either twice
+(or one then the other) does not raise. SA's pool may call do_terminate
+after a slot was already closed by an earlier failure cascade."""
 
 from __future__ import annotations
 
@@ -37,13 +29,8 @@ async def test_terminate_twice_does_not_raise() -> None:
     await greenlet_spawn(adapter.terminate)
     await greenlet_spawn(adapter.terminate)
 
-    # The pin is "no exception escapes". The first ``terminate`` runs
-    # the inner close and swaps ``self._connection`` for a
-    # ``weakref.proxy``; the second ``terminate`` short-circuits on
-    # the adapter-level idempotency guard (the proxy-state check) and
-    # does NOT reach the inner — the inner could already be dead-
-    # proxied, and calling ``inner.close()`` on a GC'd proxy would
-    # raise ``ReferenceError`` outside the ``dbapi.Error`` umbrella.
+    # Second terminate short-circuits on the proxy-state guard and never
+    # reaches the inner — a GC'd proxy's close() would raise ReferenceError.
     assert adapter._connection.close.await_count == 1
 
 

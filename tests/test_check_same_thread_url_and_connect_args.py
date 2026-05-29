@@ -1,33 +1,6 @@
-"""Pin: SA dialect accepts ``check_same_thread`` via both the URL
-query string and the ``connect_args=`` kwarg on
-``create_engine()``, forwarding to ``dqlitedbapi.connect()``.
-
-Stdlib sqlite3 parity. SA users porting from sqlite use:
-
-    create_engine(
-        "sqlite:///app.db",
-        connect_args={"check_same_thread": False},
-    )
-
-The same incantation against dqlite now works:
-
-    create_engine(
-        "dqlite://node:9001/default",
-        connect_args={"check_same_thread": False},
-    )
-
-Plus the URL form:
-
-    create_engine("dqlite://node:9001/default?check_same_thread=false")
-
-Pinned behaviours:
-- Both surfaces (URL + connect_args) reach the dbapi connect kwarg.
-- Boolean parsing via URL accepts the standard tokens.
-- Validation gates: bool required on connect_args; URL parser
-  rejects unknown tokens.
-- The aio dialect rejects the kwarg via the dbapi-layer sync-only
-  message (the aio surface is loop-bound).
-"""
+"""SA dialect accepts ``check_same_thread`` via both URL query and
+connect_args=, forwarding to ``dqlitedbapi.connect()`` (stdlib sqlite3
+parity). connect_args requires a strict bool; URL rejects bad tokens."""
 
 from __future__ import annotations
 
@@ -84,8 +57,7 @@ def test_url_query_check_same_thread_true_forwards_to_kwargs() -> None:
 )
 def test_url_query_bool_tokens_accepted(token: str, expected: bool) -> None:
     """The URL bool parser accepts the standard token set
-    case-insensitively, same shape as the ``trust_server_heartbeat``
-    URL knob (which uses the same ``_parse_url_bool`` helper)."""
+    case-insensitively (shared ``_parse_url_bool`` helper)."""
     url = URL.create(
         "dqlite",
         host="localhost",
@@ -113,16 +85,11 @@ def test_url_query_invalid_token_rejected() -> None:
 
 
 def test_connect_args_check_same_thread_false_accepted() -> None:
-    """``connect_args={"check_same_thread": False}`` works — the
-    canonical SA + sqlite incantation transparently ports to
-    dqlite."""
+    """``connect_args={"check_same_thread": False}`` works."""
     engine = create_engine(
         "dqlite://localhost:9001/default",
         connect_args={"check_same_thread": False},
     )
-    # Engine construction succeeds without ArgumentError. We can't
-    # actually connect (no server) — the kwarg validation happens
-    # at first checkout.
     assert engine is not None
     engine.dispose()
 

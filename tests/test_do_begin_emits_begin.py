@@ -1,20 +1,6 @@
-"""``DqliteDialect.do_begin`` emits an explicit ``BEGIN`` over the wire.
-
-SA's parent ``SQLiteDialect_pysqlite.do_begin`` is ``pass`` because
-pysqlite's stdlib driver auto-emits ``BEGIN`` before the first DML
-via the connection-level ``isolation_level`` attribute. The dqlite
-dbapi has no such mechanism — without an explicit ``BEGIN`` over
-the wire the server auto-commits each statement and
-``engine.begin()`` blocks would not be atomic.
-
-These unit tests pin the wire-shape contract:
-
-- ``BEGIN`` literal (plain — not DEFERRED / IMMEDIATE / EXCLUSIVE).
-- Cursor opened, ``execute("BEGIN")`` called, cursor closed in a
-  ``finally`` so a failed BEGIN does not leak a cursor.
-- BEGIN errors propagate (SA's ``Connection._begin_impl`` wraps the
-  call so ``is_disconnect`` classification and pool-invalidation
-  kick in for transport-level BEGIN failures).
+"""``do_begin`` emits an explicit ``BEGIN``; the parent is ``pass`` (pysqlite
+auto-begins, the dqlite dbapi does not, so without this each statement
+auto-commits and ``engine.begin()`` blocks are not atomic).
 """
 
 from __future__ import annotations
@@ -44,8 +30,7 @@ class TestDoBeginEmitsBegin:
         mock_cursor.close.assert_called_once_with()
 
     def test_async_dialect_inherits_emits_begin(self) -> None:
-        """The async dialect inherits do_begin from the base class —
-        no separate override. Pin the inherited call shape."""
+        """The async dialect inherits do_begin from the base class."""
         dialect = DqliteDialect_aio()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -59,9 +44,7 @@ class TestDoBeginEmitsBegin:
 
 class TestDoBeginErrorHandling:
     def test_closes_cursor_on_execute_failure(self) -> None:
-        """The ``finally``-clause must close the cursor even when
-        ``execute("BEGIN")`` raises — otherwise a failed BEGIN
-        leaks the cursor handle."""
+        """The ``finally`` closes the cursor even when BEGIN raises."""
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -93,19 +76,9 @@ class TestDoBeginErrorHandling:
         close_exc: BaseException,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """The ``finally``-block's narrow ``except _TRANSPORT_CLASS_EXCEPTIONS:``
-        must swallow a transport-class close failure so the BEGIN-time
-        exception (the one SA's ``is_disconnect`` cause-walk needs to see
-        on ``__cause__``) propagates intact. A regression that re-raises
-        the close exception, broadens the except, or swaps try/finally
-        order would silently misclassify the failure on SA's pool path
-        (close-time exception replaces BEGIN-time on the active raise;
-        the BEGIN exception lives only on ``__context__``, which the
-        cause-walk does NOT consult).
-
-        Sibling test ``test_closes_cursor_on_execute_failure`` covers
-        the close-succeeds-during-BEGIN-fails leg; this fills the
-        close-also-fails leg across the four transport-class arms.
+        """A transport-class close failure must be swallowed so the
+        BEGIN-time exception propagates intact on ``__cause__`` (where SA's
+        is_disconnect cause-walk looks); ``__context__`` is not consulted.
         """
         dialect = DqliteDialect()
         mock_conn = MagicMock()
@@ -121,12 +94,7 @@ class TestDoBeginErrorHandling:
         ):
             dialect.do_begin(mock_conn)
 
-        # The BEGIN-time exception is the active raise, not the close-time
-        # one. ``__context__`` will reference the close exception (Python's
-        # implicit exception chaining inside the ``finally``), but the
-        # *propagating* exception must be the BEGIN one.
         assert exc_info.value is begin_exc
-        # The close-time exception should be DEBUG-logged with exc_info.
         debug_records = [
             r
             for r in caplog.records
@@ -140,48 +108,31 @@ class TestDoBeginErrorHandling:
         )
 
     def test_close_failure_non_force_close_tail_re_raises(self) -> None:
-        """The close-failure suppression is intentionally bounded by
-        ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` (transport-class +
-        ``RuntimeError`` + ``ReferenceError``); an out-of-band close
-        exception outside that tuple (e.g., ``IntegrityError`` from a
-        custom audit trigger, or ``AttributeError`` from a programmer
-        bug) must NOT be swallowed. Pin the surfacing behaviour so a
-        refactor that broadens to ``except Exception:`` regresses it.
-        """
+        """A close exception outside ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` (e.g.
+        ``AttributeError``) must NOT be swallowed."""
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         begin_exc = dqlitedbapi.exceptions.OperationalError("begin sentinel", code=42)
         mock_cursor.execute.side_effect = begin_exc
-        # AttributeError is NOT in _FORCE_CLOSE_TAIL_EXCEPTIONS — it
-        # should escape and replace the BEGIN exception, surfacing the
-        # programmer bug rather than silently masking it.
         mock_cursor.close.side_effect = AttributeError("cursor lost its close hook")
         mock_conn.cursor.return_value = mock_cursor
 
         with pytest.raises(AttributeError, match="cursor lost its close hook") as exc_info:
             dialect.do_begin(mock_conn)
-        # Belt-and-brace: Python's implicit chaining stashes the
-        # BEGIN-time exception on the raised AttributeError's
-        # ``__context__`` (because the close happened inside the
-        # ``finally`` of the try/except block that caught BEGIN).
-        # Pin so a refactor that swaps to ``raise from None`` discards
-        # the BEGIN diagnostic from the traceback chain.
+        # BEGIN exception preserved on __context__ (catches ``raise from None``).
         assert exc_info.value.__context__ is begin_exc
 
     def test_propagates_disconnect_errors(self) -> None:
-        """Transport-level failures during BEGIN must propagate so
-        SA's ``Connection._begin_impl`` can route through
-        ``_handle_dbapi_exception`` → ``is_disconnect`` →
-        pool-invalidation."""
+        """Transport-level BEGIN failures propagate so SA can route through
+        is_disconnect to pool-invalidation."""
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_cursor.execute.side_effect = dqlitedbapi.exceptions.OperationalError(
             "Not connected", code=None
         )
-        # Wire the cause shape that is_disconnect's chain walk relies
-        # on (an underlying DqliteConnectionError as __cause__).
+        # Wire DqliteConnectionError as __cause__ for is_disconnect's chain walk.
         try:
             raise dqliteclient.exceptions.DqliteConnectionError("peer rst")
         except dqliteclient.exceptions.DqliteConnectionError as inner:
@@ -193,6 +144,4 @@ class TestDoBeginErrorHandling:
 
         with pytest.raises(dqlitedbapi.exceptions.OperationalError) as exc_info:
             dialect.do_begin(mock_conn)
-        # The dialect's is_disconnect would walk this chain to find
-        # the DqliteConnectionError and classify as disconnect.
         assert dialect.is_disconnect(exc_info.value, None, None) is True

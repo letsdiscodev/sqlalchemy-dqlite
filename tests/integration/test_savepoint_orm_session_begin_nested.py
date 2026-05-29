@@ -1,20 +1,5 @@
-"""Pin ORM-level Session.begin_nested() / AsyncSession.begin_nested()
-end-to-end against dqlite.
-
-The Connection-level integration tests at ``test_savepoint_basic.py``
-exercise SAVEPOINT/RELEASE/ROLLBACK_TO via ``Connection.begin_nested()``
-but do NOT cover the ORM ``Session`` / ``AsyncSession`` layer. The
-ORM path threads through additional SA machinery —
-``Session._connection_for_bind``, autoflush interactions,
-``Session.rollback()`` semantics inside a nested block, ORM
-identity-map state under savepoint rollback, and (for async) SA's
-greenlet-bridge layer. A regression in any of those would not be
-caught by the Connection-level pin.
-
-Mirror the three scenarios from ``test_savepoint_basic.py``:
-  - rollback-savepoint-preserves-outer-tx
-  - release-savepoint-keeps-changes
-  - nested-savepoint-inside-savepoint
+"""Pin ORM-level Session/AsyncSession.begin_nested() end-to-end against dqlite;
+the ORM path threads through SA machinery the Connection-level pin doesn't cover.
 """
 
 from __future__ import annotations
@@ -80,9 +65,6 @@ async def _async_row_ids(session: AsyncSession, table: Table) -> list[int]:
     return [row.id for row in result]
 
 
-# ----- sync Session.begin_nested() -----------------------------------------
-
-
 def test_sync_session_begin_nested_rollback_preserves_outer(
     orm_savepoint_table: tuple[Engine, Table],
 ) -> None:
@@ -95,9 +77,7 @@ def test_sync_session_begin_nested_rollback_preserves_outer(
                 raise RuntimeError("rollback this savepoint")
         except RuntimeError:
             pass
-        # Outer remains; nested rolled back.
         assert _row_ids(session, table) == [1]
-    # Outer commit lands.
     with Session(eng) as session:
         assert _row_ids(session, table) == [1]
 
@@ -110,7 +90,6 @@ def test_sync_session_begin_nested_release_keeps_changes(
         session.execute(table.insert().values(id=1, label="outer"))
         with session.begin_nested():
             session.execute(table.insert().values(id=2, label="nested"))
-        # Nested released — both rows visible mid-outer.
         assert _row_ids(session, table) == [1, 2]
     with Session(eng) as session:
         assert _row_ids(session, table) == [1, 2]
@@ -134,9 +113,6 @@ def test_sync_session_nested_inside_nested(
         assert _row_ids(session, table) == [1, 2]
     with Session(eng) as session:
         assert _row_ids(session, table) == [1, 2]
-
-
-# ----- async AsyncSession.begin_nested() -----------------------------------
 
 
 async def test_async_session_begin_nested_rollback_preserves_outer(

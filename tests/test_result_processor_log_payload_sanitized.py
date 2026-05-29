@@ -1,12 +1,6 @@
-"""Pin: SA Date/Time/DateTime result_processor log payloads route
-through ``_safe_for_log`` (sanitize-then-truncate) so embedded
-control / bidi / invisible characters do NOT survive into log lines.
-
-Without sanitization, a row payload containing U+2028 (line
-separator) lands verbatim in the journald record stream and is
-interpreted as a record separator — log-injection through the SA
-dialect, bypassing the wire-side ``_sanitize_server_text``.
-"""
+"""Date/Time/DateTime result_processor log payloads route through
+``_safe_for_log`` so control/bidi/invisible chars (e.g. U+2028, read as a
+journald record separator) cannot inject into log lines."""
 
 import logging
 from typing import Any
@@ -28,16 +22,14 @@ def _dialect() -> Any:
 
 
 def test_safe_for_log_strips_u2028_line_separator() -> None:
-    """journald treats U+2028 as a record separator. Sanitize MUST
-    strip it before truncation."""
+    """journald treats U+2028 as a record separator; it must be stripped."""
     payload = "before after"
     out = _safe_for_log(payload)
     assert " " not in out
 
 
 def test_safe_for_log_strips_bidi_override() -> None:
-    """U+202E (RIGHT-TO-LEFT OVERRIDE) is a classic log-injection
-    vector. Sanitize MUST strip it."""
+    """U+202E (RIGHT-TO-LEFT OVERRIDE) is a classic log-injection vector."""
     payload = "before‮after"
     out = _safe_for_log(payload)
     assert "‮" not in out
@@ -60,9 +52,6 @@ def test_datetime_processor_log_strips_u2028(
     _dialect: Any,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Pin: a row payload with U+2028 fed through the DateTime
-    result_processor produces a log line WITHOUT the embedded
-    separator. Without the fix, journald saw a fragmented record."""
     proc = _DqliteDateTime().result_processor(_dialect, None)
     assert proc is not None
 

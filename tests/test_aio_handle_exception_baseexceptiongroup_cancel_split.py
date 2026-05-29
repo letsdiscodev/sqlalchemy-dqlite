@@ -1,15 +1,7 @@
-"""Pin: ``AsyncAdaptedConnection._handle_exception`` splits out
-``CancelledError`` / ``KeyboardInterrupt`` / ``SystemExit`` children
-from a ``BaseExceptionGroup`` and re-raises them rather than
-re-raising the raw group.
-
-Without the split, SA's downstream ``isinstance(e, dbapi.Error)``
-gate misses the group entirely — the pool slot stays live and the
-raw group propagates to the user (a non-PEP-249 surface). Mirrors
-the dbapi-layer ``_call_client`` cancel-class discipline so the
-discipline is consistent end-to-end (cursor.py +
-connection.py × 2 + SA aio.py).
-"""
+"""``_handle_exception`` splits CancelledError / KeyboardInterrupt /
+SystemExit children out of a BaseExceptionGroup and re-raises them;
+otherwise SA's ``isinstance(e, dbapi.Error)`` gate misses the group
+and the pool slot stays live."""
 
 from __future__ import annotations
 
@@ -22,33 +14,17 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection
 
 
 def _make_adapter() -> AsyncAdaptedConnection:
-    """Construct a minimal AsyncAdaptedConnection for _handle_exception
-    testing. The hook does not consult ``self._connection`` so we can
-    drive it on a synthetic adapter.
-    """
     adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
     return adapter
 
 
 def test_handle_exception_cancel_only_group_propagates_as_group() -> None:
-    """The cancel-only group propagates as a group AND ``from None``
-    sets ``__suppress_context__ = True`` so SA's display layer
-    elides the implicit context chain in tracebacks.
-
-    Note: under Python's auto-context machinery, ``from None`` only
-    affects ``__suppress_context__`` (display) — ``__context__`` is
-    still set to whatever exception was active at the raise site.
-    Production callers invoke ``_handle_exception`` from inside
-    ``except BaseException as error: self._handle_exception(error)``,
-    so ``__context__`` is populated. ``from None`` correctly
-    suppresses its display via ``__suppress_context__``. See the
-    production-shape test below for the load-bearing assertion.
-    """
+    """Cancel-only group propagates as a group with
+    ``__suppress_context__ = True`` (from ``raise ... from None``)."""
     adapter = _make_adapter()
     eg = BaseExceptionGroup("cancel-only", [asyncio.CancelledError()])
-    # Drive the helper from inside an active ``except`` so Python's
-    # auto-context machinery has a candidate to attach — mirrors the
-    # production call shape from ``AsyncAdaptedConnection`` flows.
+    # Drive from inside an active ``except`` so auto-context has a
+    # candidate to attach, mirroring the production call shape.
     try:
         raise eg
     except BaseExceptionGroup as caught_eg:
@@ -56,11 +32,6 @@ def test_handle_exception_cancel_only_group_propagates_as_group() -> None:
             adapter._handle_exception(caught_eg)
     inner = excinfo.value.exceptions
     assert any(isinstance(c, asyncio.CancelledError) for c in inner)
-    # ``raise cancel_group from None`` sets __suppress_context__ for
-    # display, NOT __context__ — the latter is populated by Python's
-    # auto-context machinery because the call site was inside an
-    # active ``except`` block (mirroring the production shape).
-    # __cause__ IS cleared by ``from None``.
     assert excinfo.value.__suppress_context__ is True, (
         "``from None`` must set __suppress_context__ = True so SA's "
         "traceback layer elides the implicit context chain"
@@ -69,30 +40,14 @@ def test_handle_exception_cancel_only_group_propagates_as_group() -> None:
 
 
 def test_raise_from_none_sets_suppress_context_on_non_split_group() -> None:
-    """Load-bearing pin for ``raise cancel_group from None``: drive a
-    handcrafted ``BaseExceptionGroup`` that has NEVER passed through
-    ``BaseExceptionGroup.split()`` so the only source of
-    ``__suppress_context__ = True`` on the re-raise is ``from None``
-    itself.
-
-    Why this matters: ``BaseExceptionGroup.split(isinstance_predicate)``
-    pre-sets ``__suppress_context__ = True`` on the returned partition.
-    The sibling production-shape test passes equally with OR without
-    ``from None`` on the production raise (the split has already set
-    the flag). This handcrafted variant isolates the ``from None``
-    semantics — if a future maintainer drops ``from None`` from
-    ``aio.py:1288``'s ``raise cancel_group from None``, this test
-    fires.
-    """
+    """Isolate ``from None`` semantics on a handcrafted group that never
+    passed through ``split()`` (which would itself set the flag), so this
+    fires if a maintainer drops ``from None`` from the production raise."""
     eg = BaseExceptionGroup("handcrafted", [asyncio.CancelledError("c")])
-    # The handcrafted group's flag is the default (False) — confirms
-    # the isolation precondition.
     assert eg.__suppress_context__ is False
     try:
         raise RuntimeError("outer")
     except RuntimeError:
-        # Mirror the production line verbatim. Without `from None`,
-        # __suppress_context__ stays False on the propagated `eg`.
         try:
             raise eg from None
         except BaseExceptionGroup as got:
@@ -104,13 +59,9 @@ def test_raise_from_none_sets_suppress_context_on_non_split_group() -> None:
 
 
 def test_handle_exception_production_shape_preserves_context_link() -> None:
-    """Load-bearing production-shape pin: when invoked from inside
-    an active ``except`` block (as the live ``AsyncAdaptedConnection``
-    callers do), the propagated cancel group's ``__context__``
-    points back to the caught group for forensic traceback walkers.
-    The display layer suppresses it via ``__suppress_context__``,
-    but the link is preserved.
-    """
+    """Invoked from inside an active ``except`` (as live callers do), the
+    propagated group's ``__context__`` still links back to the caught
+    group; only display is suppressed."""
     adapter = _make_adapter()
     eg = BaseExceptionGroup("cancel-only", [asyncio.CancelledError("c")])
     try:
@@ -126,18 +77,9 @@ def test_handle_exception_production_shape_preserves_context_link() -> None:
 
 
 def test_handle_exception_mixed_group_with_loop_state_child_still_propagates_cancel() -> None:
-    """Precedence: a group containing BOTH a CancelledError AND a
-    loop-state RuntimeError (the canonical mixed-shape from a
-    cross-loop ``TaskGroup``) must propagate the CancelledError
-    rather than fire ``_remap_loop_state_runtime_error`` on the
-    loop-state hop.
-
-    Without the cancel-class split running first, the remap walks
-    the group, finds the loop-state child, raises
-    ``OperationalError`` from that hop, and the cancel-class child
-    is silently dropped — exactly the failure mode the cancel-class
-    split was added to prevent.
-    """
+    """Cancel-class split runs first: a group with both a CancelledError
+    and a loop-state RuntimeError must propagate the CancelledError, not
+    remap to OperationalError and drop the cancel child."""
     adapter = _make_adapter()
     eg = BaseExceptionGroup(
         "mixed-with-loop-state",
@@ -147,18 +89,11 @@ def test_handle_exception_mixed_group_with_loop_state_child_still_propagates_can
         adapter._handle_exception(eg)
     inner = excinfo.value.exceptions
     assert any(isinstance(c, asyncio.CancelledError) for c in inner)
-    # Group must contain the cancel partition only; the loop-state
-    # RuntimeError remains accessible via the original group on
-    # __context__ for diagnostic walks if the consumer chooses.
 
 
 def test_handle_exception_loop_state_only_group_still_remaps_to_operational_error() -> None:
-    """Negative pin: a group with NO cancel-class child but a
-    loop-state RuntimeError must still surface as
-    ``OperationalError`` via ``_remap_loop_state_runtime_error``.
-    The reorder must not regress the original remap behaviour on
-    pure loop-state groups.
-    """
+    """A group with no cancel child but a loop-state RuntimeError must
+    still surface as OperationalError; the reorder must not regress it."""
     adapter = _make_adapter()
     eg = BaseExceptionGroup(
         "pure-loop-state",
@@ -188,7 +123,7 @@ def test_handle_exception_pure_exception_group_wraps_as_operationalerror() -> No
     )
     with pytest.raises(OperationalError) as excinfo:
         adapter._handle_exception(eg)
-    # Remainder is accessible on __cause__ for SA's walk_cause_chain.
+    # Remainder is on __cause__ for SA's walk_cause_chain.
     assert isinstance(excinfo.value.__cause__, BaseExceptionGroup)
 
 
@@ -211,9 +146,8 @@ def test_handle_exception_systemexit_group_propagates() -> None:
 
 
 def test_handle_exception_non_group_passes_through_unchanged() -> None:
-    """Non-BaseExceptionGroup errors take the existing ``raise error``
-    path — the split is added without disturbing the prior behaviour.
-    """
+    """Non-group errors take the existing ``raise error`` path
+    unchanged."""
     adapter = _make_adapter()
     oe = OperationalError("plain", code=1)
     with pytest.raises(OperationalError) as excinfo:

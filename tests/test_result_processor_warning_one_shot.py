@@ -1,18 +1,6 @@
-"""Pin: SA Date/Time/DateTime result_processor closures emit at most
-one WARNING per process per type-class for unparseable ISO8601 cells.
-
-Without the one-shot gate, a SELECT against a corrupted column
-emits one WARNING per row (up to ``max_total_rows``), drowning
-operator log pipelines. The first row's WARNING is preserved as
-the forensic anchor; subsequent rows demote to DEBUG.
-
-The gate is a ClassVar on each type class so processor churn (SA
-statement-cache rebuilds, ORM cache evictions, per-query
-``text()`` execution) does not re-arm the gate — matching the
-docstring claim of parity with the
-``_max_total_rows_disabled_warning_emitted`` ClassVar pattern on
-``DqliteDialect``.
-"""
+"""Date/Time/DateTime result_processors emit at most one WARNING per process
+per type-class for unparseable ISO8601 cells (subsequent rows demote to DEBUG).
+The gate is a ClassVar so processor churn does not re-arm it."""
 
 import logging
 from typing import Any
@@ -82,11 +70,7 @@ def test_one_shot_gate_is_per_class_across_processor_instances(
     _dialect: Any,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The gate is a ClassVar so processor churn (a fresh
-    ``result_processor`` call from SA's per-query rebuild) does NOT
-    re-arm the WARNING. The first bad row across any processor
-    instance fires once; every subsequent bad row demotes to DEBUG
-    even when handled by a freshly-built processor."""
+    """The ClassVar gate fires once across freshly-built processor instances."""
     with caplog.at_level(logging.DEBUG, logger="sqlalchemydqlite.base"):
         proc1 = _DqliteDateTime().result_processor(_dialect, None)
         proc2 = _DqliteDateTime().result_processor(_dialect, None)
@@ -105,9 +89,7 @@ def test_one_shot_gate_is_per_type_class_not_global(
     _dialect: Any,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A malformed DateTime cell does not silence a malformed Date
-    cell warning — each type class has its own ClassVar so the
-    diagnostic for each type surfaces independently."""
+    """Each type class has its own ClassVar so per-type diagnostics surface."""
     with caplog.at_level(logging.WARNING, logger="sqlalchemydqlite.base"):
         dt_proc = _DqliteDateTime().result_processor(_dialect, None)
         d_proc = _DqliteDate().result_processor(_dialect, None)

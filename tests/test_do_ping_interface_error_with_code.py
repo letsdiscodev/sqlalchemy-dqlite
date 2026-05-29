@@ -1,18 +1,7 @@
-"""Pin: ``do_ping`` returns False on any ``InterfaceError`` from
-``SELECT 1``, including the code-bearing variants
-(``DQLITE_PROTO`` = 1001, ``SQLITE_MISUSE`` = 21,
-``SQLITE_RANGE`` = 25).
+"""Pin: ``do_ping`` returns False on any ``InterfaceError`` from ``SELECT 1``.
 
-Asymmetry with ``is_disconnect``: ``is_disconnect`` keeps a
-narrow ``InterfaceError`` arm that only catches closed-handle
-substrings — caller-side bind misuse (``SQLITE_RANGE`` /
-``SQLITE_MISUSE``) on a real query must propagate as a real
-error, not be silently rewritten as a disconnect.
-
-Pre-ping is the inverse contract: ANY ``InterfaceError`` on
-``SELECT 1`` (a parameterless statement that should never raise
-caller-side bind errors) means the slot is dead. The
-asymmetry is deliberate.
+Unlike ``is_disconnect`` (narrow arm), pre-ping treats ANY InterfaceError on the
+parameterless SELECT 1 as a dead slot, since it cannot be caller-side bind misuse.
 """
 
 from __future__ import annotations

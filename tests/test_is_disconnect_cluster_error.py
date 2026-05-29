@@ -1,17 +1,8 @@
 """is_disconnect recognises ClusterError via the type-dispatch walk.
 
-The dbapi's ``_call_client`` wraps non-policy ``ClusterError`` into a
-bare ``OperationalError`` with no SQLite code — the substring list
-cannot match its typical message shape ("Could not find leader.
-Errors: [...]"), so a leader-blip mid-query used to surface as a
-non-disconnect and the pool kept the broken slot.
-
-``ClusterPolicyError`` (a ``ClusterError`` subclass) is excluded from
-the disconnect set: policy rejections are deterministic configuration
-errors and classifying them as disconnect would re-enter the retry
-loop against a permanent rejection. The exclusion is enforced at
-``_call_client`` (which wraps ``ClusterPolicyError`` to
-``InterfaceError`` rather than ``OperationalError``).
+ClusterPolicyError (a ClusterError subclass) is excluded: policy rejections are
+deterministic config errors, so classifying them as disconnect would retry a
+permanent rejection.
 """
 
 from __future__ import annotations
@@ -53,28 +44,18 @@ class TestClusterPolicyErrorNotDisconnect:
             assert dialect.is_disconnect(wrapped, None, None) is False
 
     def test_policy_error_under_cluster_error_wrap_short_circuits(self) -> None:
-        """If a chain surfaces both a ``ClusterPolicyError`` and a
-        plain ``ClusterError`` as causes, the policy branch must win
-        — otherwise the pool would retry a permanent-reject config.
-        """
+        """Policy branch must win over a plain ClusterError, else the pool retries forever."""
         dialect = DqliteDialect()
         policy = _client_exc.ClusterPolicyError("policy rejected")
-        # Construct a chain policy -> plain cluster error via
-        # ``__cause__``. The walk sees the policy first (top of
-        # chain is the outer exception the user caught), so it
-        # short-circuits to False.
+        # Walk sees the policy first (the outer exception), so it short-circuits to False.
         outer = _dbapi_exc.ProgrammingError("wrap")
         outer.__cause__ = policy
         assert dialect.is_disconnect(outer, None, None) is False
 
 
 class TestClusterPolicyInterfaceErrorWrap:
-    """The dbapi's ``_call_client`` wraps ``ClusterPolicyError`` into a
-    dbapi ``InterfaceError`` with the distinguishing ``"Cluster policy
-    rejection;"`` prefix. SA's ``is_disconnect`` narrows InterfaceError
-    matching to "connection is closed" / "cursor is closed" — so the
-    wrapped InterfaceError must NOT match, and the pool won't retry.
-    """
+    """A ClusterPolicyError wrapped as InterfaceError must NOT match the narrow
+    "connection/cursor is closed" set, so the pool won't retry."""
 
     def test_cluster_policy_interface_error_not_disconnect(self) -> None:
         dialect = DqliteDialect()
@@ -94,8 +75,7 @@ class TestClusterPolicyInterfaceErrorWrap:
     ],
 )
 def test_all_wrap_kinds_walk_to_cluster_error(wrapped_exc_kind: str) -> None:
-    """Regardless of which dbapi wrap class is chosen, the inner
-    ``ClusterError`` surfaces via the chain walk."""
+    """The inner ClusterError surfaces via the chain walk for any dbapi wrap class."""
     dialect = DqliteDialect()
     inner = _client_exc.ClusterError("cluster down")
     if wrapped_exc_kind == "operational":

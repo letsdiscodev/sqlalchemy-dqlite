@@ -43,92 +43,25 @@ if TYPE_CHECKING:
 
 __all__ = ["AsyncAdaptedConnection", "AsyncAdaptedCursor", "DqliteDialect_aio"]
 
-# Module-private sentinel used by ``AsyncAdaptedConnection.__init__``
-# to discriminate "second positional omitted" from "second positional
-# explicitly passed as ``None``" — the two inputs that the earlier
-# ``connection is None`` discriminator conflated. The annotation
-# surface on the parameter still presents
-# ``connection: AsyncConnection | None = None`` to IDE / type
-# tooling; the runtime default is ``_UNSET`` and the body branches
-# on identity to ``_UNSET``. See the docstring on the constructor.
+# Sentinel discriminating "second positional omitted" from an explicit
+# ``connection=None`` in ``AsyncAdaptedConnection.__init__``.
 _UNSET: Any = object()
 
-# PEP 249 specifies ``cursor.description`` as a sequence of sequences —
-# a ``list[tuple]`` is the canonical shape but a strict type alias of
-# ``list`` would reject a dbapi cursor that returns a tuple-of-tuples
-# (which sqlalchemy's own aiosqlite adapter accepts). Widen the outer
-# alias to ``Sequence`` so the adapter passes through whatever the
-# underlying cursor returns without copying. The inner 7-tuple shape is
-# imported from the dbapi layer (single source of truth) so a future
-# column (real display_size, etc.) propagates here automatically.
 type _Description = Sequence[DescriptionTuple] | None
 
 
 def _remap_loop_state_runtime_error(error: BaseException) -> None:
-    """Walk the cause/context chain of ``error`` and re-raise any
-    loop-state ``RuntimeError`` / ``ProgrammingError`` as a
-    ``dbapi.OperationalError`` so SA's ``_handle_dbapi_exception``
-    classifier routes it through ``is_disconnect``.
+    """Re-raise any loop-state ``RuntimeError``/``ProgrammingError`` in the
+    cause chain as ``OperationalError`` so ``is_disconnect`` sees it; returns
+    normally (no raise) if nothing matches.
 
-    Returns normally (does NOT raise) if no loop-state shape matches —
-    callers are expected to follow up with their own re-raise so the
-    original exception propagates unchanged.
-
-    Three substring patterns (case-insensitive) and their remapped
-    wording:
-
-    * ``"different loop"`` / ``"different event loop"`` →
-      ``OperationalError("event-loop mismatch: ...")``
-    * ``"event loop is closed"`` → ``OperationalError("event loop closed: ...")``
-    * ``"loop is already running"`` → ``OperationalError("event loop already running: ...")``
-
-    The remapped wording must stay in sync with
-    ``_dqlite_disconnect_messages`` in ``base.py`` so SA's
-    ``is_disconnect`` classifier recognises the slot as fatal.
-
-    Used by ``AsyncAdaptedConnection._handle_exception`` (the canonical
-    site invoked from commit / rollback / execute / executemany /
-    close-rollback) AND by ``DqliteDialect_aio.connect()``'s
-    eager-connect arm where there's no ``AsyncAdaptedConnection`` yet
-    to dispatch through.
-
-    .. note::
-       **The close-arm's** ``"event loop is closed"`` **branch
-       deliberately does NOT delegate to this helper.**
-       ``AsyncAdaptedConnection.close()`` runs under the
-       ``has_terminate=True`` dialect promise that ``close()`` /
-       ``do_close()`` MUST NOT propagate — SA's pool finalize cannot
-       tolerate a raise from the dispose path. The helper raises on
-       any matching substring; routing the close-arm through it would
-       silently break the must-not-raise invariant for the one
-       substring (``"event loop is closed"``) that the close-arm
-       handles bespoke (``logger.debug`` + ``return``). The
-       ``"different loop"`` and ``"loop is already running"``
-       substrings on the close-arm DO route through
-       ``_handle_exception`` (transitively through this helper) and
-       DO raise, because those shapes indicate programmer-bug
-       conditions distinct from the routine cross-loop dispose race.
-       A future contributor "consolidating the close-arm" by removing
-       the bespoke branch and calling this helper unconditionally
-       would compile and pass type checks while silently breaking
-       the must-not-raise contract. Do NOT do that without re-reading
-       the close-arm's inline rationale and adjusting the
-       ``has_terminate`` discipline.
+    Remapped wording must stay in sync with ``_dqlite_disconnect_messages`` in
+    ``base.py``. The close-arm deliberately does NOT route its "event loop is
+    closed" case here: the helper always raises, which would break close()'s
+    ``has_terminate=True`` must-not-raise contract.
     """
-    # Chain ``from hop`` (the matched discriminator), NOT ``from error``
-    # (the outer scope) — PEP 3134 §"The ``from`` clause" makes the
-    # immediate ``__cause__`` exactly what follows ``from``. Bounded-
-    # depth chain walkers (SIEM / log forwarders that defensively
-    # inspect only ``exc.__cause__``) need the loop-state shape at
-    # depth 1 to discriminate this remap from the surrounding wrap
-    # layers. Mirrors the ``from e`` discipline at the sibling remap
-    # sites (``cursor.py::_call_client``, connect-time arms). The
-    # outer ``error`` remains reachable via Python's implicit
-    # ``__context__`` chain because the helper is invoked from within
-    # an ``except BaseException as error`` block (callers:
-    # ``AsyncAdaptedConnection._handle_exception`` and
-    # ``DqliteDialect_aio.connect`` eager-connect arm). Any future
-    # remap arm added here MUST follow the same ``from hop`` rule.
+    # ``from hop`` (not ``from error``): bounded-depth chain walkers need the
+    # loop-state shape at __cause__ depth 1. Mirrors cursor.py::_call_client.
     for hop in _walk_cause_chain(error):
         if not isinstance(hop, (RuntimeError, ProgrammingError)):
             continue
@@ -145,80 +78,17 @@ def _remap_loop_state_runtime_error(error: BaseException) -> None:
 class AsyncAdaptedCursor:
     """Adapts an AsyncCursor for SQLAlchemy's greenlet-based async engine.
 
-    Eagerly fetches all rows during execute() within the greenlet context,
-    then serves fetch* calls synchronously from the buffer. This matches
-    the pattern used by SQLAlchemy's aiosqlite dialect.
+    Eagerly buffers all rows at execute() time, then serves fetch* calls
+    synchronously from the deque (matches SA's aiosqlite dialect). ``arraysize``
+    governs only the fetchmany chunk size, not memory footprint.
 
-    .. note::
-       ``arraysize`` on this adapter controls ONLY the chunk size
-       returned by :meth:`fetchmany` from the already-buffered deque —
-       it has **no effect on memory footprint**. ``execute()`` /
-       ``executemany()`` unconditionally call ``fetchall()`` on the
-       underlying ``AsyncCursor`` within the greenlet context, so the
-       full result set is materialised in memory before any
-       ``fetchmany`` call runs. Tuning ``arraysize`` to cap memory —
-       the standard PEP 249 idiom — does not work through the adapter.
-       Callers that need streaming-memory semantics must use
-       :class:`dqlitedbapi.aio.AsyncCursor` directly and drive it from
-       native async code; the greenlet-eager-fetch pattern is a
-       deliberate part of how SA's async engine works, not a
-       per-dialect choice.
-
-    **Divergence from SA reference connector**: SA's
-    ``AsyncAdapt_dbapi_cursor``
-    (``sqlalchemy/connectors/asyncio.py:166-186``) exposes
-    ``description`` / ``rowcount`` / ``lastrowid`` as ``@property``
-    that delegate to the underlying long-lived dbapi cursor. This
-    adapter stores them as plain attributes (in ``__slots__``)
-    because each ``execute()`` / ``executemany()`` opens and closes
-    a fresh ``dqlitedbapi.aio.AsyncCursor`` inside a finally block —
-    there is no live underlying cursor to delegate to after the call
-    returns. Plain attributes carry the metadata through to the next
-    execute. Consequence: SA's reference ``_async_soft_close()``
-    memoizes ``description`` into ``_soft_closed_memoized`` for
-    post-soft-close reads via the property layer; this adapter's
-    ``_async_soft_close()`` is a no-op because the underlying cursor
-    is already closed. If a future SA release adds new behaviour
-    that hooks the property descriptor (e.g. a soft-close memoization
-    layer above ``@property``), this adapter must be reshaped to
-    keep the underlying cursor alive across the execute boundary,
-    then converted to ``@property`` delegation.
-
-    **Sync-only context-manager / iterator contract**: this adapter
-    exposes only the synchronous protocol — ``__enter__`` /
-    ``__exit__`` (close the cursor on exit) and ``__iter__`` /
-    ``__next__`` (drain the buffered ``_rows`` deque). The async
-    counterparts ``__aenter__`` / ``__aexit__`` / ``__aiter__`` /
-    ``__anext__`` are deliberately ABSENT to mirror SA's reference
-    ``AsyncAdapt_dbapi_cursor`` shape (``sqlalchemy/connectors/
-    asyncio.py:279-283``), which is sync-only at the cursor level.
-    Code expecting ``async with cur as c:`` or ``async for row in
-    cur:`` (the aiosqlite / psycopg user-facing shape) will see
-    ``TypeError`` and must either:
-
-    * Use the sync forms — ``with cur as c:`` / ``for row in cur:``
-      — which work correctly from inside an ``async def`` because the
-      rows are eagerly buffered at ``execute()`` time and the close
-      is a synchronous deque-reset on this adapter.
-    * Reach the underlying ``dqlitedbapi.aio.AsyncCursor`` via
-      ``cur._adapt_connection._connection.cursor()`` for native async
-      context-manager / async-iterator semantics. Crossing this
-      abstraction barrier is supported for advanced callers but
-      bypasses SA's exception classifier and the adapter's
-      ``_handle_exception`` remap; production code should prefer
-      the sync forms above.
-
-    The asymmetry with aiosqlite's user-facing shape is intentional:
-    SA's ``AsyncAdapt_dbapi_cursor`` is the contract SA's pool /
-    Result / Connection layers call into, and adding async-cm /
-    async-iterator methods here would surprise SA-pattern callers
-    who expect cross-driver consistency at the adapter layer.
+    Stores description/rowcount/lastrowid as plain attributes rather than SA's
+    reference ``@property`` delegation because each execute opens and closes a
+    fresh underlying cursor — there is no live cursor to delegate to. Exposes
+    only the sync context-manager/iterator protocol; for native async-cm /
+    async-iteration reach the underlying ``dqlitedbapi.aio.AsyncCursor``.
     """
 
-    # Declare instance layout — matches the slot discipline SA's own
-    # ``AsyncAdapt_aiosqlite_cursor`` uses. Each execute() constructs
-    # a fresh adapter cursor, so the per-instance ``__dict__`` overhead
-    # is load-bearing under a busy engine.
     __slots__ = (
         "_adapt_connection",
         "_arraysize",
@@ -240,12 +110,6 @@ class AsyncAdaptedCursor:
         self.lastrowid: int | None = None
         self._arraysize: int = 1
         self._rows: deque[tuple[Any, ...]] = deque()
-        # PEP 249: after ``close()`` the cursor is unusable. Track the
-        # flag so setinputsizes / setoutputsize can honour the contract
-        # — the underlying AsyncCursor already raises InterfaceError
-        # on the closed-cursor misuse and the adapter's silent
-        # no-op would otherwise hide the bug from callers migrating
-        # between the two cursor types.
         self._closed: bool = False
 
     async def _async_soft_close(self) -> None:
@@ -257,83 +121,26 @@ class AsyncAdaptedCursor:
 
     @arraysize.setter
     def arraysize(self, value: int) -> None:
-        """PEP 249 §6.1.2 setter for the per-``fetchmany`` batch size.
-
-        **Semantic note (deque-only governance)**: this controls the
-        deque-pop batch size of the adapter's pre-drained ``_rows``
-        buffer. dqlite's wire protocol delivers the entire result set
-        up-front in a single RTT, so ``arraysize`` does NOT influence
-        wire-layer prefetch — that's an aiosqlite / pysqlite pattern
-        not applicable here. The underlying ``AsyncCursor.arraysize``
-        has the same deque-only semantic (the dbapi layer also
-        eagerly buffers ``_rows`` from the wire response); both
-        defaults are ``1`` per PEP 249.
-
-        Validation rejects ``bool`` and non-int (a dqlite-specific
-        footgun-prevention with no SA-reference sibling). ``0`` and
-        negative values are accepted to match SA's reference adapter
-        (``sqlalchemy/connectors/asyncio.py``) and stdlib
-        ``sqlite3.Cursor.arraysize`` which are both unvalidated. PEP
-        249 §6.2 sets no minimum; cross-driver porting code that uses
-        ``arraysize = 0`` as "use the underlying default" continues
-        to work.
-        """
+        # Rejects bool/non-int (dqlite footgun guard); 0 and negative accepted
+        # to match SA's reference adapter and stdlib sqlite3.
         if not isinstance(value, int) or isinstance(value, bool):
             raise ProgrammingError(f"arraysize must be an int, got {value!r}")
         self._arraysize = value
 
     def close(self) -> None:
-        """PEP 249 §6.1 ``close`` on the SA-adapted async cursor.
-
-        Idempotent: a second call is a no-op (mirrors stdlib
-        ``sqlite3.Cursor.close`` and the underlying
-        ``dqlitedbapi.aio.AsyncCursor.close``). Clears ``description``
-        and the buffered rows (a closed cursor cannot fetch) but
-        PRESERVES ``rowcount`` / ``lastrowid``, matching stdlib and the
-        dbapi cursor so SA's Result layer can read ``cursor.lastrowid``
-        after close. Swaps the strong back-references to the parent
-        adapter and inner dbapi connection for ``weakref.proxy``
-        wrappers so a retained closed cursor does not pin the inner
-        ``AsyncConnection`` (and through it the client-layer state).
-        See the inline comment for the full partial-failure /
-        ``TypeError`` suppression rationale.
-        """
-        # Idempotent close: stdlib ``sqlite3.Cursor.close`` and the
-        # dbapi ``Cursor.close`` / ``AsyncCursor.close`` siblings all
-        # short-circuit on a second call. Without this gate, double-
-        # close redundantly re-runs the scrub AND attempts to wrap
-        # the already-proxied ``_adapt_connection`` /
-        # ``_connection`` in a second ``weakref.proxy`` — which
-        # raises ``TypeError`` against a ``weakproxy``. The
-        # ``contextlib.suppress(TypeError)`` swallows the failure
-        # so close stays idempotent in practice, but the
-        # short-circuit makes the contract structural rather than
-        # exception-suppression-based.
+        """Idempotent close; preserves rowcount/lastrowid post-close so SA's
+        Result layer can read ``cursor.lastrowid`` after an INSERT."""
+        # Short-circuit makes idempotency structural rather than relying on the
+        # TypeError suppression below (double-wrapping a proxy raises TypeError).
         if self._closed:
             return
-        # Clear the result-set surface (a closed cursor cannot fetch),
-        # but PRESERVE ``rowcount`` / ``lastrowid`` across close — matching
-        # stdlib ``sqlite3.Cursor`` and the underlying dbapi cursor, both
-        # of which keep them readable after close. SQLAlchemy's Result
-        # layer reads ``cursor.lastrowid`` lazily AFTER closing the cursor,
-        # so scrubbing it here made ``CursorResult.lastrowid`` come back
-        # ``None`` after every INSERT. A subsequent execute resets these
-        # at execute time, so preserving them post-close is safe.
+        # Clear result-set surface but PRESERVE rowcount/lastrowid — SA's
+        # Result layer reads lastrowid lazily after close.
         self.description = None
         self._rows.clear()
         self._closed = True
-        # Drop the strong back-references to the parent adapter
-        # and the inner dbapi connection so a closed cursor that
-        # SA's pool-diagnostic ring / pytest fixture cache retains
-        # does not pin the inner dbapi ``AsyncConnection`` — and
-        # through it the client-layer state, registered
-        # ``weakref.finalize``, and any frame-pinning
-        # ``_invalidation_cause``. ``weakref.proxy`` preserves
-        # forward attribute access while the inner is alive;
-        # post-close calls on the proxy raise ``ReferenceError``
-        # only if the inner has been GC'd, which is benign at
-        # that point. Mirror discipline of dbapi-layer
-        # ``Cursor.close`` / ``AsyncCursor.close``.
+        # weakref.proxy the back-references so a retained closed cursor doesn't
+        # pin the inner AsyncConnection (and its client-layer state).
         with contextlib.suppress(TypeError):
             self._adapt_connection = weakref.proxy(self._adapt_connection)
         with contextlib.suppress(TypeError):
@@ -344,65 +151,24 @@ class AsyncAdaptedCursor:
         operation: str,
         parameters: Sequence[Any] | None = None,
     ) -> None:
-        """Execute a single statement.
-
-        ``parameters`` is narrowed to ``Sequence | None`` because the
-        underlying dbapi is ``paramstyle="qmark"`` and rejects mappings
-        at runtime with ``ProgrammingError``. SA's own compiler always
-        hands a sequence to qmark dialects — the wider PEP 249 envelope
-        is unreachable through this driver, so the static type matches
-        the runtime contract. Mapping passes here would have raised at
-        the DBAPI cursor layer regardless; the narrower hint surfaces
-        the rejection at typecheck time instead of the first execute.
-        """
-        # Mirror the closed-cursor guard the other methods on this
-        # class apply (fetch* / setinputsizes / scroll / etc.). Without
-        # it, a stale execute on a closed adapter cursor silently
-        # succeeds and the user only sees ``cursor is closed`` from
-        # the first fetch — a confusing diagnostic that implies the
-        # cursor was closed between execute and fetch.
+        # ``parameters`` is Sequence|None: the dbapi is qmark-only and rejects
+        # mappings, and SA's compiler always hands a sequence to qmark dialects.
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
-        # Clear buffered state FIRST so a CancelledError (or any other
-        # exception) during execute/fetchall leaves the adapter in a
-        # "no active result" state rather than carrying stale rows
-        # from a previous execution.
+        # Clear buffered state FIRST so cancellation mid-execute leaves a
+        # "no active result" state. Do NOT clear lastrowid (sticky-INSERT
+        # contract: it survives non-INSERT executes and close, matching stdlib).
         self.description = None
         self.rowcount = -1
-        # Do NOT clear ``lastrowid`` here. stdlib ``sqlite3.Cursor.lastrowid``
-        # and the dbapi-layer ``Cursor._execute_async`` both honour the
-        # sticky-INSERT contract: ``lastrowid`` survives a subsequent
-        # UPDATE / DELETE / DDL / SELECT on the same cursor, and also
-        # survives ``close()`` (it is readable post-close, matching
-        # stdlib). The async adapter opens a fresh underlying
-        # ``AsyncCursor`` per ``execute()``, so we cannot
-        # rely on the dbapi cursor's stickiness directly — instead we
-        # preserve the adapter's prior value across non-INSERT
-        # executes by writing only when the underlying cursor reports
-        # a non-None value (i.e. an INSERT/REPLACE actually ran).
         self._rows.clear()
 
-        # Hoist ``self._connection.cursor()`` inside the try so a
-        # synchronous raise from cursor() (closed connection,
-        # cross-loop ProgrammingError) routes through
-        # ``_handle_exception`` and gets normalized just like a
-        # cursor.execute raise. Initialize ``cursor`` to None so the
-        # finally close path skips when cursor() failed.
+        # cursor() inside the try so a synchronous raise (closed conn,
+        # cross-loop ProgrammingError) routes through _handle_exception too.
         cursor: AsyncCursor | None = None
         try:
             try:
                 cursor = self._connection.cursor()
-                # Propagate the adapter's arraysize onto the freshly
-                # opened underlying cursor BEFORE the await so any
-                # future wire-protocol prefetch tuning consumes the
-                # caller's intent (e.g. ``cursor.arraysize = 50``).
-                # Today the dbapi layer also buffers the full result
-                # in-memory and ``arraysize`` is deque-only, so this
-                # propagation is forward-compat scaffolding rather than
-                # behaviour-changing. Setting it at execute-time (not
-                # in the property setter) is correct because the
-                # underlying cursor does not exist at setter time —
-                # opened fresh per call.
+                # Forward-compat scaffolding for any future wire-prefetch tuning.
                 cursor.arraysize = self._arraysize
                 if parameters is not None:
                     await_only(cursor.execute(operation, parameters))
@@ -410,36 +176,17 @@ class AsyncAdaptedCursor:
                     await_only(cursor.execute(operation))
 
                 if cursor.description:
-                    # Atomic-on-success: capture EVERYTHING into locals
-                    # first, run the destructive ``drain_rows`` last,
-                    # then assign all public fields together. If
-                    # ``drain_rows`` raises (e.g. CancelledError from an
-                    # outer timeout, server fault mid-stream), the
-                    # adapter stays at the no-result baseline rather
-                    # than leaving ``description`` populated with empty
-                    # rows — which SA's Result layer would treat as an
-                    # empty result set, indistinguishable from "execute
-                    # succeeded but fetched no rows".
-                    #
-                    # ``drain_rows`` (sync, ownership-transfer): hand
-                    # the dbapi cursor's row buffer to the adapter
-                    # without an intermediate ``fetchall()`` copy. Cuts
-                    # peak memory in half for INSERT...RETURNING
-                    # insertmanyvalues at high row counts (100k+) where
-                    # the cursor's list AND the adapter's deque would
-                    # otherwise both be alive until the cursor is
-                    # closed in the finally.
+                    # Atomic-on-success: capture into locals, run destructive
+                    # drain_rows last, then assign together — a mid-drain raise
+                    # leaves the no-result baseline, not a half-populated empty
+                    # result. drain_rows transfers the buffer without a fetchall
+                    # copy (halves peak memory on large INSERT...RETURNING).
                     description = cursor.description
                     rowcount = cursor.rowcount
                     lastrowid = cursor.lastrowid
                     drained = deque(cursor.drain_rows())
                     self.description = description
                     self._rows = drained
-                    # Mirror the DML branch: rowcount / lastrowid are set
-                    # by the underlying cursor on the RETURNING path too.
-                    # SA's Result layer reads both through the adapter,
-                    # so leaving rowcount at -1 would silently collapse
-                    # "N rows returned" into "not determinable".
                     self.rowcount = rowcount
                     if lastrowid is not None:
                         self.lastrowid = lastrowid
@@ -448,39 +195,15 @@ class AsyncAdaptedCursor:
                         self.lastrowid = cursor.lastrowid
                     self.rowcount = cursor.rowcount
             except BaseException as error:
-                # Route every cursor-level error through the connection's
-                # _handle_exception hook so a single override remaps
-                # driver-layer quirks (loop-mismatch RuntimeError,
-                # client-layer subclass shape, etc.) once instead of
-                # at every execute call site. Mirrors SA's reference
-                # AsyncAdapt_aiosqlite_cursor wrap-all pattern.
+                # Centralised remap of driver-layer quirks (loop-mismatch etc.).
                 self._adapt_connection._handle_exception(error)
         finally:
-            # Only close if cursor was successfully constructed —
-            # cursor() may have raised inside the try.
             if cursor is not None:
-                # ``cursor.close`` is in-memory state-clearing only; a
-                # failure here has no external effect. Suppressing it keeps
-                # any primary exception (execute / fetchall raise) the
-                # active one rather than being replaced by a secondary
-                # close-time error. Narrow to ``(Exception,
-                # asyncio.CancelledError)`` so a greenlet-level cancel is
-                # still covered (``CancelledError`` subclasses
-                # ``BaseException`` since 3.8) but ``KeyboardInterrupt`` /
-                # ``SystemExit`` propagate — the stdlib's own
-                # ``contextlib.suppress`` docs call out ``BaseException``
-                # here as an anti-pattern for exactly this reason.
+                # Suppress close failure so it can't replace a primary execute
+                # exception; covers greenlet cancel but lets KI/SystemExit pass.
                 try:
-                    # ``AsyncCursor.close`` is sync; no ``await_only``
-                    # bridge needed.
                     cursor.close()
                 except (Exception, asyncio.CancelledError) as exc:
-                    # DEBUG-log the suppressed close failure so a
-                    # flapping leader (close fails repeatedly post-
-                    # execute) is observable in logs. Mirrors the
-                    # discipline applied to AsyncAdaptedConnection
-                    # close()/terminate() and to the dialect-side
-                    # do_ping close arm.
                     peer = _log_safe_peer(self._adapt_connection._connection)
                     logger.debug(
                         "AsyncAdaptedCursor.execute (id=%s, peer=%s): "
@@ -496,99 +219,36 @@ class AsyncAdaptedCursor:
         operation: str,
         seq_of_parameters: Iterable[Sequence[Any]],
     ) -> None:
-        """Execute many statements.
-
-        As with ``execute``, ``parameters`` is narrowed to ``Sequence``
-        per the qmark-only dbapi contract; mappings are rejected at the
-        DBAPI cursor layer at runtime, and SA's compiler always hands
-        a sequence to qmark dialects.
-
-        ``seq_of_parameters`` is materialised to a ``list`` if the
-        caller hands in a one-shot iterable (generator, ``map(...)``,
-        ``iter([...])``, file reader). Without this, a disconnect-class
-        exception mid-stream (leader flip during an executemany batch)
-        triggers SA's pool-invalidation + engine-retry path, which
-        re-issues the same ``executemany`` against the now-exhausted
-        iterator — silent zero-row execute followed by COMMIT, a
-        data-loss class. SA's own compiler always hands a list today,
-        so the ``isinstance(list)`` gate keeps that call a no-copy
-        fast path. Callers needing streaming-memory semantics for a
-        very large bind set must drive multiple ``execute()`` calls
-        themselves; ``executemany`` cannot stream because the retry
-        contract requires re-iteration.
-
-        ``lastrowid`` handling: same sticky-INSERT contract as
-        ``execute`` (see ``execute``'s docstring for the full
-        rationale). Both branches below write ``self.lastrowid`` only
-        when the underlying cursor reports a non-None value (i.e., an
-        INSERT/REPLACE actually ran in this executemany); a subsequent
-        ``UPDATE``/``DELETE``/``SELECT`` executemany preserves the
-        prior INSERT's lastrowid, matching stdlib ``sqlite3.Cursor``
-        stickiness. DIVERGES from SA's aiosqlite reference
-        (``sqlalchemy/dialects/sqlite/aiosqlite.py``'s ``executemany``
-        body) which assigns ``self.lastrowid = _cursor.lastrowid``
-        unconditionally — under that shape, a non-INSERT
-        ``executemany`` clears the value to ``None``. Cross-driver
-        code consulting ``cursor.lastrowid`` after a non-INSERT
-        ``executemany`` sees the prior INSERT's value here vs ``None``
-        on aiosqlite. The dqlite stance privileges stdlib parity over
-        SA-reference parity; the choice is documented at both call
-        sites because the underlying RETURNING-path drain pattern
-        otherwise structurally mirrors the SA reference shape.
+        """Materialises ``seq_of_parameters`` to a list so SA's disconnect
+        retry path can re-iterate it (a one-shot iterator would re-issue as a
+        silent zero-row execute + COMMIT — data loss). lastrowid follows the
+        sticky-INSERT contract (see ``execute``), which DIVERGES from SA's
+        aiosqlite reference that clears it unconditionally on non-INSERT.
         """
-        # Mirror the closed-cursor guard the other methods on this
-        # class apply; see ``execute`` for the rationale.
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
-        # Materialise non-list iterables so SA's retry path
-        # (disconnect classify → pool invalidate → re-issue against
-        # fresh connection) can re-iterate the bind sequence. The
-        # ``isinstance`` gate keeps SA's canonical (always a list)
-        # call a no-copy fast path.
+        # isinstance gate keeps SA's always-a-list call a no-copy fast path.
         if not isinstance(seq_of_parameters, list):
             seq_of_parameters = list(seq_of_parameters)
-        # Clear state up-front so cancellation mid-call doesn't leak
-        # a previous execution's buffered rows. ``lastrowid`` is NOT
-        # cleared here (sticky-INSERT contract — see ``execute`` for
-        # rationale).
         self.description = None
         self.rowcount = -1
         self._rows.clear()
 
-        # Hoist cursor() inside the try, mirroring execute() — a
-        # synchronous raise (closed conn, cross-loop ProgrammingError)
-        # must route through _handle_exception too.
         cursor: AsyncCursor | None = None
         try:
             try:
                 cursor = self._connection.cursor()
-                # Same arraysize propagation as ``execute`` — forward-
-                # compat scaffolding for any future wire-level
-                # prefetch tuning the dbapi layer might honour.
                 cursor.arraysize = self._arraysize
                 await_only(cursor.executemany(operation, seq_of_parameters))
-                # Mirror execute()'s post-call pattern: if the statement had
-                # a RETURNING clause, the underlying cursor accumulates rows
-                # across parameter sets and sets a description. Skipping the
-                # description/rows capture silently loses every returned row
-                # when SQLAlchemy's insertmanyvalues + RETURNING path is
-                # driven through the async engine.
+                # RETURNING: the cursor accumulates rows across param sets;
+                # capture them or insertmanyvalues+RETURNING loses every row.
                 if cursor.description:
-                    # Same drain-rows ownership-transfer pattern as
-                    # ``execute`` — atomic-on-success: capture metadata
-                    # AND drain into locals first, then commit. A
-                    # raise from ``drain_rows`` leaves the adapter at
-                    # the no-result baseline, NOT half-populated.
                     description = cursor.description
                     rowcount = cursor.rowcount
                     lastrowid = cursor.lastrowid
                     drained = deque(cursor.drain_rows())
                     self.description = description
                     self._rows = drained
-                    # Mirror execute()'s RETURNING path: rowcount /
-                    # lastrowid are accumulated by the underlying cursor
-                    # across parameter sets and must flow through the
-                    # adapter so SQLAlchemy's Result layer sees them.
                     self.rowcount = rowcount
                     if lastrowid is not None:
                         self.lastrowid = lastrowid
@@ -597,18 +257,10 @@ class AsyncAdaptedCursor:
                         self.lastrowid = cursor.lastrowid
                     self.rowcount = cursor.rowcount
             except BaseException as error:
-                # Same routing as ``execute``: errors flow through the
-                # connection's _handle_exception hook for centralized
-                # remapping.
                 self._adapt_connection._handle_exception(error)
         finally:
             if cursor is not None:
-                # Same narrow suppression as ``execute``'s finally block
-                # above — see the rationale there. Keeps KI / SystemExit
-                # propagating while still covering greenlet cancellation.
                 try:
-                    # ``AsyncCursor.close`` is sync; no ``await_only``
-                    # bridge needed.
                     cursor.close()
                 except (Exception, asyncio.CancelledError) as exc:
                     peer = _log_safe_peer(self._adapt_connection._connection)
@@ -622,25 +274,6 @@ class AsyncAdaptedCursor:
                     )
 
     def fetchone(self) -> tuple[Any, ...] | None:
-        """PEP 249 §6.2 ``fetchone`` on the SA-adapted async cursor.
-
-        Returns the next pre-buffered row, or ``None`` on exhaustion
-        (PEP 249 None-on-exhaustion contract). Raises
-        ``InterfaceError`` on a closed cursor.
-
-        Rows are eagerly drained from the underlying
-        ``AsyncCursor._rows`` deque at ``execute`` / ``executemany``
-        time; this method does not initiate any wire I/O — dqlite's
-        wire protocol delivers the entire result set up-front in a
-        single RTT (no server-side prefetch knob, mirroring the
-        ``arraysize.setter`` semantic note).
-        """
-        # Narrow to the actual row shape. ``Any | None`` collapses to
-        # ``Any`` under mypy's gradual typing, defeating the previous
-        # narrowing attempt; ``tuple[Any, ...] | None`` matches what
-        # the underlying dqlitedbapi sync / async cursors return and
-        # makes the None-on-exhaustion PEP 249 contract type-checkable.
-        # Runtime behaviour unchanged.
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         if self._rows:
@@ -648,49 +281,16 @@ class AsyncAdaptedCursor:
         return None
 
     def fetchmany(self, size: int | None = None) -> Sequence[tuple[Any, ...]]:
-        """PEP 249 §6.2 ``fetchmany`` on the SA-adapted async cursor.
-
-        Returns up to ``size`` next rows from the pre-buffered deque;
-        ``size`` defaults to ``self.arraysize``. Returns ``[]`` on
-        exhaustion. Raises ``InterfaceError`` on a closed cursor.
-
-        Negative ``size`` mirrors stdlib ``sqlite3.Cursor.fetchmany(-1)``
-        and the underlying ``dqlitedbapi`` cursor: "fetch all remaining
-        rows" (delegates to ``fetchall``). Without this parity, cross-
-        driver code using ``fetchmany(-1)`` as "drain all" would break
-        at the SA layer despite working through the dbapi layer
-        directly.
-
-        Like ``fetchone`` this does not initiate wire I/O — the deque
-        is filled at ``execute`` time (no server-side prefetch).
-        """
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         if size is None:
             size = self.arraysize
         if size < 0:
-            # Mirror stdlib ``sqlite3.Cursor.fetchmany(-1)`` and the
-            # underlying ``dqlitedbapi`` cursor's documented contract:
-            # negative size means "fetch all remaining rows". Adapter
-            # rows are buffered in-memory, so this is a fast deque
-            # drain. Without this parity, cross-driver code using
-            # ``fetchmany(-1)`` as "drain all" breaks at the SA layer
-            # despite working through the dbapi layer directly.
+            # Negative size = "fetch all", matching stdlib sqlite3 and the dbapi.
             return self.fetchall()
         return [self._rows.popleft() for _ in range(min(size, len(self._rows)))]
 
     def fetchall(self) -> Sequence[tuple[Any, ...]]:
-        """PEP 249 §6.2 ``fetchall`` on the SA-adapted async cursor.
-
-        Returns all remaining pre-buffered rows and clears the
-        internal deque. Returns ``[]`` on exhaustion. Raises
-        ``InterfaceError`` on a closed cursor.
-
-        As with ``fetchone`` / ``fetchmany``, no wire I/O is issued —
-        the deque was populated at ``execute`` time (dqlite delivers
-        the full result set in a single RTT; there is no server-side
-        prefetch to drive).
-        """
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         retval = list(self._rows)
@@ -698,27 +298,8 @@ class AsyncAdaptedCursor:
         return retval
 
     def setinputsizes(self, *args: Any) -> None:
-        # PEP 249: called before execute*() to hint bind-parameter sizes.
-        # dqlite's wire encoder does not use per-parameter sizing hints,
-        # so the implementation is a no-op on an open cursor — but the
-        # closed-cursor case must raise to match the underlying
-        # AsyncCursor's behaviour and to keep ``is_disconnect``'s
-        # narrow "cursor is closed" InterfaceError branch reachable
-        # through the adapter.
-        #
-        # Accept BOTH PEP 249's single-sequence shape
-        # (``cur.setinputsizes([size_a, size_b])``) AND SA's connector-
-        # reference variadic shape
-        # (``cur.setinputsizes(size_a, size_b)``,
-        # see sqlalchemy.connectors.asyncio:
-        # ``def setinputsizes(self, *inputsizes)``). Without the
-        # variadic accept-arm a SA-internal call passing positional
-        # sizes would raise ``TypeError`` on the unexpected count;
-        # without the single-sequence arm a PEP 249 caller would still
-        # work today (the body is a no-op) but would silently drop
-        # the type information if the body ever stops being a no-op.
-        # _ = args  # body is a no-op; sizes/inputsizes are inspected
-        # downstream only if a future implementation honours the hint.
+        # No-op (dqlite ignores sizing hints); variadic *args accepts both
+        # PEP 249 single-sequence and SA's variadic call shapes.
         del args
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
@@ -729,48 +310,16 @@ class AsyncAdaptedCursor:
 
     @property
     def connection(self) -> "AsyncAdaptedConnection":
-        """The AsyncAdaptedConnection this cursor was created from.
-
-        PEP 249 optional extension mirroring Cursor.connection /
-        AsyncCursor.connection. Read-only.
-
-        On a closed cursor raise ``InterfaceError`` rather than
-        returning the post-close ``weakref.proxy(...)``: a stale
-        consumer reading ``cur.connection`` after close on an
-        already-GC'd parent would otherwise see a bare
-        ``ReferenceError`` (proxied target collected) which escapes
-        the ``dbapi.Error`` hierarchy and SA's
-        ``_handle_dbapi_exception`` classifier. The ``_closed`` flag
-        is the truth here — NOT
-        ``isinstance(self._adapt_connection, weakref.ProxyTypes)``
-        which can be True on a still-alive proxy.
-        """
+        # Raise on a closed cursor rather than returning the post-close proxy,
+        # whose attribute access could surface a bare ReferenceError. Gate on
+        # _closed, not the proxy type (which can be True on a live proxy).
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
         return self._adapt_connection
 
-    # PEP 249 optional extensions. The sibling ``callproc`` /
-    # ``nextset`` / ``scroll`` properties below raise
-    # ``NotSupportedError`` because dqlite genuinely has no
-    # server-side feature for them; this ``rownumber`` stub raises
-    # for a different reason — it is a curated adapter choice, not
-    # a feature gap.
-    #
-    # NOTE: the underlying ``dqlitedbapi.aio.AsyncCursor.rownumber``
-    # DOES implement this as a real counter (description-gated
-    # 0-based index, returns ``int | None``); it does NOT raise.
-    # The adapter does not mirror that because tracking a parallel
-    # counter through the deque-pop ownership model would add
-    # increment sites in fetchone / fetchmany / fetchall /
-    # __next__. Consumers who need rownumber should reach the
-    # underlying ``AsyncCursor`` directly (e.g. via the dbapi
-    # connection's ``cursor()``).
-    #
-    # We expose a ``NotSupportedError`` stub property here (rather
-    # than leaving the attr absent) so a consumer hard-``getattr``-
-    # ing ``cursor.rownumber`` gets a dbapi.Error rather than the
-    # bare ``AttributeError`` that would otherwise escape
-    # ``except dbapi.Error:``. Mirrors the sibling raise discipline.
+    # Stub raises (not absent) so a hard getattr gets a dbapi.Error, not a bare
+    # AttributeError. The underlying AsyncCursor.rownumber is a real counter;
+    # the adapter declines to mirror it to avoid per-fetch increment sites.
     @property
     def rownumber(self) -> int:
         if self._closed:
@@ -793,24 +342,12 @@ class AsyncAdaptedCursor:
     def scroll(self, value: int, mode: str = "relative") -> NoReturn:
         if self._closed:
             raise InterfaceError(f"cursor is closed (id={id(self)})")
-        # PEP 249 §6.1.1 enumerates ``mode`` ∈ {"relative", "absolute"};
-        # validate before NotSupportedError so a caller typo surfaces
-        # as a caller-side bug. ProgrammingError stays in dbapi.Error.
+        # Validate mode before NotSupportedError so a typo surfaces as caller bug.
         if mode not in ("relative", "absolute"):
             raise ProgrammingError(f"scroll mode must be 'relative' or 'absolute', got {mode!r}")
         raise NotSupportedError("dqlite cursors are not scrollable")
 
     def __iter__(self) -> Self:
-        # Return self so ``iter(cursor) is cursor`` — PEP 234 iterator
-        # protocol. The previous generator body (``while self._rows:
-        # yield self._rows.popleft()``) produced a fresh generator each
-        # time and split iteration into two incompatible paths: the
-        # generator popped rows directly while ``__next__`` routed
-        # through ``fetchone``. ``__next__`` now drives iteration for
-        # both ``for row in cursor`` and ``next(cursor)``; the sibling
-        # cursors ``dqlitedbapi.Cursor`` and ``AsyncCursor`` already
-        # follow this pattern. Returning ``Self`` (PEP 673) preserves
-        # subclass typing through ``iter(cursor)``.
         return self
 
     def __next__(self) -> tuple[Any, ...]:
@@ -820,11 +357,6 @@ class AsyncAdaptedCursor:
         return row
 
     def __enter__(self) -> Self:
-        # SA's reference connector cursor and aiosqlite cursor both
-        # support the context-manager protocol so callers can
-        # ``with conn.execute(...) as cur:``. The body simply yields
-        # ``self``; ``__exit__`` closes the cursor. Returns ``Self``
-        # (PEP 673) so subclass typing is preserved.
         return self
 
     def __exit__(
@@ -833,22 +365,11 @@ class AsyncAdaptedCursor:
         exc_val: BaseException | None,
         exc_tb: types.TracebackType | None,
     ) -> None:
-        # PEP 343 ``__exit__`` signature. The body always closes and
-        # never suppresses, so ``-> None`` is the correct return; a
-        # truthy return would silently swallow caller exceptions.
         self.close()
 
     def __reduce__(self) -> NoReturn:
-        # The class does NOT hold a long-lived ``AsyncCursor`` — each
-        # ``execute`` / ``executemany`` opens a fresh dbapi cursor in
-        # a finally-close block (greenlet-eager-fetch). The reject
-        # fires via the strong back-references to ``_adapt_connection``
-        # and ``_connection`` (a live ``AsyncConnection`` bound to an
-        # asyncio loop). Surface a clear driver-level TypeError
-        # naming the SA-adapter class specifically — without this,
-        # the default pickle walk eventually trips on the
-        # ``AsyncConnection``'s loop-bound state with a
-        # wrong-layer diagnostic.
+        # Reject pickling: the back-referenced AsyncConnection is loop-bound and
+        # holds a live socket. Name the adapter class for a layer-correct error.
         raise TypeError(
             f"cannot pickle {type(self).__name__!r} object — back-"
             f"references a loop-bound dbapi AsyncConnection holding a "
@@ -858,126 +379,34 @@ class AsyncAdaptedCursor:
 
 
 class AsyncAdaptedConnection(AdaptedConnection):
-    """Adapts an AsyncConnection for SQLAlchemy's greenlet-based async engine.
+    """Adapts an AsyncConnection for SQLAlchemy's greenlet-based async engine,
+    bridging sync-looking methods to the async connection via await_only().
 
-    Provides sync-looking methods that internally use await_only() to
-    bridge to the underlying async connection within SQLAlchemy's
-    greenlet context.
-
-    Cursor lifecycle: ``AsyncAdaptedCursor`` does NOT hold a long-lived
-    dbapi cursor — each ``execute`` / ``executemany`` call opens a
-    fresh ``dqlitedbapi.aio.AsyncCursor`` and closes it in a finally
-    block. As a result the adapter does not need to track cursors for
-    cascade-close: closing the adapter connection closes the
-    underlying ``AsyncConnection`` (which has its own cursor cascade
-    for any long-lived dbapi cursors). A stale adapter cursor used
-    after the parent adapter connection is closed will surface
-    ``InterfaceError`` from the next execute attempt's
-    ``self._connection.cursor()`` call. Mirrors SA's reference
-    ``AsyncAdapt_aiosqlite_connection`` which also does not track
-    adapter cursors.
-
-    No ``_execute_mutex``: SA's reference
-    ``AsyncAdapt_dbapi_connection`` (sqlalchemy/connectors/asyncio.py)
-    declares ``__slots__ = ("dbapi", "_execute_mutex")`` and wraps
-    every per-cursor execute in ``async with
-    self._adapt_connection._execute_mutex:``. That mutex exists to
-    protect a *long-lived adapter cursor*: the reference connector
-    keeps a single dbapi cursor open across calls and the mutex
-    serialises greenlets racing on its mutable state.
-
-    This adapter doesn't keep a long-lived cursor — every adapter
-    execute opens and closes a fresh dbapi cursor inside a finally —
-    AND the underlying ``dqlitedbapi.aio.AsyncConnection.op_lock``
-    already serialises commit / execute / rollback at the connection
-    layer (see ``dqlitedbapi/aio/connection.py`` ``_op_lock``). The
-    mutex would be redundant. If a future change introduces server-
-    side cursors / long-lived adapter cursor state, re-introduce
-    ``_execute_mutex`` at that point.
+    No ``_execute_mutex`` (unlike SA's reference connector): this adapter keeps
+    no long-lived cursor, and the dbapi ``AsyncConnection`` op-lock already
+    serialises commit/execute/rollback at the connection layer.
     """
 
-    # Parent ``sqlalchemy.engine.interfaces.AdaptedConnection`` declares
-    # ``__slots__ = ("_connection",)``; without our own slots declaration
-    # each instance gets a ``__dict__`` and defeats the parent's memory
-    # optimization (SA's own ``AsyncAdapt_aiosqlite_connection`` follows
-    # the same pattern). Add ``dbapi`` to ``__slots__`` to mirror SA's
-    # reference ``AsyncAdapt_dbapi_connection``
-    # (``sqlalchemy/connectors/asyncio.py:340-347``) which declares
-    # ``__slots__ = ("dbapi", "_execute_mutex")`` and stores the dbapi
-    # module reference there. Third-party SA-async instrumentation
-    # (Sentry / Datadog wrappers, SQLModel, sqlalchemy-utils)
-    # introspects ``dbapi_connection.dbapi`` to reach exception classes
-    # for type-tagged remap; without the attribute, that introspection
-    # falls back to ``AttributeError`` paths.
+    # dbapi in __slots__ mirrors SA's reference connector; third-party
+    # instrumentation introspects ``dbapi_connection.dbapi`` for exception
+    # classes. Without our own __slots__ each instance gets a __dict__.
     __slots__ = ("dbapi",)
 
-    # SA convention (asyncpg.py:714, aiosqlite.py:257,
-    # connectors/asyncio.py:338): expose ``await_`` as a staticmethod on
-    # the connection class. External instrumentation (Sentry / Datadog
-    # async-driver wrappers, SQLModel, sqlalchemy-utils) introspects
-    # ``dbapi_connection.await_`` to coalesce sync/async hops without
-    # re-running greenlet detection. The staticmethod surface is also
-    # the documented hook for a hypothetical ``AsyncAdaptFallback_*``
-    # variant: flip one line to ``staticmethod(await_fallback)`` and
-    # propagate.
-    #
-    # Internal call sites in this module continue to call ``await_only``
-    # directly from module scope — keeping the existing test fixtures
-    # that ``monkeypatch.setattr(aio_module, "await_only", ...)`` for
-    # behavioural stubs working unchanged. The staticmethod is purely a
-    # documented public surface for third-party callers and SA's own
-    # extension points.
+    # SA convention: expose await_ as a staticmethod for external
+    # instrumentation. Internal sites call module-level await_only directly so
+    # test fixtures that monkeypatch it keep working.
     await_ = staticmethod(await_only)
 
-    # Class-level cursor-class hooks mirror SA's reference
-    # ``AsyncAdapt_dbapi_connection._cursor_cls`` /
-    # ``_ss_cursor_cls`` (sqlalchemy/connectors/asyncio.py:336-337).
-    # SA dialect subclasses (asyncpg pattern) swap the cursor class
-    # by overriding these attributes at class scope without
-    # re-implementing ``cursor()``. ``_ss_cursor_cls`` is
-    # intentionally aliased to ``AsyncAdaptedCursor`` because the
-    # dialect pins ``supports_server_side_cursors=False`` —
-    # ``cursor(server_side=True)`` short-circuits on
-    # ``NotSupportedError`` before instantiation, so this attribute
-    # is provided for SA-introspection parity rather than for
-    # construction.
+    # Class-level cursor-class hooks let dialect subclasses swap the cursor
+    # without overriding cursor(). _ss_cursor_cls is aliased for introspection
+    # parity only — server-side cursors are pinned off.
     _cursor_cls: ClassVar[type] = AsyncAdaptedCursor
     _ss_cursor_cls: ClassVar[type] = AsyncAdaptedCursor
 
     @staticmethod
     def _terminate_handled_exceptions() -> tuple[type[BaseException], ...]:
-        """Introspection parity with SA's reference at
-        ``sqlalchemy/connectors/asyncio.py:417-421``. Third-party SA
-        async tooling (Sentry async-pool wrapper, sqlalchemy-utils
-        diagnostics) introspects this hook on the connection adapter;
-        every other async SA dialect (aiosqlite / asyncpg / aiomysql)
-        exposes it, and ``AttributeError`` on dqlite would force those
-        tools onto a less-informative fallback path.
-
-        Returns the union of three groups, one per catch arm in the
-        hand-rolled :meth:`terminate` body:
-
-        * ``_TRANSPORT_CLASS_EXCEPTIONS`` — ``OperationalError`` /
-          ``InterfaceError`` / ``DqliteConnectionError`` / ``OSError``
-          (terminate() arm 1; the body DEBUG-logs and returns).
-        * ``RuntimeError`` — defunct-loop close shape
-          (``RuntimeError("Event loop is closed")``) from
-          ``engine.dispose()`` after an ``asyncio.run()`` per-call
-          tore the loop down (terminate() arm 2; the body
-          DEBUG-logs and runs ``_force_close_transport``).
-        * ``asyncio.CancelledError`` — outer cancel during forced
-          reclaim (terminate() arm 3; the body runs
-          ``_force_close_transport`` and re-raises).
-
-        ``terminate()`` itself stays hand-rolled rather than reusing
-        SA's ``AsyncAdapt_terminate`` mixin: the dqlite lifecycle
-        diverges enough that the mixin would force re-implementing
-        both ``_terminate_graceful_close`` and ``_terminate_force_close``
-        against an inert template. This method exists purely so
-        introspection-only callers see a tuple
-        that matches the hand-rolled body's catch arms. Any new
-        ``except`` arm added to ``terminate()`` must be reflected
-        here to keep the contract honoured.
+        """Introspection-parity hook for SA async tooling; the tuple must mirror
+        :meth:`terminate`'s catch arms (transport-class + RuntimeError + cancel).
         """
         return _TRANSPORT_CLASS_EXCEPTIONS + (RuntimeError, asyncio.CancelledError)
 
@@ -986,62 +415,19 @@ class AsyncAdaptedConnection(AdaptedConnection):
         dbapi: Any,
         connection: "AsyncConnection | None" = _UNSET,
     ) -> None:
-        # Signature mirrors SA's reference connector
-        # (``sqlalchemy.connectors.asyncio.AsyncAdapt_dbapi_connection``
-        # and ``sqlalchemy.dialects.sqlite.aiosqlite.AsyncAdapt_aiosqlite_connection``):
-        # ``(self, dbapi, connection)`` with ``dbapi`` first as a
-        # positional parameter. Third-party instrumentation (Sentry,
-        # OpenTelemetry, Datadog, sqlalchemy-utils) and SA's own
-        # ``AsyncAdaptFallback_*`` subclasses construct adapters by
-        # mimicking this reference shape; a divergent positional order
-        # surfaces a ``TypeError`` on copy-pasted construction.
-        #
-        # Backward-compatible argument detection: an earlier signature
-        # was ``(connection, *, dbapi=None)``. In-tree callers have all
-        # been migrated to the SA-reference shape, but test fixtures and
-        # any external code that instantiated the adapter with a single
-        # positional connection may still exist. The contract: SA's
-        # reference shape always passes BOTH positional args. The
-        # legacy single-positional shape is ``(connection,)`` only.
-        #
-        # Discriminate "second positional omitted" from "second
-        # positional explicitly passed as ``None``" via the
-        # module-private ``_UNSET`` sentinel — distinct from the
-        # plain-``None`` annotation surface so IDE auto-complete
-        # still reports the parameter as ``connection: AsyncConnection
-        # | None = None``. ``connection is _UNSET`` selects the
-        # legacy branch; an explicit ``connection=None`` (caller
-        # wants the module bound but the inner connection deferred)
-        # selects the SA-reference branch with ``_connection = None``,
-        # not the dbapi module misassigned to ``_connection`` (the
-        # earlier ``connection is None`` trap).
+        # Signature ``(dbapi, connection)`` mirrors SA's reference connector so
+        # third-party instrumentation constructs adapters the same way.
+        # _UNSET (not None) discriminates the legacy single-positional
+        # ``(connection,)`` shape from an explicit ``connection=None``.
         if connection is _UNSET:
-            # Legacy single-positional construction:
-            # ``AsyncAdaptedConnection(raw_conn)``.
             inner_conn: Any = dbapi
             dbapi_module: Any = None
         else:
             inner_conn = connection
             dbapi_module = dbapi
-        # Type-shape guard: detect the third plausible call shape —
-        # the positional swap ``AsyncAdaptedConnection(connection,
-        # dbapi)`` — that the ``_UNSET`` sentinel cannot discriminate.
-        # Without this guard the swap silently poisons both slots and
-        # the downstream ``AttributeError`` (on ``self._connection.cursor()``
-        # or third-party ``self.dbapi.OperationalError`` lookup) surfaces
-        # many frames from the construction site.
-        #
-        # Confirmed-swap signature: the supposed dbapi (first
-        # positional) lacks ``OperationalError`` but exposes
-        # ``cursor`` — i.e. it shape-looks like a connection — AND
-        # the supposed connection (second positional) lacks
-        # ``cursor`` but exposes ``OperationalError`` — i.e. it
-        # shape-looks like a dbapi module. Both conditions firing
-        # together is the unambiguous swap fingerprint; a single
-        # mismatch could be a minimal in-tree fake that lacks both
-        # attributes by design (the test suite has several), so the
-        # guard tolerates that shape and only rejects the
-        # bilaterally swapped call.
+        # Detect the positional-swap call the _UNSET sentinel can't catch:
+        # first arg shape-looks like a connection (cursor, no OperationalError)
+        # and second like a dbapi module. Both firing = unambiguous swap.
         if (
             dbapi_module is not None
             and inner_conn is not None
@@ -1059,24 +445,12 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 f"'OperationalError' but no 'cursor'. Reference "
                 f"shape: AsyncAdaptedConnection(dbapi, connection)."
             )
-        # ``_connection`` is the concrete ``dqlitedbapi.aio.AsyncConnection``
-        # this adapter wraps; SQLAlchemy's parent ``AdaptedConnection``
-        # declares the attribute with a wider Protocol type, so we keep
-        # the store on ``Any`` and rely on the annotation here to document
-        # the intended input shape.
         self._connection: Any = inner_conn
-        # ``dbapi`` mirrors SA's reference connector — third-party
-        # instrumentation hard-``getattr``-s ``dbapi_connection.dbapi``
-        # to reach the dbapi module's exception classes.
         self.dbapi = dbapi_module
 
     def __reduce__(self) -> NoReturn:
-        # Wraps a live ``AsyncConnection`` (loop-bound, holds a live
-        # socket and asyncio.Lock). Surface a clear driver-level
-        # TypeError naming the SA-adapter class specifically —
-        # without this, the underlying ``AsyncConnection.__reduce__``
-        # raises a TypeError naming the dbapi class, which is a
-        # wrong-layer diagnostic for SA users.
+        # Reject pickling: wraps a loop-bound AsyncConnection. Name the adapter
+        # class for a layer-correct error rather than the inner dbapi class.
         raise TypeError(
             f"cannot pickle {type(self).__name__!r} object — wraps a "
             f"loop-bound dbapi AsyncConnection holding a live socket "
@@ -1086,60 +460,22 @@ class AsyncAdaptedConnection(AdaptedConnection):
 
     @property
     def driver_connection(self) -> Any:
-        """SA's standard hook for ``event.listens_for(engine.sync_engine,
-        "connect")`` callbacks. Inherited from ``AdaptedConnection``;
-        the parent returns ``self._connection`` directly. After
-        ``close()`` swaps ``self._connection`` for a ``weakref.proxy``,
-        a callback that touches the proxy after the inner has been GC'd
-        gets ``ReferenceError`` — outside the ``dbapi.Error`` umbrella.
-        Mirror the closed-state guard added to ``cursor()`` so the
-        post-close path raises ``InterfaceError`` cleanly."""
+        # Closed-state guard: raise InterfaceError rather than let the post-close
+        # weakref.proxy surface a bare ReferenceError to SA connect callbacks.
         if type(self._connection) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(self)})")
         return self._connection
 
     def run_async(self, fn: Any) -> Any:
-        """SA's ``AdaptedConnection.run_async(fn)`` calls
-        ``await_only(fn(self._connection))`` directly. After close,
-        ``self._connection`` is a ``weakref.proxy`` whose attribute
-        access raises ``ReferenceError`` if the inner has been GC'd —
-        not a ``dbapi.Error`` subclass and bypasses SA's exception
-        classifier. Surface ``InterfaceError`` up front so cross-driver
-        retry middleware sees a clean ``dbapi.Error``."""
+        # Closed-state guard — see driver_connection.
         if type(self._connection) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(self)})")
         return super().run_async(fn)
 
     def cursor(self, server_side: bool = False) -> AsyncAdaptedCursor:
-        # Match the SA connector reference signature
-        # (``sqlalchemy.connectors.asyncio.AsyncAdapt_dbapi_connection.cursor``)
-        # which takes ``server_side: bool = False``. The dialect pins
-        # ``supports_server_side_cursors=False`` so SA itself never
-        # passes ``server_side=True`` here, but third-party callers
-        # and future SA paths may; raise ``NotSupportedError`` (a
-        # PEP 249 ``dbapi.Error`` subclass) so the rejection routes
-        # through SA's ``_handle_dbapi_exception`` classifier and
-        # cross-driver ``except dbapi.Error:`` clauses catch it.
-        # Sibling cursor surface (``callproc`` / ``nextset`` /
-        # ``scroll``) follows the same discipline.
-        # Closed-state guard: ``close()`` replaces ``self._connection``
-        # with ``weakref.proxy(...)``. Returning a fresh
-        # ``AsyncAdaptedCursor`` over a proxy that may have been GC'd
-        # would defer the diagnostic to the first ``execute()``, which
-        # then surfaces either ``InterfaceError("Connection is closed
-        # ...")`` (proxied alive-but-closed) or — worse —
-        # ``ReferenceError`` (proxied GC'd) that is NOT a
-        # ``dbapi.Error`` subclass and escapes SA's
-        # ``_handle_dbapi_exception`` classifier. Detect the post-close
-        # state via the proxy type check and raise ``InterfaceError``
-        # up front, matching the dbapi-layer ``AsyncConnection.cursor``
-        # discipline.
-        #
-        # Closed-state check FIRST: on a closed adapter,
-        # ``cursor(server_side=True)`` must surface ``InterfaceError``
-        # (the actionable signal) rather than ``NotSupportedError`` (a
-        # feature-availability diagnostic on a connection that's no
-        # longer usable at all).
+        # Closed-state check FIRST (before server_side) so a closed adapter
+        # surfaces the actionable InterfaceError, not NotSupportedError. Guards
+        # against the post-close proxy raising a bare ReferenceError downstream.
         if type(self._connection) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(self)})")
         if server_side:
@@ -1147,10 +483,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 "Server-side cursors are not supported by the dqlite dialect; "
                 "supports_server_side_cursors is pinned to False."
             )
-        # Read the cursor class from the class-level hook so dialect
-        # subclasses can swap ``AsyncAdaptedCursor`` without overriding
-        # ``cursor()``. Matches SA's reference connector pattern at
-        # ``sqlalchemy/connectors/asyncio.py:347-352``.
+        # Via the class-level hook so subclasses can swap the cursor class.
         cursor: AsyncAdaptedCursor = self._cursor_cls(self)
         return cursor
 
@@ -1159,34 +492,11 @@ class AsyncAdaptedConnection(AdaptedConnection):
         operation: str,
         parameters: Sequence[Any] | None = None,
     ) -> AsyncAdaptedCursor:
-        """SA-reference parity: open a cursor, run ``execute``, return
-        the cursor. SA's reference ``connectors/asyncio.py`` exposes
-        this and SA-internal code paths (e.g.,
-        ``dialects/sqlite/provision.py``) call
-        ``dbapi_connection.execute(...)`` directly. Without this
-        method the call hits ``AttributeError`` on the dqlite adapter.
-
-        On synchronous failure of ``cur.execute(...)`` (a closed
-        connection, cross-loop misuse, etc.) close the freshly-opened
-        cursor before re-raising so the caller's exception path
-        doesn't leak an unowned cursor with loop-bound state. SA's
-        reference connector follows the same try/close/raise
-        discipline.
+        """SA-reference parity convenience: open a cursor, execute, return it.
+        SA-internal paths call ``dbapi_connection.execute(...)`` directly.
         """
-        # Single-discipline error routing: open the cursor AND run
-        # the inner execute inside one try-frame so any fault —
-        # whether from ``self.cursor()`` (proxy guard, loop-bound
-        # delegate failures) or ``cur.execute()`` itself — goes
-        # through ``_handle_exception``. The cursor-level execute
-        # (``AsyncAdaptedCursor.execute``) wraps its frame the same
-        # way; without symmetric routing here, a cross-loop
-        # ``RuntimeError`` from ``cursor()`` would leak raw past
-        # SA's ``is_disconnect`` classifier when invoked via the
-        # connection-level convenience path (provision /
-        # do_terminate) while the engine-level path (Result layer)
-        # remaps it. The outer try-frame closes any cursor we
-        # opened before propagating the remapped or unmapped
-        # exception.
+        # One try-frame routes both cursor() and execute() faults through
+        # _handle_exception; the outer frame closes any opened cursor on raise.
         cur: AsyncAdaptedCursor | None = None
         try:
             try:
@@ -1207,201 +517,53 @@ class AsyncAdaptedConnection(AdaptedConnection):
 
     @property
     def isolation_level(self) -> str:
-        """Report the only level dqlite honours: ``"SERIALIZABLE"``.
-
-        dqlite runs every statement through Raft consensus; there is no
-        mechanism to weaken isolation. SA's reference aiosqlite adapter
-        exposes ``isolation_level`` as a read/write property backed by
-        the underlying connection, and SA diagnostics / third-party
-        middleware probe ``getattr(dbapi_conn, "isolation_level",
-        None)`` on several code paths. Without this property those
-        probes would see ``None`` and either log "isolation unknown"
-        or bypass a pin. Read-only: SA's engine flow already
-        short-circuits ``set_isolation_level`` to accept only
-        ``"SERIALIZABLE"``, so there is no setter surface to proxy.
-        """
+        # The only level dqlite honours (Raft consensus). Read-only; exposed so
+        # SA/middleware probes don't see None. The setter side is short-circuited
+        # by SA's engine flow.
         return "SERIALIZABLE"
 
     @property
     def autocommit(self) -> bool:
-        """Report ``False``: SA's transaction model is in effect at this layer.
-
-        The underlying dbapi ``Connection.autocommit`` is ``True`` —
-        the dqlite wire protocol is autocommit-by-default and every
-        statement commits at the server unless the caller issued an
-        explicit ``BEGIN``. The SA adapter deliberately reports
-        ``False`` here because SA wraps the connection with explicit
-        ``BEGIN`` / ``COMMIT`` control via the dialect, taking the
-        wire layer out of autocommit mode for the duration of the
-        SA-managed transaction. Both layers' values are accurate for
-        their respective layer; they are not in conflict.
-
-        Parity with SA's reference ``AsyncAdapt_aiosqlite_connection``,
-        which exposes ``autocommit`` as a read/write property. SA
-        characteristic code and some third-party middleware probe
-        ``getattr(dbapi_conn, "autocommit", None)`` — without the
-        property those probes see ``None`` and may log misleading
-        "autocommit unknown" diagnostics.
-        """
+        # Report False: SA manages BEGIN/COMMIT at this layer even though the
+        # underlying wire is autocommit-by-default. Exposed for SA/middleware
+        # probes that would otherwise see None.
         return False
 
     @autocommit.setter
     def autocommit(self, value: bool) -> None:
-        """Reject attempts to enable AUTOCOMMIT mode at the SA layer;
-        accept ``False`` as a no-op.
-
-        SA's engine flow short-circuits ``set_isolation_level`` to
-        reject ``"AUTOCOMMIT"`` before reaching the dialect, but a
-        direct ``conn.autocommit = True`` on the adapter would bypass
-        that guard. Fail fast with the same educational message the
-        dialect emits for ``isolation_level="AUTOCOMMIT"``. The
-        underlying wire is autocommit-by-default; what's rejected
-        here is SA's AUTOCOMMIT *isolation level*, which would
-        require the dialect to skip BEGIN/COMMIT wrapping — not
-        compatible with how the adapter manages the dqlite
-        connection.
-        """
+        # Reject a direct ``conn.autocommit = True`` (which would bypass SA's
+        # engine-level AUTOCOMMIT guard); accept False as a no-op.
         if value:
             raise ArgumentError(_AUTOCOMMIT_REJECTION_MSG)
-        # value is False → already the effective mode, no-op.
 
     def _handle_exception(self, error: BaseException) -> NoReturn:
-        """Adapter-level exception normalisation hook.
+        """Centralised exception-normalisation hook for commit/rollback/execute.
 
-        Matches the ``AsyncAdapt_aiosqlite_connection._handle_exception``
-        extension point in SA's reference dialect. Centralises the
-        remap of driver-layer quirks so commit/rollback/execute /
-        executemany do not each re-implement the same translation.
-
-        **Type signature divergence from SA reference**: this hook
-        accepts ``BaseException``, while SA's reference connector
-        (``connectors/asyncio.py:365``) and aiosqlite's adapter
-        (``dialects/sqlite/aiosqlite.py:333``) type the parameter as
-        ``Exception``. The wider ``BaseException`` type is deliberate:
-        the cursor-level catch sites in this adapter
-        (``execute`` / ``executemany`` at ``except BaseException as
-        error``) route every cursor-level error through this hook so
-        the surrounding ``finally`` always runs (closing the freshly-
-        opened underlying cursor). The ``isinstance(error,
-        (RuntimeError, ProgrammingError))`` short-circuit at the top
-        of this body skips KeyboardInterrupt / SystemExit /
-        CancelledError, falling through to ``raise error`` —
-        preserving propagation for callers. Narrowing to
-        ``Exception`` would require reshaping the cursor-level
-        catches AND prove load-bearing-equivalence for cancel-during-
-        execute paths; the wider type holds the diagnostic-leak
-        prevention contract.
-
-        Concrete remaps:
-
-        * ``RuntimeError`` from ``await_only`` whose message contains
-          ``"different loop"`` (canonical Python wording: ``"got Future
-          ... attached to a different loop"``) — surfaces when an
-          ``AsyncConnection`` is reused across two event loops (e.g.,
-          ``asyncio.run()`` per call). The bare ``RuntimeError`` would
-          not be classified by SA (``isinstance(e, dbapi.Error)`` gates
-          ``is_disconnect``), so the pool would not invalidate the slot
-          and the next checkout would hit the same fault.
-        * ``ProgrammingError`` from ``dqlitedbapi.AsyncConnection`` whose
-          message contains ``"different event loop"`` (full phrase) —
-          surfaces from ``_ensure_locks`` / ``cursor()`` on the same
-          cross-loop reuse pattern. ``is_disconnect`` deliberately does
-          not classify ProgrammingError as a disconnect on real-query
-          paths (programmer-bug shapes must stay visible), so without
-          a remap the pool slot would survive the cross-loop fault.
-
-        Both shapes route through one substring scan over the two
-        canonical wordings — Python's ``"different loop"`` (which
-        ``"attached to a different loop"`` already contains) and the
-        dbapi's ``"different event loop"`` (a distinct phrase, NOT a
-        superstring of the first since ``"event "`` sits between
-        ``"different"`` and ``"loop"``). Re-raise as
-        ``dbapi.OperationalError`` (with the substring preserved) so
-        the dialect's substring fallback classifies it as a disconnect.
+        Accepts ``BaseException`` (wider than SA's reference ``Exception``) so the
+        cursor-level ``except BaseException`` catch sites can route through here
+        while their finally closes the underlying cursor; non-loop-state shapes
+        (including KI/SystemExit/cancel) fall through to ``raise error``.
         """
-        # Delegate the loop-state substring scan to the canonical
-        # module-level helper ``_remap_loop_state_runtime_error``.
-        # The helper walks the ``__cause__`` / ``__context__`` chain
-        # (plus PEP 654 group children), tests each hop for
-        # ``(RuntimeError, ProgrammingError)``, and raises an
-        # ``OperationalError`` with the remapped wording if any of the
-        # three substring patterns matches; returns normally otherwise.
-        # Keeping the substring tuple in ONE place avoids the
-        # three-site DRY drift (helper + this method + close-arm
-        # below) that would otherwise let a Python minor wording
-        # change silently bypass one of the three sites.
-        # PEP 654 cancel-class split must run BEFORE
-        # ``_remap_loop_state_runtime_error`` so a
-        # ``BaseExceptionGroup`` containing BOTH a CancelledError
-        # AND a loop-state RuntimeError (the canonical mixed shape
-        # from a cross-loop ``TaskGroup``) propagates the cancel
-        # rather than firing the loop-state remap on the
-        # RuntimeError hop. Without this precedence, the remap
-        # walks the group's children via ``_walk_cause_chain``,
-        # finds the loop-state hop, raises ``OperationalError``,
-        # and the cancel-class child is silently dropped — exactly
-        # the failure mode the split was added to prevent.
+        # PEP 654 cancel split runs BEFORE the loop-state remap so a mixed group
+        # (cancel + loop-state RuntimeError from a cross-loop TaskGroup)
+        # propagates the cancel instead of firing the remap on the RuntimeError.
         if isinstance(error, BaseExceptionGroup):
             cancel_group, remainder = error.split(
                 lambda e: isinstance(e, (asyncio.CancelledError, KeyboardInterrupt, SystemExit))
             )
             if cancel_group is not None:
-                # ``raise ... from None`` so the cancel forwarded to
-                # the caller's structured-concurrency parent is
-                # unweighted by the original ``BaseExceptionGroup``
-                # on ``__context__``. Matches the dbapi-layer
-                # discipline at cursor.py:_call_client and
-                # connection.py's connect-path arms.
-                #
-                # Cancellation-precedence trade-off in the mixed
-                # group case (cancel + loop-state RuntimeError, e.g.
-                # from a cross-loop ``TaskGroup``): ``remainder``
-                # carries the loop-state child which would normally
-                # be routed through ``_remap_loop_state_runtime_error``
-                # → ``OperationalError`` and trip disconnect
-                # classification. Here it is discarded so the cancel
-                # propagates cleanly, honouring structured-concurrency.
-                # Self-heal path: the slot stays bound until the
-                # next acquire; that acquire re-fires the same
-                # underlying loop-state RuntimeError, this time
-                # WITHOUT a sibling CancelledError. The second pass
-                # has only the loop-state member, ``_handle_exception``
-                # routes it through the remap, and the
-                # ``OperationalError`` then trips disconnect
-                # classification, invalidating the slot. One wasted
-                # retry per cross-loop-cancel race, but no permanent
-                # slot-poison.
+                # ``from None`` so the cancel isn't weighted by the group on
+                # __context__. The discarded loop-state remainder self-heals:
+                # the next acquire re-fires it without a sibling cancel and the
+                # remap then invalidates the slot (one wasted retry, no poison).
                 raise cancel_group from None
-            # Defensive narrowing via ``if`` instead of ``assert`` so
-            # the subsequent ``remainder.exceptions`` access doesn't
-            # surface ``AttributeError`` under ``python -O``.
-            # Logically unreachable under the BaseExceptionGroup.split
-            # contract.
+            # ``if`` not ``assert`` so -O doesn't skip it; unreachable per split.
             if remainder is None:
                 raise error
-            # Pure-Exception remainder: route through the loop-state
-            # remap so a group of e.g. ``RuntimeError("different
-            # event loop")`` still surfaces as ``OperationalError``
-            # via the canonical helper. ``_remap_loop_state_runtime_error``
-            # walks the group children via ``_walk_cause_chain`` and
-            # raises from the matched hop; if no hop matches, falls
-            # through to the wrap below.
             _remap_loop_state_runtime_error(remainder)
-            # Single-child remainder unwrap: a ``TaskGroup`` /
-            # ``anyio.create_task_group`` wrapping ONE inner SQL
-            # operation produces a group-of-one whose only child is
-            # the original ``IntegrityError`` / ``DataError`` /
-            # ``ProgrammingError`` / etc. Unconditionally wrapping
-            # the remainder as ``OperationalError(code=None)`` would
-            # silently lose the original class identity — user
-            # ``except IntegrityError`` clauses miss the rewritten
-            # exception and ``is_disconnect``'s substring scan runs
-            # on an aggregate message that isn't a wire fault. The
-            # group-of-one case is structurally byte-equivalent to
-            # the non-group path; dispatch through the same shape.
-            # ``raise child from remainder`` preserves the group on
-            # ``__cause__`` so SA's ``_walk_cause_chain`` still finds
-            # the structured-concurrency context if it needs to.
+            # Group-of-one (a TaskGroup wrapping a single SQL op): unwrap so the
+            # original class identity reaches user ``except IntegrityError`` etc.
+            # rather than being flattened into an aggregate OperationalError.
             if len(remainder.exceptions) == 1:
                 child = remainder.exceptions[0]
                 raise child from remainder
@@ -1412,10 +574,6 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 f"of class(es) {sorted(child_classes)}",
                 code=None,
             ) from remainder
-        # Non-group errors take the original remap path.
-        # ``_remap_loop_state_runtime_error`` raises ``OperationalError``
-        # from the matched hop if any loop-state wording is found;
-        # otherwise returns and we re-raise the original.
         _remap_loop_state_runtime_error(error)
         raise error
 
@@ -1432,31 +590,13 @@ class AsyncAdaptedConnection(AdaptedConnection):
             self._handle_exception(error)
 
     def close(self) -> None:
-        # Idempotency short-circuit: after the first close, the inner
-        # ``AsyncConnection`` is swapped for a ``weakref.proxy``. A
-        # second close that tries to call ``self._connection.rollback()``
-        # on a now-GC'd proxy raises ``ReferenceError`` — not a
-        # ``dbapi.Error`` subclass and uncaught by the
-        # ``_TRANSPORT_CLASS_EXCEPTIONS`` arm or
-        # ``_handle_exception``'s narrow remap. The sibling
-        # ``AsyncAdaptedCursor.close()`` carries the same
-        # ``self._closed``-style guard for exactly this reason; the
-        # ``ProxyTypes`` check on ``self._connection`` is its
-        # adapter-level equivalent (no separate flag needed because
-        # ``_release_inner_strong_ref`` already encodes "closed" in
-        # the type of the slot). Stays compatible with PEP 249 §6.1.1's
-        # idempotent-close expectation and matches every modern async
-        # driver (aiosqlite / asyncpg / psycopg3).
+        # Idempotency short-circuit: post-close the inner conn is a weakref.proxy
+        # whose attribute access would raise ReferenceError on a second close.
         if type(self._connection) in weakref.ProxyTypes:
             return
 
-        # Preflight on ``in_greenlet()`` matches SA's reference adapter
-        # idiom (``connectors/asyncio.py:217-220, 392-415``). Outside a
-        # greenlet (GC sweep / atexit / non-greenlet finalize), skip
-        # both the rollback and the async close entirely and reap the
-        # writer synchronously. ``await_only`` would otherwise allocate
-        # a ``MissingGreenlet`` exception with full traceback only to be
-        # caught and absorbed; the preflight avoids that throw.
+        # Outside a greenlet (GC sweep / atexit), skip rollback + async close and
+        # reap synchronously — await_only would only allocate a MissingGreenlet.
         if not in_greenlet():
             try:
                 self._force_close_transport()
@@ -1464,56 +604,16 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 self._release_inner_strong_ref()
             return
 
-        # Outer try/finally guarantees the post-close ``weakref.proxy``
-        # swap runs on EVERY exit arm — normal return, early return
-        # from the rollback-loop-closed handler, raises from
-        # ``_handle_exception`` remap, transport-class fallthrough, and
-        # cancel re-raise. Without it, the rollback-arm
-        # ``RuntimeError("Event loop is closed")`` ``return`` (and the
-        # ``_handle_exception``-raise / cancel-raise arms) bypass the
-        # swap, leaving SA's pool diagnostic ring + pytest session-
-        # fixture cache pinning the inner ``AsyncConnection`` (and
-        # through it the client-layer state, registered
-        # ``weakref.finalize``, and frame-pinning
-        # ``_invalidation_cause``). The release discipline applies on
-        # every exit arm, success or failure — the adapter is dead
-        # post-close regardless of how it got there.
+        # Outer try/finally guarantees the proxy swap on EVERY exit arm so a
+        # closed adapter never pins the inner AsyncConnection.
         try:
-            # Attempt rollback before close so a caller that exits
-            # without committing does not leave a dangling server-
-            # side transaction. The underlying async connection's
-            # rollback is a silent no-op when no transaction is
-            # active and when the connection has never been used, so
-            # the double-call is safe.
-            #
-            # Narrow the suppression to the categories a best-effort
-            # rollback can legitimately raise — connection-level /
-            # transport errors — so programming bugs (AttributeError,
-            # TypeError, bare RuntimeError, etc.) still propagate.
-            # ``ConnectionError``, ``BrokenPipeError``, and
-            # ``TimeoutError`` are all ``OSError`` subclasses (since
-            # Python 3.3+/3.10+ respectively), so a single ``OSError``
-            # check covers every stdlib transport-error shape —
-            # matching the source-of-truth classification in
-            # ``base.py``'s ``is_disconnect``.
-            #
-            # Inner try/finally so close() runs regardless of how
-            # rollback() exits — narrow-caught, programming bug, or
-            # ``BaseException`` like ``CancelledError`` during pool
-            # dispose. SA's pool does not re-call close() on failure,
-            # so skipping close would leak the underlying
-            # AsyncConnection. Mirror of the inverse leak fixed in
-            # DqliteDialect_aio.connect().
+            # Best-effort rollback before close (no-op if no txn active). Narrow
+            # suppression to transport-class so programming bugs still propagate;
+            # inner try/finally runs close() regardless of how rollback exits.
             try:
                 try:
                     await_only(self._connection.rollback())
                 except _TRANSPORT_CLASS_EXCEPTIONS as exc:
-                    # Silent suppression used to hide e.g. "leader flip
-                    # mid-rollback" from operators — a DEBUG line
-                    # preserves the diagnostic without masking or
-                    # propagating. Include both id(self) and the peer
-                    # address so a noisy pool can be correlated to
-                    # specific adapter instances and nodes.
                     peer = _log_safe_peer(self._connection)
                     logger.debug(
                         "AsyncAdaptedConnection.close (id=%s, peer=%s): "
@@ -1524,47 +624,16 @@ class AsyncAdaptedConnection(AdaptedConnection):
                         exc_info=True,
                     )
                 except RuntimeError as exc:
-                    # Route loop-mismatch RuntimeError through the same
-                    # remap as commit/rollback/execute/executemany so
-                    # SA's is_disconnect classifier (which is gated on
-                    # DatabaseError) sees an OperationalError instead
-                    # of a bare RuntimeError. Without this, cross-loop
-                    # close() would propagate an un-classified
-                    # RuntimeError past engine.dispose(). The outer
-                    # try/finally still runs the proxy swap on the
-                    # raise path.
-                    # Lowercase once at the top of the arm so the
-                    # substring scans below mirror the
-                    # ``_handle_exception`` / ``is_disconnect``
-                    # ``.lower()`` discipline (d8ecb49). The CPython
-                    # source-of-truth for both phrases is at the
-                    # asyncio-internals level, not a stable documented
-                    # API; a future point-release capitalisation tweak
-                    # would otherwise silently bypass the remap and
-                    # leak bare ``RuntimeError`` past
-                    # ``engine.dispose()``.
+                    # Lowercase once (CPython phrasing isn't a stable API);
+                    # if/elif/else makes mutual exclusion structural rather than
+                    # relying on _handle_exception's unenforced NoReturn.
                     msg_lower = str(exc).lower()
-                    # Use ``if / elif / else`` (not sequential
-                    # ``if``s) so the mutual-exclusion contract is
-                    # structural rather than dependent on
-                    # ``_handle_exception``'s ``NoReturn`` annotation
-                    # (which has no runtime enforcement). A future
-                    # refactor that breaks the NoReturn invariant —
-                    # or a contributor adding a fourth substring arm
-                    # — cannot accidentally fall through to the
-                    # trailing ``raise``.
                     if "different loop" in msg_lower or "different event loop" in msg_lower:
                         self._handle_exception(exc)  # NoReturn
-                    # ``RuntimeError("Event loop is closed")`` lands
-                    # here during ``engine.dispose()`` after a per-call
-                    # ``asyncio.run()`` finished and tore the loop down
-                    # — symmetric with the close arm below. The
-                    # ``has_terminate=True`` dialect promise says
-                    # close()/dispose must not propagate failures from
-                    # this path; debug-log and return. The outer
-                    # try/finally still runs the proxy swap on this
-                    # return path. The debug log preserves the
-                    # traceback for triage.
+                    # "Event loop is closed" during dispose after a per-call
+                    # asyncio.run() tore the loop down; has_terminate promise =
+                    # don't propagate, so debug-log and return (proxy swap still
+                    # runs via the outer finally).
                     elif "event loop is closed" in msg_lower:
                         peer = _log_safe_peer(self._connection)
                         logger.debug(
@@ -1576,42 +645,17 @@ class AsyncAdaptedConnection(AdaptedConnection):
                             exc_info=True,
                         )
                         return
-                    # ``RuntimeError("This event loop is already running")``
-                    # surfaces when third-party glue calls ``await_only``
-                    # from a context that already has a running loop on
-                    # the same thread (asyncio rejects nested loop
-                    # entry). The ``"loop is already running"`` substring
-                    # arm of ``_handle_exception`` and
-                    # ``_dqlite_disconnect_messages`` in base.py both
-                    # cover this phrase; route through the same remap so
-                    # the close-arm matches that discipline rather than
-                    # leaking a bare ``RuntimeError`` past
-                    # ``engine.dispose()``.
+                    # Nested-loop "already running"; route through the same
+                    # remap as _handle_exception / base.py disconnect messages.
                     elif "loop is already running" in msg_lower:
                         self._handle_exception(exc)  # NoReturn
                     else:
-                        # Other RuntimeErrors (programmer bugs) propagate.
                         raise
-                # The non-greenlet path is handled by the
-                # ``in_greenlet()`` preflight at the top of ``close()``;
-                # ``MissingGreenlet`` cannot land here.
-                # ``CancelledError`` from the rollback await is allowed
-                # to propagate so the cancellation signal is preserved
-                # — the finally below still runs close(), and the
-                # close arm's CancelledError catch routes through the
-                # sync force-close fallback before re-raising.
-                # Suppressing here would convert a still-active cancel
-                # into a clean return, contradicting asyncio's
-                # "cancellation propagates" contract; the prior test
-                # ``test_close_runs_close_after_rollback_raise.py``
-                # pins that contract.
+                # CancelledError from rollback propagates (the finally still
+                # runs close, whose cancel arm force-closes before re-raising).
             finally:
-                # Narrow the close-time exception set to transport-
-                # class failures. A transient OSError /
-                # DqliteConnectionError mid-close must not escape
-                # do_close and abort engine.dispose(). Matches the
-                # rollback branch's classification. Programmer bugs
-                # (AttributeError / TypeError) still propagate.
+                # Narrow close-time suppression to transport-class so a transient
+                # mid-close fault can't abort engine.dispose(); bugs propagate.
                 try:
                     await_only(self._connection.close())
                 except _TRANSPORT_CLASS_EXCEPTIONS as exc:
@@ -1625,16 +669,8 @@ class AsyncAdaptedConnection(AdaptedConnection):
                         exc_info=True,
                     )
                 except RuntimeError as exc:
-                    # ``RuntimeError("Event loop is closed")`` /
-                    # ``RuntimeError("...attached to a different loop")``
-                    # land here during ``engine.dispose()`` after a
-                    # per-call ``asyncio.run()`` finished and tore the
-                    # loop down. The async machinery cannot run; reap
-                    # the writer synchronously so the transport
-                    # doesn't leak. ``has_terminate=True`` (the
-                    # dialect-level promise) means close()/dispose
-                    # must not propagate failures from this path; the
-                    # debug log preserves the traceback for triage.
+                    # Defunct-loop close during dispose; reap synchronously and
+                    # stay quiet (has_terminate promise = don't propagate).
                     peer = _log_safe_peer(self._connection)
                     logger.debug(
                         "AsyncAdaptedConnection.close (id=%s, peer=%s): "
@@ -1647,104 +683,37 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     )
                     self._force_close_transport()
                 except asyncio.CancelledError:
-                    # Cancel landing on the close await (canonical
-                    # trigger: an outer ``asyncio.timeout`` mid-
-                    # ``engine.dispose()`` under SIGTERM-with-budget).
-                    # Run the sync transport fallback so the writer
-                    # is closed even though the async machinery was
-                    # interrupted, then re-raise so the cancel still
-                    # propagates to the caller. The outer try/finally
-                    # still runs the proxy swap on the raise path.
+                    # Force-close the writer synchronously, then re-raise so the
+                    # cancel still propagates (proxy swap runs via outer finally).
                     self._force_close_transport()
                     raise
         finally:
-            # Drop the strong back-reference to the inner dbapi
-            # ``AsyncConnection`` so a closed adapter retained by SA's
-            # pool diagnostics / pytest session-fixture cache does
-            # not pin the inner conn — and through it the client-
-            # layer state, registered ``weakref.finalize``, and any
-            # frame-pinning ``_invalidation_cause``. ``weakref.proxy``
-            # preserves SA's expected API surface (calls forward to
-            # the inner while it is alive) — only after the inner is
-            # genuinely GC'd does ``ReferenceError`` surface, which
-            # is benign post-close. SA's reference adapter keeps the
-            # strong ref; this is dqlite-specific lifecycle
-            # discipline matching the dbapi layer's
-            # ``AsyncConnection.close``.
             self._release_inner_strong_ref()
 
     def _release_inner_strong_ref(self) -> None:
-        """Swap ``self._connection`` for a ``weakref.proxy`` of itself.
-
-        Centralised so both ``close()`` and ``terminate()`` share the
-        same release discipline; symmetric with how the dbapi layer's
-        ``AsyncConnection.close`` swaps its own loop-bound state.
-
-        Suppression covers two corner cases: ``TypeError`` for inner
-        types that don't support weakref (always supported for
-        ``AsyncConnection``; defensive for hand-rolled test doubles)
-        and ``ReferenceError`` for the rare case where this method is
-        called twice on the same adapter and the inner has already
-        been GC'd between calls (``weakref.proxy(dead_proxy)`` raises
-        ``ReferenceError``, not ``TypeError``).
+        """Swap ``self._connection`` for a ``weakref.proxy``; shared by close()
+        and terminate(). Suppress TypeError (non-weakref-able test doubles) and
+        ReferenceError (double-call after the inner was GC'd).
         """
         with contextlib.suppress(TypeError, ReferenceError):
             self._connection = weakref.proxy(self._connection)
 
     def _force_close_transport(self) -> None:
-        """Best-effort synchronous teardown of the underlying transport.
+        """Best-effort synchronous transport teardown, bypassing the async close
+        machinery. Used on non-greenlet finalize paths (GC sweep) where
+        await_only would raise MissingGreenlet.
 
-        Bypasses the async ``DqliteConnection.close`` machinery
-        (which requires an event loop / greenlet context) and closes
-        the writer transport directly. The reader half is closed by
-        the OS as a side effect of the writer close. Used when SA's
-        finalize path runs outside a greenlet (e.g., GC sweep), where
-        ``await_only`` would raise ``MissingGreenlet`` and the SA pool
-        would silently absorb it.
-
-        Delegates to the dbapi connection's public
-        ``force_close_transport`` hook so the access boundary stays
-        on a single supported method instead of walking three layers
-        of private attributes.
-
-        Idempotent. Absorbs every ``Exception`` from the hook call
-        — a missing hook (older dbapi version), a dead
-        ``weakref.proxy`` ``ReferenceError`` (the post-
-        ``_release_inner_strong_ref`` state), or a writer.close()
-        failure is silently swallowed and logged. Does NOT catch
-        ``asyncio.CancelledError`` (a ``BaseException`` subclass
-        since 3.8): asyncio's structured-concurrency contract
-        requires the cancel signal to reach the parent
-        ``TaskGroup`` / ``asyncio.timeout`` so the parent's wait
-        completes with cancelled status. Callers that need to run
-        the force-close on a cancel path catch ``CancelledError``
-        themselves and re-raise after invoking this helper (see the
-        close-arm at the ``except asyncio.CancelledError`` site and
-        the terminate-arm's symmetric handler). Also does NOT catch
-        ``KeyboardInterrupt`` / ``SystemExit`` (and any other
-        non-``Exception`` ``BaseException``) so a signal-handler-
-        driven ``engine.dispose()`` cannot mask them. Mirrors the
-        discipline ``DqliteDialect.do_terminate`` documents at
-        ``base.py``.
-
-        The two ``getattr`` reads on ``self._connection`` sit
-        INSIDE the try frame so a ``ReferenceError`` from a dead
-        ``weakref.proxy`` is absorbed with the same swallow-and-log
-        discipline as a hook-side failure — the boundary the
-        inherited ``DqliteDialect.do_close`` fallback's
-        ``contextlib.suppress(*_FORCE_CLOSE_TAIL_EXCEPTIONS)``
-        relies on (``ReferenceError`` is in that wider tuple, but
-        absorbing here means the suppress never even fires).
+        Idempotent. Absorbs Exception (missing hook, dead-proxy ReferenceError,
+        writer.close failure) but NOT CancelledError / KI / SystemExit — the
+        cancel must reach the parent TaskGroup; cancel-path callers catch and
+        re-raise around this helper.
         """
         peer: object | None = None
         try:
             peer = _log_safe_peer(self._connection)
             hook = getattr(self._connection, "force_close_transport", None)
             if hook is None:
-                # Older dbapi without the force-close hook; nothing
-                # we can do synchronously. Log so the audit trail
-                # records the no-op rather than silently lying about
-                # delegating.
+                # Older dbapi without the hook; log the no-op for the audit trail.
                 logger.debug(
                     "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
                     "dbapi connection has no force_close_transport hook; "
@@ -1761,20 +730,6 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 peer,
             )
         except Exception as exc:  # pragma: no cover - defensive
-            # Narrow to ``Exception`` only — ``asyncio.CancelledError``
-            # (a ``BaseException`` subclass since 3.8) must propagate
-            # so an outer ``asyncio.TaskGroup`` / ``asyncio.timeout``
-            # / ``anyio.create_task_group`` parent that issued the
-            # cancel sees the child complete with cancelled status.
-            # Absorbing the cancel here would leave the parent
-            # waiting indefinitely on its ``__aexit__`` for a
-            # cancel-acknowledgement that never arrives. The
-            # close-arm and terminate-arm call sites catch
-            # ``CancelledError`` externally, invoke this helper, and
-            # then re-raise — that pattern preserves the cancel
-            # without requiring this helper to swallow it.
-            # ``KeyboardInterrupt`` / ``SystemExit`` propagate by the
-            # same ``BaseException`` rule.
             logger.debug(
                 "AsyncAdaptedConnection._force_close_transport (id=%s, peer=%s): "
                 "best-effort sync close raised (%s); ignoring",
@@ -1785,31 +740,10 @@ class AsyncAdaptedConnection(AdaptedConnection):
             )
 
     def force_close_transport(self) -> None:
-        """Public alias of :meth:`_force_close_transport`.
-
-        The inherited :meth:`DqliteDialect.do_close` fallback (see
-        ``base.py``) reaches for ``dbapi_connection.force_close_transport()``
-        — the public name, matching the dbapi ``Connection.force_close_transport``
-        on the sync side. ``DqliteDialect_aio`` inherits ``do_close``
-        unmodified, so without this public surface a sync-pool teardown
-        path that reached the transport-class fallback on an
-        ``AsyncAdaptedConnection`` (e.g. cross-loop dispose via
-        ``engine.dispose()``) would raise ``AttributeError`` —
-        ``AttributeError`` is NOT in ``_TRANSPORT_CLASS_EXCEPTIONS`` so
-        it would escape the ``contextlib.suppress`` and the transport
-        would leak.
-
-        Mirrors the adapter's :meth:`close` post-close
-        ``_release_inner_strong_ref`` discipline so the inner
-        ``AsyncConnection`` is released on every public-surface
-        teardown path -- including the dialect-level fallback that
-        bypasses the graceful ``close`` outer ``try/finally``.
-        Without the swap here, ``DqliteDialect.do_close``'s fallback
-        leg leaves the adapter holding a strong ref to the inner
-        connection past close, pinning attached cursors / pool slots
-        from GC. Tail ``Exception`` from the swap is suppressed: the
-        force-close cleanup must not raise back into the dialect's
-        fallback arm.
+        """Public alias of :meth:`_force_close_transport` (the name the inherited
+        ``DqliteDialect.do_close`` transport-class fallback reaches for), plus the
+        ``_release_inner_strong_ref`` swap so that fallback path also releases the
+        inner conn. Swap-tail Exception suppressed so cleanup can't re-raise.
         """
         try:
             self._force_close_transport()
@@ -1818,30 +752,15 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 self._release_inner_strong_ref()
 
     def terminate(self) -> None:
-        """Force-close the underlying connection without rollback.
-
-        SQLAlchemy's async pool calls ``dialect.do_terminate(dbapi_conn)``
-        (which defers to this method) when ``has_terminate = True`` and
-        a connection must be forcibly reclaimed — typically during
-        ``engine.dispose()`` under failure, or when a stuck rollback
-        would otherwise block shutdown. Unlike ``close()`` we do NOT
-        attempt rollback first: that's the whole point of terminate.
-
-        Mirrors ``close()``'s post-close ``weakref.proxy`` swap on
-        every exit arm — SA's pool invalidate path uses terminate, and
-        the same diagnostic-ring / fixture-pinning concern that
-        motivates close()'s swap applies symmetrically here.
+        """Force-close without rollback. SA's pool calls this (via
+        ``do_terminate``) when ``has_terminate=True`` and a connection must be
+        forcibly reclaimed. Swaps in the post-close proxy on every exit arm.
         """
-        # Idempotency short-circuit — see ``close()`` for rationale.
-        # SA's pool invalidate path can race ``terminate`` with a
-        # parallel ``close``; the second caller must not raise.
+        # Idempotency short-circuit — see close(); pool can race a parallel close.
         if type(self._connection) in weakref.ProxyTypes:
             return
 
-        # Preflight on ``in_greenlet()`` — see ``close()`` for
-        # rationale. Non-greenlet finalize paths reap the writer
-        # synchronously without paying the ``MissingGreenlet``
-        # exception-allocation cost.
+        # Non-greenlet finalize reaps synchronously — see close().
         if not in_greenlet():
             try:
                 self._force_close_transport()
@@ -1849,19 +768,9 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 self._release_inner_strong_ref()
             return
 
-        # ``has_terminate = True`` promises SA that this path never
-        # blocks dispose; suppress transport-class failures so a flaky
-        # close cannot abort forced reclaim. Cancel landing during
-        # the close is handled by the explicit CancelledError catch
-        # below which calls ``_force_close_transport`` synchronously
-        # (the writer.close() bypasses the cancel-poisoned async
-        # machinery). ``asyncio.shield`` cannot be applied here — the
-        # await runs through ``await_only`` from a sync greenlet
-        # context where ``shield``'s loop-binding semantics don't
-        # apply, and the explicit catch already covers the same case.
-        #
-        # Outer try/finally guarantees the post-close ``weakref.proxy``
-        # swap runs on every exit arm — symmetric with ``close()``.
+        # has_terminate=True promises a non-blocking path; suppress transport
+        # failures, force-close synchronously on cancel. Outer try/finally runs
+        # the proxy swap on every arm.
         try:
             try:
                 await_only(self._connection.close())
@@ -1876,14 +785,8 @@ class AsyncAdaptedConnection(AdaptedConnection):
                     exc_info=True,
                 )
             except RuntimeError as exc:
-                # Defunct-loop close during ``engine.dispose()``: an
-                # ``asyncio.run()`` per-call pattern tears the loop
-                # down, then SA's pool finalizer calls ``terminate()``
-                # and the async machinery raises
-                # ``RuntimeError("Event loop is closed")``.
-                # ``has_terminate=True`` promises SA that dispose never
-                # propagates failures from this path; reap the writer
-                # synchronously and stay quiet (DEBUG only).
+                # Defunct-loop close during dispose; reap synchronously, stay
+                # quiet (has_terminate promise = don't propagate).
                 peer = _log_safe_peer(self._connection)
                 logger.debug(
                     "AsyncAdaptedConnection.terminate (id=%s, peer=%s): "
@@ -1896,12 +799,7 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 )
                 self._force_close_transport()
             except asyncio.CancelledError:
-                # See close()'s sibling catch — outer cancel during a
-                # forced reclaim must still close the writer transport
-                # synchronously before propagating, otherwise SA's
-                # ``has_terminate=True`` promise (the pool can always
-                # reclaim a slot) breaks under SIGTERM-with-budget
-                # shutdown.
+                # See close() — force-close synchronously, then re-raise.
                 self._force_close_transport()
                 raise
         finally:
@@ -1915,41 +813,21 @@ class DqliteDialect_aio(DqliteDialect):
         create_async_engine("dqlite+aio://host:port/database")
     """
 
-    # Match the entry-point short name (``"dqlite.aio"`` in pyproject) so
-    # ``dialect_description`` renders ``"dqlite+aio"`` — the exact form a
-    # user writes into the URL (``dqlite+aio://host:port/db``) and the
-    # form SA's error messages / logs / ``repr(engine)`` show. SA's own
-    # aiosqlite reference does the same (EP ``sqlite.aiosqlite`` ↔
-    # ``driver = "aiosqlite"`` ↔ URL ``sqlite+aiosqlite://``). The
-    # prior value ``"dqlitedbapi_aio"`` produced a non-canonical
-    # description string no user types, breaking log grep of the URL
-    # shape.
+    # Matches the entry-point short name so dialect_description renders the
+    # canonical "dqlite+aio" the user types into the URL.
     driver = "aio"
     is_async = True
-    # MUST be redeclared here even though the base class already sets it to
-    # True: SQLAlchemy reads this attribute via
-    # ``self.__class__.__dict__.get("supports_statement_cache")`` (see
-    # engine/default.py::_supports_statement_cache), which is a
-    # single-class lookup, not an MRO lookup. If this line is removed,
-    # statement caching is silently disabled on the async dialect and a
-    # warning fires on every engine startup.
+    # MUST be redeclared (not inherited): SA reads it via a single-class
+    # __dict__ lookup, not MRO. Removing this silently disables statement cache.
     supports_statement_cache = True
 
-    # dqlite has no server-side cursor notion at the wire level — rows
-    # arrive in frames that the client fully consumes before surfacing
-    # them, and the adapter eagerly buffers into a deque. Pin False
-    # locally so a future base-class default flip (e.g. AsyncDialect
-    # defaulting True the way aiosqlite does) cannot silently route
-    # through an SS-cursor code path the adapter does not implement.
+    # Pinned False locally to defend against a base-class default flip — the
+    # adapter has no SS-cursor code path (dqlite has no server-side cursors).
     supports_server_side_cursors = False
 
-    # SQLAlchemy's async pool gates its forced-disposal path on
-    # ``has_terminate`` (see ``pool/base.py`` docs for
-    # ``_ConnectionRecord.invalidate``). The reference aiosqlite
-    # dialect sets this True; our ``AsyncAdaptedConnection`` now
-    # provides a ``terminate()`` that skips rollback and closes
-    # directly, so pin True locally to defend against an MRO flip
-    # from the DefaultDialect default (``False``).
+    # Pinned True locally (defends against an MRO flip to the DefaultDialect
+    # False): AsyncAdaptedConnection provides terminate(), which the pool's
+    # forced-disposal path requires.
     has_terminate = True
 
     @classmethod
@@ -1957,36 +835,16 @@ class DqliteDialect_aio(DqliteDialect):
         return AsyncAdaptedQueuePool
 
     def do_terminate(self, dbapi_connection: Any) -> None:
-        """Integration point SQLAlchemy's async pool calls for forced
-        disposal. Defers to ``AsyncAdaptedConnection.terminate()``,
-        which closes without the usual pre-close rollback so a stuck
-        rollback on a half-dead connection cannot block
-        ``engine.dispose()``.
-
-        ``has_terminate=True`` promises SA a non-raising path; suppress
-        any tail ``Exception`` so SA's pool finalize cannot crash on a
-        partial-state connection (mirrors the sync sibling's
-        suppression discipline at ``base.py``). ``asyncio.CancelledError``
-        is deliberately NOT caught — asyncio's structured-concurrency
-        contract says cancels must propagate, and an outer cancel
-        signalling "abort dispose now" must not be silently swallowed.
-
-        Two-tier catch (mirrors the sync sibling):
-
-        * ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` — expected transport-class
-          shapes. DEBUG-log + absorb.
-        * Any other ``Exception`` — most likely a cross-repo dbapi
-          refactor regression. WARNING-log + absorb so the SA contract
-          holds while the regression stays loudly observable.
+        """Pool forced-disposal hook; defers to ``terminate()`` (no pre-close
+        rollback). has_terminate=True promises a non-raising path, so both arms
+        absorb. CancelledError is NOT caught (must propagate). Two-tier catch:
+        expected transport shapes DEBUG-log; anything else WARNING-logs as a
+        likely dbapi-refactor regression.
         """
         peer = _log_safe_peer(dbapi_connection)
         try:
             dbapi_connection.terminate()
         except _FORCE_CLOSE_TAIL_EXCEPTIONS:
-            # Expected shapes — DEBUG-log + absorb. Narrow tuple covers
-            # transport-class failures (OSError + dbapi.Error subclasses
-            # + DqliteConnectionError + RuntimeError + ReferenceError)
-            # that ``terminate()`` legitimately surfaces.
             logger.debug(
                 "do_terminate: terminate raised on dispose for peer=%s id=%s; "
                 "proceeding (has_terminate=True non-raising contract)",
@@ -1995,15 +853,8 @@ class DqliteDialect_aio(DqliteDialect):
                 exc_info=True,
             )
         except Exception:
-            # Unexpected shape — most likely a cross-repo dbapi
-            # refactor regression (``terminate`` renamed, removed,
-            # signature-changed, or swapped to a raising property).
-            # SA's ``has_terminate=True`` contract is binary non-
-            # raising; absorbing here prevents the regression from
-            # aborting ``engine.dispose()`` and leaking sibling slots.
-            # WARNING-tier (vs DEBUG) so the regression stays loudly
-            # visible in operator logs. Sync sibling at
-            # base.py::do_terminate uses the same two-tier shape.
+            # Unexpected — likely a dbapi-refactor regression; WARNING-tier so it
+            # stays visible while the has_terminate contract still holds.
             logger.warning(
                 "do_terminate: terminate raised UNEXPECTED exception type "
                 "on dispose for peer=%s id=%s; SA has_terminate=True "
@@ -2015,29 +866,10 @@ class DqliteDialect_aio(DqliteDialect):
             )
 
     def do_ping(self, dbapi_connection: Any) -> bool:
-        """Async-side bespoke ping.
-
-        Inheriting the sync ``DqliteDialect.do_ping`` from base.py
-        routes through ``AsyncAdaptedCursor`` and pays three
-        ``await_only`` hops per checkout — ``cursor.execute("SELECT 1")``
-        plus ``cursor.fetchall()`` (the description-truthy path
-        materialises ``SELECT 1``'s row) plus ``cursor.close()``. Worse,
-        loop-state ``RuntimeError`` from a closed loop reaches the
-        sync caller without going through the adapter's
-        ``_handle_exception``, so SA's ``is_disconnect`` classifier
-        (gated on ``DatabaseError``) misses it and the broken slot
-        survives.
-
-        Run ``SELECT 1`` directly through the dbapi async cursor
-        instead — one execute + one close, all under a
-        single ``await_only`` hop, with explicit RuntimeError routing
-        through ``_handle_exception`` so loop-state shapes classify as
-        ``OperationalError`` and SA evicts the slot. Mirrors asyncpg's
-        ``_async_ping`` shape (asyncpg.py:814).
-
-        The exception arms preserve the sync ``do_ping``'s
-        ``_BARE_DBE_DISCONNECT_CODES`` arm so codes 11/24/26
-        (CORRUPT/FORMAT/NOTADB) still classify as ping-fail.
+        """Bespoke async ping: run SELECT 1 directly through the dbapi cursor in
+        one await_only hop (vs three through the sync inherited path), routing
+        loop-state RuntimeError through _handle_exception so SA evicts the slot.
+        Codes 11/24/26 still classify as ping-fail.
         """
         try:
             await_only(self._async_ping(dbapi_connection))
@@ -2054,69 +886,21 @@ class DqliteDialect_aio(DqliteDialect):
                 return False
             raise
         except RuntimeError:
-            # ``_handle_exception`` remaps three known loop-state
-            # RuntimeError phrasings into ``OperationalError``; any
-            # other RuntimeError (a future Python wording change, an
-            # ``asyncio.get_running_loop`` failure, a ``Task got bad
-            # yield`` shape, ``await_only`` pre-coroutine surfaces)
-            # would otherwise escape ``do_ping`` entirely. SA's
-            # ``_do_ping_w_event`` catches only ``loaded_dbapi.Error``
-            # and would not invalidate the slot. Treat any
-            # RuntimeError on the ping path as slot-fatal — same
-            # posture as the ``OSError`` catch above (transport-class
-            # faults retire the slot).
+            # Any RuntimeError on the ping path is slot-fatal (SA's
+            # _do_ping_w_event catches only dbapi.Error and wouldn't evict).
             return False
         return True
 
     async def _async_ping(self, dbapi_connection: Any) -> None:
-        """Async leg of ``do_ping``: open a cursor, run ``SELECT 1``,
-        close. ``cursor()`` on the dbapi
-        ``AsyncConnection`` is synchronous (returns an ``AsyncCursor``);
-        ``execute`` / ``fetchone`` on the cursor are coroutines;
-        ``close`` is synchronous by design (see ``AsyncCursor.close``
-        docstring — sync to surface forgot-await as a sharp error
-        rather than a silent no-op).
+        """Async leg of do_ping: open cursor, run SELECT 1, close.
 
-        Route any ``RuntimeError`` through the adapter's
-        ``_handle_exception`` so loop-state shapes (different-loop,
-        loop-closed) re-raise as ``OperationalError`` — the outer
-        ``do_ping`` then catches that as ping-fail.
-
-        Routing scope: only ``RuntimeError`` is remapped here.
-        Any ``dbapi.Error`` subclass that escapes the inner block
-        (notably a cross-loop ``ProgrammingError`` from
-        ``AsyncConnection._ensure_locks``, or a ``ProgrammingError``
-        from ``cursor()`` itself) is allowed to propagate to the
-        outer ``do_ping``, which catches
-        ``(OperationalError, ProgrammingError, InterfaceError,
-        DqliteConnectionError, OSError)`` and returns ``False`` so
-        the pool retires the slot. The narrow routing here is
-        deliberate — DO NOT broaden it without also reviewing
-        ``do_ping``'s outer catch list. If that list ever drops
-        ``ProgrammingError``, this ``except`` must be widened to
-        ``(RuntimeError, ProgrammingError)`` to preserve the
-        ping-failure / slot-invalidation chain.
+        Only RuntimeError is remapped via _handle_exception; dbapi.Error
+        subclasses propagate to do_ping's outer catch. DO NOT narrow that catch
+        without widening this except to (RuntimeError, ProgrammingError).
         """
-        # Closed-state guard mirroring ``AsyncAdaptedConnection.cursor``'s
-        # closed-state guard: ``close()`` replaces ``self._connection``
-        # with ``weakref.proxy(...)``. Reaching into ``_connection.cursor()``
-        # directly would surface ``ReferenceError`` if the proxied
-        # inner has been GC'd — not a ``dbapi.Error`` subclass and
-        # would escape the outer ``do_ping`` classifier
-        # (``OperationalError, ProgrammingError, InterfaceError,
-        # DqliteConnectionError, OSError``). Translate to
-        # ``InterfaceError`` up front so cross-driver retry middleware
-        # and SA's ``_handle_dbapi_exception`` see a clean
-        # ``dbapi.Error``.
+        # Closed-state guard — raise InterfaceError rather than let the post-close
+        # proxy surface a bare ReferenceError past do_ping's classifier.
         if type(dbapi_connection._connection) in weakref.ProxyTypes:
-            # Diagnostic: SA's pool sees this raise as a ping failure
-            # and retires the slot silently. Without a DEBUG line a
-            # flapping pool's root cause (sibling task closed the
-            # adapter between pool checkout and ping, GC sweep,
-            # engine.dispose race) is invisible to log analysis.
-            # Sibling close()/terminate()/transport-class arms in this
-            # module emit DEBUG signal on analogous slot-retirement
-            # transitions; mirror that discipline here.
             logger.debug(
                 "_async_ping: adapter already closed (id=%s); reporting "
                 "ping failure so SA pool retires the slot. Likely a "
@@ -2129,38 +913,15 @@ class DqliteDialect_aio(DqliteDialect):
         try:
             cur = dbapi_connection._connection.cursor()
             try:
-                # Execute alone proves the round-trip — matches the
-                # sync sibling ``DqliteDialect.do_ping`` (base.py) and
-                # SA's ``DefaultDialect.do_ping`` (engine/default.py).
-                # The earlier extra ``await cur.fetchone()`` doubled
-                # ping latency without adding liveness signal: dqlite
-                # delivers row data in the execute response so the
-                # fetch was buffer-side, and no caller of ``do_ping``
-                # consumes the cursor's description / rowcount after
-                # the call.
+                # Execute alone proves the round-trip (matches the sync sibling);
+                # the row arrives in the execute response, so no fetch is needed.
                 await cur.execute(self._dialect_specific_select_one)
             finally:
-                # Mirror the sibling cursor-close discipline in
-                # ``AsyncAdaptedCursor.execute`` (this module, search
-                # for ``except (Exception, asyncio.CancelledError)``):
-                # narrow to that tuple so a greenlet-level cancel is
-                # still absorbed (``CancelledError`` is a
-                # ``BaseException`` subclass since 3.8) but
-                # ``KeyboardInterrupt`` / ``SystemExit`` propagate.
-                # The previous ``contextlib.suppress(Exception)``
-                # silently absorbed dbapi disconnect-class errors
-                # raised from the close round-trip (CORRUPT / FORMAT
-                # / NOTADB); the DEBUG log here makes those failures
-                # observable so a flapping leader is visible in
-                # operator logs even when the ping itself appears
-                # successful. Suppression scope still includes those
-                # errors (the ping already ran successfully, so
-                # retiring the slot now would defeat the whole point
-                # of pre-ping) but they are no longer silent.
+                # Suppress transport-class + cancel on close (the ping already
+                # ran), but DEBUG-log so a flapping leader stays observable;
+                # programmer-bug shapes propagate.
                 peer = _log_safe_peer(dbapi_connection._connection)
                 try:
-                    # ``AsyncCursor.close`` is sync — see its
-                    # docstring. No await needed.
                     cur.close()
                 except (
                     DatabaseError,
@@ -2169,19 +930,6 @@ class DqliteDialect_aio(DqliteDialect):
                     OSError,
                     asyncio.CancelledError,
                 ) as exc:
-                    # Narrow to the same transport-class set the sync
-                    # sibling at ``base.py`` (``do_ping``) uses, plus
-                    # the async-specific ``asyncio.CancelledError``.
-                    # The prior ``except (Exception, CancelledError)``
-                    # silently DEBUG-logged programmer-bug shapes
-                    # (``AttributeError`` / ``TypeError`` /
-                    # ``ValueError`` from a refactor regression) that
-                    # the sync sibling would propagate — letting
-                    # those propagate matches the package-wide
-                    # discipline (cf.
-                    # ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` at base.py
-                    # which deliberately excludes programmer-bug
-                    # shapes for the same reason).
                     logger.debug(
                         "_async_ping cursor close (id=%s, peer=%s): %s; suppressed",
                         id(dbapi_connection),
@@ -2193,28 +941,9 @@ class DqliteDialect_aio(DqliteDialect):
             dbapi_connection._handle_exception(error)
 
     def is_disconnect(self, e: Any, connection: Any, cursor: Any) -> bool:
-        """Async-side fast-path on already-closed adapter connections.
-
-        ``AsyncAdaptedConnection.close`` replaces ``self._connection``
-        with ``weakref.proxy(...)`` (documented rationale: SA's pool
-        diagnostic ring otherwise pins frame state and prevents GC).
-        When SA calls ``is_disconnect`` after a failure on such a
-        connection, the inner connection is already torn down — the
-        truthful answer is ``True`` regardless of what the cause chain
-        says.
-
-        Mirrors asyncpg's ``connection._connection.is_closed()``
-        short-circuit (``sqlalchemy/dialects/postgresql/asyncpg.py:1172``).
-        We already use the proxy-type check in
-        :meth:`AsyncAdaptedConnection.cursor` for the same "is the
-        inner connection torn down" question, so reusing it here is a
-        single-source-of-truth choice.
-
-        The non-fast-path (``connection`` is None, not an adapter, or
-        holds a live inner connection) falls through to
-        ``super().is_disconnect`` so the rich type/code/substring
-        classifier in ``DqliteDialect.is_disconnect`` runs unchanged.
-        """
+        # Fast-path: a closed adapter (inner conn is a weakref.proxy) is
+        # definitionally disconnected. Otherwise fall through to the base
+        # type/code/substring classifier.
         if (
             connection is not None
             and isinstance(connection, AsyncAdaptedConnection)
@@ -2225,120 +954,28 @@ class DqliteDialect_aio(DqliteDialect):
 
     @classmethod
     def import_dbapi(cls) -> types.ModuleType:
-        # Returns ``dqlitedbapi.aio``, NOT the top-level ``dqlitedbapi``
-        # module that the sync dialect imports (see
-        # ``DqliteDialect.import_dbapi`` in base.py). The async dialect
-        # drives ``AsyncConnection`` / ``AsyncCursor`` from the ``aio``
-        # submodule; aligning the two would silently break the async
-        # path. Asymmetry is deliberate.
+        # Returns dqlitedbapi.aio (the async submodule), NOT the top-level module
+        # the sync dialect imports — the asymmetry is deliberate.
         from dqlitedbapi import aio
 
         return aio
 
     def connect(self, *cargs: Any, **cparams: Any) -> Any:
-        """Create and wrap an async connection.
+        """Validate connect kwargs, eagerly open the TCP connection, and wrap it.
 
-        Validate ``cparams`` against ``_CONNECT_KWARG_ALLOWED`` before
-        forwarding so a typo in ``create_engine(connect_args={...})``
-        raises ``ArgumentError`` with the same diagnostic class the
-        URL query path emits at engine construction (mirrors the
-        sync ``DqliteDialect.connect``).
+        On eager-connect failure, force-close the half-built raw_conn via a
+        temporary adapter's terminate() (no graceful close — the handshake never
+        completed and could re-raise a torn-down-loop RuntimeError).
 
-        Eagerly establishes the TCP connection so errors surface at
-        connect-time rather than on the first query. If that eager
-        connect raises, the ``raw_conn`` object is already constructed
-        and holds references to loop locks / partially-initialised
-        state — without explicit cleanup it leaks until GC and can
-        linger on the event loop it was bound to. The cleanup uses
-        the SA-adapter's ``terminate()`` shape (force-close, no
-        rollback) wrapped in a temporary ``AsyncAdaptedConnection``:
-        attempting a graceful ``close()`` on a connection whose
-        handshake never completed is meaningless and can re-raise
-        ``RuntimeError("Event loop is closed")`` from a per-call
-        ``asyncio.run()`` torn down by the failed connect, replacing
-        the original error. ``terminate()`` short-circuits to
-        ``_force_close_transport()`` outside a greenlet and shields
-        the close await otherwise — both branches are safe under
-        cancel and have no rollback path to crash on.
-        Narrow the cleanup-suppress to ``(Exception,
-        asyncio.CancelledError)`` so KeyboardInterrupt and SystemExit
-        propagate through cleanup — matching the discipline applied
-        elsewhere on dispose paths. ``terminate()`` itself runs the
-        synchronous transport reap regardless of whether the suppress
-        absorbs.
-
-        SA convention (asyncpg.py:937, aiosqlite.py:399, aiomysql):
-        callers can inject a custom async-connection factory via
-        ``connect_args={"async_creator_fn": my_factory}``. When
-        present, ``my_factory(*args, **kwargs)`` is invoked instead of
-        ``loaded_dbapi.connect`` and is expected to return an object
-        exposing the ``AsyncConnection`` shape (``connect``, ``cursor``,
-        ``commit``, ``rollback``, ``close`` — the surface
-        ``AsyncAdaptedConnection`` calls into). The pop must precede
-        ``_validate_connect_kwargs`` because the strict allowlist
-        would otherwise reject the hook key with ``ArgumentError``.
-
-        Note our two-step shape is structurally different from
-        asyncpg/aiosqlite: ``loaded_dbapi.connect`` is a SYNC factory
-        returning a not-yet-connected ``AsyncConnection``; the actual
-        transport open is the ``await_only(raw_conn.connect())``
-        below. A ``creator_fn`` whose return value already has an
-        open transport should expose ``connect()`` as an idempotent
-        no-op coroutine — the dbapi's own ``AsyncConnection.connect``
-        already has that property when called twice, so a creator
-        that wraps a pre-built dbapi connection works without
-        modification.
-
-        **Contract for third-party ``async_creator_fn``** (BREAKAGE
-        WARNING): the returned object's ``connect()`` is invoked
-        unconditionally below — once by us, possibly already by the
-        creator. Any of these shapes are safe:
-
-        - The creator returns a NOT-YET-CONNECTED dbapi
-          ``AsyncConnection``. We open the transport for it. ✓
-        - The creator returns an ALREADY-CONNECTED dbapi
-          ``AsyncConnection``. ``AsyncConnection.connect`` checks
-          ``self._async_conn is not None`` and returns the existing
-          inner conn — idempotent no-op. ✓
-        - The creator returns a CUSTOM async-connection-shaped
-          object whose ``connect()`` is NOT idempotent: this WILL
-          double-connect (open twice / fail). The creator-provided
-          ``connect()`` must be coroutine-shaped AND idempotent —
-          either by short-circuiting on a "already connected"
-          flag or by being a no-op coroutine when called against
-          a live transport.
-
-        We do NOT skip the ``raw_conn.connect()`` when the creator
-        is provided (matching SA's ``aiosqlite.py:399`` shape would
-        risk leaving a creator-returned-unopened conn without a
-        transport). Custom creators must satisfy the idempotency
-        contract above.
+        ``async_creator_fn`` (SA convention) injects a custom factory; popped
+        before validation so the allowlist doesn't reject it. We always await
+        ``raw_conn.connect()``, so a custom creator's connect() must be an
+        idempotent coroutine (the dbapi's own is).
         """
         creator_fn = cparams.pop("async_creator_fn", None)
-        # Pre-flight shape check on ``async_creator_fn``: the hook is
-        # called SYNCHRONOUSLY (``creator_fn(*cargs, **cparams)``) and
-        # the returned object's ``connect()`` is then awaited via
-        # ``await_only(raw_conn.connect())``. A user mistake of writing
-        # ``async def my_creator(...)`` returns a coroutine from the
-        # synchronous call, not the expected ``AsyncConnection``-shape
-        # object; the subsequent ``raw_conn.connect()`` would raise
-        # ``AttributeError: 'coroutine' object has no attribute
-        # 'connect'`` far from the user's ``connect_args={
-        # "async_creator_fn": ...}`` line, with a leaked
-        # ``RuntimeWarning: coroutine '...' was never awaited``.
-        # Surface the misuse with ``ArgumentError`` at connect time so
-        # the diagnostic points at the configuration site.
-        # ``inspect.iscoroutinefunction`` recognises
-        # ``functools.partial`` wrappers around an ``async def`` (a
-        # legitimate user pattern). That unwrap behaviour was added in
-        # CPython 3.12 (cpython#101174). The project's
-        # ``pyproject.toml`` pins ``requires-python = ">=3.13"`` so
-        # the partial-detection path is structurally guaranteed; any
-        # future relaxation of the requires-python floor below 3.12
-        # would silently leave the partial-wrapper case undetected
-        # and must re-evaluate this gate. The check mirrors SA's
-        # overall trust-the-creator discipline while catching the
-        # single most common user mistake.
+        # An ``async def`` creator would return a coroutine from the synchronous
+        # call, failing far from the config site; reject up front. partial-around-
+        # async-def detection relies on CPython 3.12+ (requires-python >=3.13).
         if creator_fn is not None and not callable(creator_fn):
             raise ArgumentError(
                 f"async_creator_fn must be callable; got "
@@ -2357,14 +994,8 @@ class DqliteDialect_aio(DqliteDialect):
                 "connect's docstring."
             )
         self._validate_connect_kwargs(cparams)
-        # Cover the construction itself with the same try frame so a
-        # ``BaseException`` (KeyboardInterrupt / SystemExit) delivered
-        # between the assignment to ``raw_conn`` and the ``try:`` cannot
-        # leak the freshly-built ``AsyncConnection`` (registered locks,
-        # ``weakref.finalize`` ResourceWarning surface) without orderly
-        # cleanup. Mirrors the project-wide
-        # construct-inside-the-try-frame discipline applied to other
-        # eager-allocation paths (cluster / pool comprehensions).
+        # Construct inside the try frame so a BaseException between assignment and
+        # try: can't leak the freshly-built AsyncConnection without cleanup.
         raw_conn: Any = None
         try:
             if creator_fn is not None:
@@ -2374,17 +1005,8 @@ class DqliteDialect_aio(DqliteDialect):
             try:
                 await_only(raw_conn.connect())
             except BaseException as error:
-                # Route eager-connect RuntimeErrors through the same
-                # loop-state remap as every other ``await_only`` site
-                # in this adapter (commit / rollback / execute /
-                # executemany / close-rollback / _async_ping). Without
-                # this, a cross-loop / closed-loop / nested-loop
-                # ``RuntimeError`` leaks past SA's
-                # ``_handle_dbapi_exception`` classifier (gated on
-                # ``dbapi.Error``) so the pool retains the broken
-                # slot and ``engine.dispose()`` re-raises bare. The
-                # connect path was the sole remaining ``await_only``
-                # site without the guard.
+                # Route eager-connect loop-state RuntimeErrors through the same
+                # remap as every other await_only site so the pool evicts.
                 _remap_loop_state_runtime_error(error)
                 raise  # unreachable when remap matches; preserved otherwise
         except BaseException:
@@ -2395,25 +1017,9 @@ class DqliteDialect_aio(DqliteDialect):
         return AsyncAdaptedConnection(self.loaded_dbapi, raw_conn)
 
     def get_driver_connection(self, dbapi_connection: Any) -> Any:
-        """Return the underlying driver-level connection.
-
-        Closed-state guard: after ``AsyncAdaptedConnection.close()`` /
-        ``terminate()`` swaps ``connection._connection`` for a
-        ``weakref.proxy``, attribute access on the proxy raises
-        ``ReferenceError`` if the inner has been GC'd — outside the
-        ``dbapi.Error`` umbrella and bypassing SA's
-        ``_handle_dbapi_exception`` classifier. Mirror the
-        proxy-detection guard already on the sibling
-        ``AsyncAdaptedConnection.driver_connection`` / ``run_async`` /
-        ``cursor`` so this dialect-level hook returns through the
-        same ``InterfaceError`` channel.
-
-        Implementation note: use ``type(inner) in ProxyTypes`` rather
-        than ``isinstance(inner, ProxyTypes)`` — ``isinstance`` on a
-        ``weakref.proxy`` whose target has been GC'd can itself raise
-        ``ReferenceError`` because the proxy's ``__class__`` is
-        forwarded to the dead target's class.
-        """
+        # Closed-state guard — raise InterfaceError on the post-close proxy
+        # (see driver_connection). ``type(inner) in ProxyTypes``, not isinstance:
+        # isinstance on a dead proxy can itself raise ReferenceError.
         inner = dbapi_connection._connection
         if type(inner) in weakref.ProxyTypes:
             raise InterfaceError(f"Connection is closed (id={id(dbapi_connection)})")

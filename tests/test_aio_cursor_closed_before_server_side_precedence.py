@@ -1,15 +1,5 @@
-"""Pin: closed-state proxy guard runs BEFORE the ``server_side=True``
-reject in ``AsyncAdaptedConnection.cursor``.
-
-A caller that invokes ``cursor(server_side=True)`` on an already-closed
-adapter must see ``InterfaceError("Connection is closed ...")`` — the
-actionable signal — rather than ``NotSupportedError("Server-side cursors
-are not supported")``, which is a feature-availability diagnostic on a
-connection that is no longer usable at all.
-
-Mirrors the closed-state-precedence discipline applied elsewhere in the
-codebase (e.g. dbapi-layer ``AsyncConnection.cursor`` ordering).
-"""
+"""Pin: in ``AsyncAdaptedConnection.cursor`` the closed-state guard runs before the
+``server_side=True`` reject, so a closed adapter raises InterfaceError, not NotSupportedError."""
 
 from __future__ import annotations
 
@@ -29,8 +19,7 @@ def _make_adapter() -> AsyncAdaptedConnection:
 
 
 def _close_adapter(adapter: AsyncAdaptedConnection) -> None:
-    """Simulate the post-close shape: ``self._connection`` is a
-    ``weakref.proxy`` (matches what ``close()`` does in production)."""
+    """Post-close shape: ``self._connection`` becomes a ``weakref.proxy``."""
     target = adapter._connection
     adapter._connection = weakref.proxy(target)
 
@@ -50,8 +39,7 @@ def test_closed_adapter_server_side_false_raises_interface_error() -> None:
 
 
 def test_live_adapter_server_side_true_raises_not_supported_error() -> None:
-    """Sanity: with a live connection, ``server_side=True`` still
-    raises ``NotSupportedError`` (the live-path feature reject)."""
+    """With a live connection, ``server_side=True`` still raises NotSupportedError."""
     adapter = _make_adapter()
     with pytest.raises(NotSupportedError, match="Server-side"):
         adapter.cursor(server_side=True)

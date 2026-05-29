@@ -1,20 +1,6 @@
-"""Pin: SA constructs (``Table`` / ``Index`` / ``Column`` /
-``Constraint``) that carry a ``dqlite_*`` DDL kwarg surface a
-``ArgumentError`` at construction with a "did you mean ``sqlite_*``"
-hint, mirroring the runtime fail-fast discipline that
-``_validate_connect_kwargs`` provides for the connect-side.
-
-SA's ``DialectKWArgs`` keys per-construct dialect kwargs by the
-user-written prefix, so ``Table(..., dqlite_with_rowid=False)``
-stored under ``dialect_options['dqlite']`` while the inherited
-``SQLiteDDLCompiler`` read exclusively from
-``dialect_options['sqlite']``. The dqlite-prefixed value was
-silently dropped at compile time. The dialect docstring warned
-about this in prose; the new listener enforces it at construction
-time so a copy-paste mistake from a pysqlite-tagged-with-dialect-
-name example surfaces a sharp error rather than a silently-dropped
-kwarg.
-"""
+"""A dqlite_* DDL kwarg on Table/Index/Column/Constraint raises ArgumentError at
+construction (a "did you mean sqlite_*" hint). SA keys dialect kwargs by the
+written prefix, so dqlite_* would otherwise be silently dropped at compile time."""
 
 from __future__ import annotations
 
@@ -22,9 +8,7 @@ import pytest
 from sqlalchemy import Column, Index, Integer, MetaData, Table
 from sqlalchemy.exc import ArgumentError
 
-# Importing the dialect module installs the SA event listener that
-# enforces the prefix discipline. The fail-fast behaviour depends on
-# that import side effect.
+# Import side effect: installs the SA event listener enforcing the prefix discipline.
 import sqlalchemydqlite.base  # noqa: F401
 
 
@@ -43,7 +27,6 @@ def test_table_dqlite_with_rowid_raises_argument_error() -> None:
 
 
 def test_table_sqlite_with_rowid_still_works() -> None:
-    """Sanity: the correct prefix is unaffected."""
     m = MetaData()
     t = Table(
         "t_ok",
@@ -55,7 +38,6 @@ def test_table_sqlite_with_rowid_still_works() -> None:
 
 
 def test_table_without_dialect_kwargs_works() -> None:
-    """Sanity: bare tables are unaffected."""
     m = MetaData()
     Table("t_plain", m, Column("id", Integer, primary_key=True))
 

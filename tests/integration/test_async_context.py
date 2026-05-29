@@ -9,11 +9,8 @@ from sqlalchemy import create_engine, text
 @pytest.mark.integration
 class TestSyncEngineInAsyncContext:
     def test_sync_engine_inside_running_loop(self, engine_url: str) -> None:
-        """Sync engine must work when called from inside a running event loop.
-
-        This simulates the scenario where a sync SQLAlchemy engine is used
-        during app startup inside an async server like uvicorn.
-        """
+        """Sync engine must work inside a running event loop (e.g. sync engine
+        used during app startup inside an async server like uvicorn)."""
 
         async def _run_inside_loop() -> str:
             engine = create_engine(engine_url)

@@ -1,27 +1,6 @@
-"""SA result processors must not silently pass through cross-type
-payloads.
-
-``dqlitedbapi._datetime_from_iso8601`` is intentionally polymorphic —
-a time-only ISO string parses to ``datetime.time``, a full datetime
-string parses to ``datetime.datetime``. When such a value lands in a
-column whose declared type promises a different concrete type, the
-processor must surface the type-contract violation rather than
-silently leak the wrong concrete type to the ORM consumer.
-
-Two cases:
-
-- ``_DqliteDateTime`` (DateTime column) receives ``datetime.time``:
-  no sensible coercion exists (no date to fabricate); raise
-  ``DataError``. Sibling-parity rationale: pysqlite raises on TEXT
-  payloads it can't parse, and there is no narrowing analogue.
-
-- ``_DqliteTime`` (Time column) receives ``datetime.datetime``:
-  narrow via ``value.time()`` (drop the date component). Sibling
-  parity with ``_DqliteDate`` which already narrows ``datetime ->
-  date`` via ``value.date()`` (line 284 of base.py). Both are
-  "cell carries more information than the column contract requires;
-  drop the extra dimension."
-"""
+"""Cross-type payloads from the polymorphic _datetime_from_iso8601: DateTime/Date
+columns raise DataError on a time-only value (no date to fabricate); a Time column
+narrows a full datetime via .time() (drops the extra dimension)."""
 
 from __future__ import annotations
 
@@ -34,8 +13,7 @@ from sqlalchemydqlite.base import _DqliteDate, _DqliteDateTime, _DqliteTime
 
 
 class TestDqliteDateTimeRejectsTimeOnlyPayload:
-    """``DateTime`` column receiving a ``datetime.time`` must raise
-    rather than silently pass it through."""
+    """DateTime column receiving a datetime.time must raise, not pass it through."""
 
     def test_time_only_payload_raises_data_error(self) -> None:
         proc = _DqliteDateTime(timezone=False).result_processor(None, None)
@@ -56,7 +34,6 @@ class TestDqliteDateTimeRejectsTimeOnlyPayload:
             proc(datetime.time(12, 30, 0, tzinfo=datetime.UTC))
 
     def test_well_formed_datetime_still_passes(self) -> None:
-        """The new guard must not perturb the well-formed path."""
         proc = _DqliteDateTime(timezone=False).result_processor(None, None)
         assert proc is not None
         dt = datetime.datetime(2024, 1, 2, 3, 4, 5)
@@ -64,9 +41,7 @@ class TestDqliteDateTimeRejectsTimeOnlyPayload:
 
 
 class TestDqliteTimeNarrowsDatetimePayload:
-    """``Time`` column receiving a ``datetime.datetime`` narrows via
-    ``.time()`` — sibling parity with ``_DqliteDate`` narrowing
-    ``datetime -> date`` via ``.date()``."""
+    """Time column narrows a datetime.datetime via .time(), mirroring _DqliteDate."""
 
     def test_datetime_payload_narrows_to_time(self) -> None:
         proc = _DqliteTime().result_processor(None, None)
@@ -85,10 +60,7 @@ class TestDqliteTimeNarrowsDatetimePayload:
         assert result == datetime.time(12, 30, 45, 500_000)
 
     def test_aware_datetime_narrows_to_naive_time(self) -> None:
-        """``datetime.datetime.time()`` always drops tzinfo (the
-        tz-preserving analogue is ``.timetz()``). The narrowing
-        therefore yields a naive ``datetime.time``, matching
-        ``_DqliteDate``'s "tzinfo is dropped" deliberate decision."""
+        """datetime.time() drops tzinfo (the tz-preserving analogue is .timetz())."""
         proc = _DqliteTime().result_processor(None, None)
         assert proc is not None
         dt = datetime.datetime(2024, 1, 2, 12, 30, 0, tzinfo=datetime.UTC)
@@ -105,10 +77,7 @@ class TestDqliteTimeNarrowsDatetimePayload:
 
 
 class TestDqliteDateRejectsTimeOnlyPayload:
-    """``Date`` column receiving a ``datetime.time`` must raise —
-    symmetric to ``_DqliteDateTime`` (no defensible date to
-    fabricate). Without the fix, the time would silently leak to the
-    ORM consumer."""
+    """Date column receiving a datetime.time must raise (no date to fabricate)."""
 
     def test_time_only_payload_raises_data_error(self) -> None:
         proc = _DqliteDate().result_processor(None, None)
@@ -117,8 +86,6 @@ class TestDqliteDateRejectsTimeOnlyPayload:
             proc(datetime.time(12, 30, 0))
 
     def test_well_formed_datetime_still_narrows_to_date(self) -> None:
-        """Sanity: the existing datetime->date narrowing must not
-        regress."""
         proc = _DqliteDate().result_processor(None, None)
         assert proc is not None
         dt = datetime.datetime(2024, 1, 2, 12, 30, 0)

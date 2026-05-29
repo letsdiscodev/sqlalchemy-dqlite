@@ -108,7 +108,6 @@ class TestORMOperations:
             assert users[0].email == "alice@example.com"
 
     def test_unicode_text(self, engine: Engine) -> None:
-        """Test Unicode text handling including emojis, CJK, RTL."""
         unicode_values = [
             "Hello \U0001f389 World",
             "\U0001f389\U0001f38a\U0001f381\U0001f382",
@@ -135,7 +134,6 @@ class TestORMOperations:
                 session.commit()
 
     def test_binary_blob(self, engine: Engine) -> None:
-        """Test binary blob handling including null bytes."""
         blob_values = [
             b"simple",
             b"\x00\x01\x02\x03",
@@ -154,7 +152,6 @@ class TestORMOperations:
                 assert result.data == val, f"Mismatch for blob: {repr(val)}"
 
     def test_numeric_types(self, engine: Engine) -> None:
-        """Test integer, bigint, float, and boolean types."""
         test_cases = [
             (0, 0, 0.0, False),
             (1, 1, 1.0, True),
@@ -183,7 +180,6 @@ class TestORMOperations:
                 assert result.bool_val == bool_val
 
     def test_datetime_types(self, engine: Engine) -> None:
-        """Test DateTime column type."""
         test_dates = [
             datetime.datetime(2024, 1, 15, 10, 30, 45),
             datetime.datetime(1970, 1, 1, 0, 0, 0),
@@ -201,13 +197,11 @@ class TestORMOperations:
                 assert result is not None
 
                 assert isinstance(result.created_at, datetime.datetime)
-                # SQLAlchemy's default DateTime is timezone=False, so naive
-                # input must round-trip as naive (not silently UTC-tagged).
+                # Default DateTime is timezone=False: naive in, naive out.
                 assert result.created_at.tzinfo is None
                 assert result.created_at == dt
 
     def test_datetime_null_roundtrip(self, engine: Engine) -> None:
-        """A NULL DateTime column reads back as None."""
         with Session(engine) as session:
             record = DateTimeTest(
                 created_at=datetime.datetime(2024, 1, 1, 0, 0, 0),
@@ -221,11 +215,8 @@ class TestORMOperations:
             assert result.updated_at is None
 
     def test_date_column_returns_date(self, engine: Engine) -> None:
-        """A Column(Date) returns ``datetime.date``, not ``datetime.datetime``.
-
-        The dqlite DBAPI returns datetime for ISO8601-tagged columns; the
-        dialect's _DqliteDate.result_processor narrows to date on read.
-        """
+        """Column(Date) returns datetime.date: _DqliteDate.result_processor narrows
+        the DBAPI's datetime (ISO8601-tagged columns) to date on read."""
         d = datetime.date(2024, 3, 14)
         with Session(engine) as session:
             session.add(DateOnlyTest(d=d))
@@ -237,7 +228,6 @@ class TestORMOperations:
             assert result.d == d
 
     def test_null_handling(self, engine: Engine) -> None:
-        """Test NULL values across different column types."""
         with Session(engine) as session:
             record = NumericTest(
                 int_val=None,

@@ -1,15 +1,5 @@
-"""AsyncAdaptedCursor close-time suppression narrowed to (Exception,
-asyncio.CancelledError).
-
-``contextlib.suppress(BaseException)`` is a documented anti-pattern: it
-swallows ``KeyboardInterrupt`` and ``SystemExit`` in addition to the
-``asyncio.CancelledError`` the inline comment cites. A Ctrl-C fired
-during a long-running query's cleanup must not silently disappear. The
-narrow tuple explicitly includes ``CancelledError`` because it subclasses
-``BaseException`` (not ``Exception``) since 3.8, so ``Exception`` alone
-would not cover the greenlet-cancel case the suppression was installed
-for.
-"""
+"""Close-time suppression is (Exception, CancelledError), not BaseException,
+so KeyboardInterrupt/SystemExit during cleanup still propagate."""
 
 from __future__ import annotations
 
@@ -71,8 +61,7 @@ class TestExecuteCloseSuppression:
             cursor.execute("INSERT INTO t VALUES (1)")
 
     def test_cancelled_error_during_close_is_suppressed(self) -> None:
-        """``asyncio.CancelledError`` is a ``BaseException`` and is the
-        explicit motivator for the suppression. Keep covering it."""
+        """CancelledError is a BaseException and is the motivator for the suppression."""
         cursor = _make_cursor()
         mock_inner = MagicMock()
         mock_inner.description = None
@@ -82,8 +71,7 @@ class TestExecuteCloseSuppression:
         mock_inner.close.side_effect = asyncio.CancelledError()
         cursor._connection.cursor.return_value = mock_inner
 
-        # Must not raise — the primary execute path is considered the
-        # "primary" outcome and the close-time cancel must not clobber it.
+        # Close-time cancel must not clobber the primary execute outcome.
         with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
             cursor.execute("INSERT INTO t VALUES (1)")
 

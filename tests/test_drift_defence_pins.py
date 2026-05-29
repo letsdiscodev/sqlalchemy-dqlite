@@ -1,21 +1,4 @@
-"""Pin: SQLAlchemy 2.x drift-defence flags on `DqliteDialect` and
-`DqliteDialect_aio`.
-
-Each flag pinned at the class level here matches a ``DefaultDialect``
-default that could theoretically flip in a future SA release. Pinning
-sets a maintainer-readable contract: if SA flips the default, the
-test catches the divergence at our suite, not in production.
-
-Sibling pin block: ``base.py:1212-1238`` already pins
-``use_insertmanyvalues`` / ``supports_default_values`` /
-``insert_null_pk_still_autoincrements``. This module covers the
-SA 2.x flags added in subsequent SA releases that were not yet
-pinned: ``use_insertmanyvalues_wo_returning``,
-``insertmanyvalues_implicit_sentinel``, ``supports_for_update_of``,
-``insert_executemany_returning_sort_by_parameter_order``,
-``bind_typing``, plus the sync-side ``is_async = False`` symmetric
-with the async dialect's ``is_async = True``.
-"""
+"""Pin SA 2.x dialect flags so a future SA default flip is caught here, not in production."""
 
 from __future__ import annotations
 
@@ -57,11 +40,7 @@ def test_supports_for_update_of_pinned_false_on_async() -> None:
 
 
 def test_insert_executemany_returning_sort_by_parameter_order_pinned_true_on_sync() -> None:
-    # The flag is a memoized property on DefaultDialect derived from
-    # `insert_returning and use_insertmanyvalues`. With our pins
-    # (insert_returning=True, use_insertmanyvalues=True), the
-    # derivation evaluates to True; pinning explicitly as a class
-    # attribute makes the contract maintainer-visible.
+    # Memoized from `insert_returning and use_insertmanyvalues`; both pinned True.
     assert DqliteDialect.insert_executemany_returning_sort_by_parameter_order is True
 
 
@@ -78,13 +57,8 @@ def test_bind_typing_pinned_none_on_async() -> None:
 
 
 def test_is_async_false_on_sync_dialect() -> None:
-    """Sibling pin: the async dialect pins `is_async = True`; the
-    sync dialect now explicitly pins `is_async = False`. Symmetric
-    drift-defence."""
     assert DqliteDialect.is_async is False
 
 
 def test_is_async_true_on_async_dialect() -> None:
-    """Pre-existing pin at aio.py — included here so the introspection
-    contract covers both sides."""
     assert DqliteDialect_aio.is_async is True

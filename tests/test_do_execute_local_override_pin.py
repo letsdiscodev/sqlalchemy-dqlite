@@ -1,15 +1,6 @@
-"""Pin: ``DqliteDialect.do_execute`` and ``do_execute_no_params`` are
-defined locally for drift defence, mirroring the
-``do_executemany`` opt-out.
-
-SA's three default execute hooks at ``engine/default.py:948-955`` are
-identical-shaped one-liners that share the same drift surface (a
-future dispatch event, an envelope tracer, a paramstyle conversion).
-Pinning one but inheriting the other two means a future SA release
-that grows wrapper logic at ``do_execute`` / ``do_execute_no_params``
-silently lands on dqlite while the parallel change to
-``do_executemany`` is opt-ed out — exactly the failure mode the
-``do_executemany`` override docstring describes.
+"""Pin: ``do_execute`` and ``do_execute_no_params`` are defined locally for
+drift defence, mirroring the ``do_executemany`` opt-out (so a future SA
+release growing wrapper logic at these hooks can't land silently).
 """
 
 from __future__ import annotations
@@ -34,8 +25,7 @@ def test_do_execute_no_params_is_overridden_locally() -> None:
 
 
 def test_do_execute_body_is_byte_equivalent_to_sa_default() -> None:
-    """Body must match SA's one-line pass-through. Drive a stub cursor
-    and assert it sees one call with the verbatim arguments."""
+    """Body must match SA's one-line pass-through."""
     dialect = DqliteDialect.__new__(DqliteDialect)
     cursor = MagicMock()
 
@@ -55,8 +45,7 @@ def test_do_execute_accepts_optional_context_kwarg() -> None:
 
 
 def test_do_execute_no_params_body_is_byte_equivalent_to_sa_default() -> None:
-    """Body must match SA's one-line pass-through. The signature has
-    no ``parameters`` argument; the cursor must see a single-arg call."""
+    """Body must match SA's one-line pass-through (no ``parameters`` arg)."""
     dialect = DqliteDialect.__new__(DqliteDialect)
     cursor = MagicMock()
 

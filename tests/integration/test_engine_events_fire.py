@@ -1,16 +1,7 @@
-"""SA event listeners (``commit``, ``rollback``) fire on dialect
-transactions.
+"""SA ``commit`` / ``rollback`` event listeners fire on dialect transactions.
 
-The dialect inherits ``do_commit`` / ``do_rollback`` from
-``DefaultDialect``; SA's wrapper around those emits the public events
-via the engine's event system. The contract is "if you register
-``@event.listens_for(engine, 'commit')`` the listener fires on a
-successful commit."
-
-A future refactor that overrides ``do_commit`` / ``do_rollback``
-without re-emitting events would silently break user hooks (cache
-invalidation, audit logs, telemetry). Pin the contract for both
-sync and async engines so that regression is loud.
+A future override of do_commit/do_rollback that fails to re-emit events would
+silently break user hooks (cache invalidation, audit, telemetry).
 """
 
 from __future__ import annotations
@@ -33,7 +24,6 @@ class TestEngineCommitRollbackEventsFire:
 
             with engine.begin() as conn:
                 conn.execute(text("SELECT 1"))
-            # engine.begin() commits cleanly on exit.
             assert fired == ["commit"]
         finally:
             engine.dispose()
@@ -59,9 +49,7 @@ class TestEngineCommitRollbackEventsFire:
         try:
             fired: list[str] = []
 
-            # Register on the underlying sync_engine — SA's async
-            # event registration goes through the sync engine's
-            # event system.
+            # Async event registration goes through the sync_engine's event system.
             @event.listens_for(engine.sync_engine, "commit")
             def _on_commit(conn) -> None:  # noqa: ARG001
                 fired.append("commit")

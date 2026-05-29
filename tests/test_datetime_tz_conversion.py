@@ -1,16 +1,6 @@
-"""``_DqliteDateTime(timezone=False)`` must convert tz-aware inputs to UTC
-before dropping tzinfo.
-
-The old bare ``replace(tzinfo=None)`` silently dropped the offset while
-keeping the local-offset wall-clock digits, shifting the stored instant
-by the offset magnitude. ``DateTime(timezone=False)`` is documented as
-"naive wall-clock interpreted as UTC" — an aware input therefore must
-be normalised through UTC first.
-
-Complement: ``timezone=True`` attaches UTC to naive inputs so the ORM
-contract's aware-return guarantee holds for cells stored by writers
-that omit a tz suffix.
-"""
+"""timezone=False normalises an aware input through UTC before dropping tzinfo
+(a bare replace(tzinfo=None) would shift the instant by the offset); timezone=True
+attaches UTC to naive inputs to honour the aware-return guarantee."""
 
 from __future__ import annotations
 

@@ -1,8 +1,5 @@
-"""``AsyncAdaptedConnection`` must declare ``__slots__`` to preserve
-the memory layout of SA's parent ``AdaptedConnection`` (which uses
-slots for every pooled connection). Without slots each instance
-silently gets a ``__dict__``, defeating the optimization.
-"""
+"""``AsyncAdaptedConnection`` must declare ``__slots__`` to preserve the parent
+``AdaptedConnection``'s slotted layout; without it instances silently gain a ``__dict__``."""
 
 from __future__ import annotations
 

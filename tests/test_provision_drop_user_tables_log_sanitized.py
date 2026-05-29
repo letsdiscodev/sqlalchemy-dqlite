@@ -1,14 +1,6 @@
-"""``_drop_user_tables`` sanitises peer-derived text in its DEBUG log
-records.
-
-Both DEBUG log sites in ``_drop_user_tables`` interpolate values that
-can carry peer-supplied LF/CR (the bubbled-up exception text, and the
-table ``name`` read from ``sqlite_master`` — SQLite's quoted-identifier
-form admits LF inside a table name). Both must be routed through
-``sanitize_for_log`` so journald/syslog cannot split a single record
-into multiple lines (CWE-117). The sibling ``_dqlite_run_reap_dbs``
-applies the same discipline.
-"""
+"""Pin: both DEBUG log sites in ``_drop_user_tables`` route peer-derived text
+(exception text, ``sqlite_master`` table name) through ``sanitize_for_log``
+so embedded LF/CR cannot split a log record (CWE-117)."""
 
 from __future__ import annotations
 
@@ -24,10 +16,7 @@ import sqlalchemydqlite.provision as provision
 def test_drop_user_tables_per_drop_failure_sanitises_exception_and_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """When the per-table DROP raises and the table ``name`` itself
-    carries forged LF, both substitutions must be escaped in the DEBUG
-    record.
-    """
+    """Both the exception text and the table name must be LF-escaped."""
     forged_name = "evil\nFORGED: spoofed log line"
     forged_exc = "drop failed\nFORGED: spoofed exc"
 
@@ -69,9 +58,7 @@ def test_drop_user_tables_per_drop_failure_sanitises_exception_and_name(
 def test_drop_user_tables_connect_failure_sanitises_exception(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """When ``eng.connect`` raises with forged LF in its message, the
-    DEBUG record must escape the LF.
-    """
+    """A forged LF in the connect exception message must be escaped."""
     forged = "connect failed\nFORGED: spoofed log line"
 
     eng = MagicMock()

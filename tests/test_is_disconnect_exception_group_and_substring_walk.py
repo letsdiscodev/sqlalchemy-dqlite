@@ -1,18 +1,8 @@
-"""Pin: is_disconnect unwraps BaseExceptionGroup AND walks the cause chain
-for the substring fallback.
+"""is_disconnect unwraps BaseExceptionGroup AND walks the cause chain for the substring fallback.
 
-The pool's ``initialize`` aggregates multiple connect failures via
-``raise BaseExceptionGroup("...", [DqliteConnectionError(...), ...])``.
-Without unwrapping the group's children, the SA dialect's
-``is_disconnect`` would never see the wrapped causes and the group
-would propagate as a non-disconnect error — the pool would not
-recover from a multi-failure connect cascade.
-
-The substring fallback was previously single-hop on the exception
-type, so a user-side retry decorator wrapping the dbapi
-``OperationalError("Wire decode failed: ...")`` would defeat
-disconnect classification entirely (wire-decode errors carry
-``code=None`` so the leader-code branch can't catch them).
+The pool's initialize aggregates connect failures into a BaseExceptionGroup, and
+code=None wire-decode errors only match via the substring fallback, so both must
+be reachable through wrappers.
 """
 
 from __future__ import annotations
@@ -53,9 +43,7 @@ class TestExceptionGroupUnwrap:
 
 class TestSubstringBranchCauseWalk:
     def test_wire_decode_failed_via_cause_walk(self) -> None:
-        """An OperationalError(message, code=None) from a wire-decode
-        failure wrapped in another exception must still classify as
-        disconnect via the substring fallback's cause walk."""
+        """A wrapped code=None wire-decode OperationalError classifies via the cause walk."""
         inner = _dbapi_exc.OperationalError("Wire decode failed: corrupt frame")
 
         class _MyAppError(Exception):
@@ -76,7 +64,6 @@ class TestSubstringBranchCauseWalk:
             assert _dialect().is_disconnect(outer, None, None) is True
 
     def test_substring_branch_still_catches_direct_exception(self) -> None:
-        """Negative pin: the cause-walk widening must not lose the
-        original direct-isinstance behaviour."""
+        """The cause-walk widening must not lose the direct-isinstance behaviour."""
         exc = _dbapi_exc.OperationalError("Wire decode failed: bad header")
         assert _dialect().is_disconnect(exc, None, None) is True

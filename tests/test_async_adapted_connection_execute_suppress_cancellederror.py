@@ -1,12 +1,5 @@
-"""Pin: ``AsyncAdaptedConnection.execute`` close-suppress arm covers
-``asyncio.CancelledError`` in addition to ``Exception``.
-
-The cursor-side ``execute`` / ``executemany`` finally clauses already
-suppress the broader tuple ``(Exception, asyncio.CancelledError)`` for
-the same close (``aio.py:307``). The connection-shortcut ``execute``
-must mirror so that a ``CancelledError`` raised from ``cur.close()``
-during cleanup does not replace the original execute exception that
-SA's classifier expects to see.
+"""Pin: a ``CancelledError`` from ``cur.close()`` during cleanup must not
+replace the original execute exception SA's classifier expects to see.
 """
 
 import asyncio
@@ -21,8 +14,7 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection
 
 async def test_execute_suppresses_cancellederror_from_cursor_close() -> None:
     """If ``cur.close()`` raises ``CancelledError`` during cleanup,
-    the original ``execute`` exception must propagate, not the cancel.
-    """
+    the original ``execute`` exception must propagate, not the cancel."""
 
     class _ExecBoom(Exception):
         pass

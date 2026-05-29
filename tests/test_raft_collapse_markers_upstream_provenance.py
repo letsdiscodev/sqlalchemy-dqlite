@@ -1,20 +1,6 @@
-"""Cross-package upstream-provenance pin for SA's raft-collapse markers.
-
-The SA dialect's ``_RAFT_COLLAPSE_DISCONNECT_MARKERS`` carries three
-phrases the dqlite-server's ``translateRaftErrCode`` default arm
-emits via ``raft_strerror`` for ``RAFT_SHUTDOWN`` /
-``RAFT_CANCELED`` / ``RAFT_NOCONNECTION``. The phrasing is owned by
-the upstream raft library (``raft/err.h``) and is not part of any
-formal API — a raft library upgrade renaming "server is shutting
-down" to "server going down" silently disables SA's classifier on
-this narrow ``code=1`` channel.
-
-If the upstream source is present in this workspace (as
-``/home/antoine/src/dqlite/dqlite-upstream/``) this test reads
-``raft/err.h`` and asserts the SA marker phrases still appear in
-the upstream X-macro table. The test is skipped when upstream is
-absent (CI on a developer machine without the upstream checkout).
-"""
+"""Upstream-provenance pin: ``_RAFT_COLLAPSE_DISCONNECT_MARKERS`` phrases are
+owned by raft's ``err.h`` (not a formal API) — an upstream rename would
+silently disable SA's classifier. Skipped when upstream isn't in the workspace."""
 
 from __future__ import annotations
 
@@ -26,13 +12,7 @@ from sqlalchemydqlite.base import _RAFT_COLLAPSE_DISCONNECT_MARKERS
 
 
 def _upstream_err_h() -> pathlib.Path | None:
-    """Locate dqlite-upstream's ``raft/err.h`` if available.
-
-    The canonical workspace layout puts it at
-    ``<workspace>/dqlite-upstream/src/raft/err.h`` sibling-to the
-    four Python packages. Walks up from this file's directory to
-    find the workspace root.
-    """
+    """Locate dqlite-upstream's ``raft/err.h`` by walking up to the workspace root."""
     here = pathlib.Path(__file__).resolve()
     for parent in [here.parent, *here.parents]:
         candidate = parent / "dqlite-upstream" / "src" / "raft" / "err.h"

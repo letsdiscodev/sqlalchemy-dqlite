@@ -1,20 +1,6 @@
-"""Pin: the SA URL-layer timeout validators (close_timeout,
-dial_timeout, attempt_timeout) all delegate to the client-layer
-``validate_timeout`` SSOT so any future tightening at the client
-layer (upper bound, etc.) flows through automatically.
-
-Before this fix close_timeout was routed through ``validate_timeout``
-but dial_timeout / attempt_timeout used inline lambdas with hand-
-rolled invariants. A future client-layer constraint (e.g., upper-
-bound enforcement) would have flowed through close_timeout's URL
-surface but silently bypassed dial_timeout / attempt_timeout, leaving
-the SA URL surface accepting values the client then rejects at
-connection time.
-
-The factory ``_make_timeout_url_validator`` centralises the
-delegate-to-client pattern; all three timeout validators are
-produced from it.
-"""
+"""Pin: all three URL timeout validators (close/dial/attempt) delegate to the client-layer
+validate_timeout SSOT, so a future client-side tightening can't be bypassed by the
+hand-rolled inline lambdas dial/attempt used before this fix."""
 
 from __future__ import annotations
 
@@ -37,8 +23,7 @@ from sqlalchemydqlite.base import (
     ],
 )
 def test_validator_rejects_bool(validator: object, field_name: str) -> None:
-    """All three validators reject bool uniformly (per
-    ``validate_timeout``'s SSOT discipline)."""
+    """All three reject bool uniformly."""
     with pytest.raises(ArgumentError):
         validator(True)  # type: ignore[operator]
     with pytest.raises(ArgumentError):
@@ -77,8 +62,7 @@ def test_validator_rejects_nan(validator: object) -> None:
 
 
 def test_dial_timeout_field_name_in_message() -> None:
-    """Pin: the URL-layer rejection diagnostic names the offending
-    field so operators know which knob to fix."""
+    """The rejection diagnostic names the offending field."""
     with pytest.raises(ArgumentError, match="dial_timeout"):
         _validate_dial_timeout_url(-1.0)
 
@@ -89,10 +73,7 @@ def test_attempt_timeout_field_name_in_message() -> None:
 
 
 def test_close_timeout_floor_rationale_preserved() -> None:
-    """close_timeout's FIN-flush floor rationale must continue to
-    appear in the URL-layer rejection (the operator-facing
-    diagnostic that motivated routing through validate_timeout in
-    the first place)."""
+    """close_timeout's FIN-flush floor rationale stays in the URL-layer rejection."""
     with pytest.raises(ArgumentError) as excinfo:
         _validate_close_timeout_url(0.0001)
     assert "FIN" in str(excinfo.value) or "0.01" in str(excinfo.value)

@@ -1,12 +1,4 @@
-"""Verify executemany RETURNING behaviour for INSERT / UPDATE / DELETE.
-
-The SQLAlchemy dialect flags ``insert_executemany_returning``,
-``update_executemany_returning`` and ``delete_executemany_returning``
-describe whether the dialect can deliver per-parameter-set RETURNING
-rows in a single round-trip. These tests exercise the wire path
-end-to-end against the test cluster so the flags can be pinned
-confidently on the dialect itself.
-"""
+"""End-to-end executemany RETURNING for INSERT / UPDATE / DELETE."""
 
 import uuid
 from collections.abc import Generator

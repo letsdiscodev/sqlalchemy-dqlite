@@ -1,19 +1,6 @@
-"""Pin: async ``executemany`` mid-loop leader-flip leaves cursor at
-the no-result baseline.
-
-The async adapter's ``executemany`` clears ``description`` /
-``rowcount`` / ``lastrowid`` / ``_rows`` up-front. If a leader-flip
-exception fires inside the underlying cursor's ``executemany``
-mid-loop, the adapter's RETURNING-fetch branch never runs and the
-cursor stays at the no-result baseline. Pin that contract so a future
-refactor that "helpfully" preserves partial RETURNING rows on failure
-cannot silently let a user think writes landed when they didn't.
-
-The integration variant (real cluster, real leader demotion) requires
-a ``cluster.demote_current_leader()`` helper that does not exist
-today; this unit test mocks the underlying ``executemany`` and is the
-load-bearing regression check.
-"""
+"""Pin: a leader-flip mid ``executemany`` leaves the cursor at the
+no-result baseline — never preserve partial RETURNING rows on failure,
+or a user could think writes landed when they didn't."""
 
 from __future__ import annotations
 
@@ -71,12 +58,8 @@ def _make_adapted_cursor(underlying: _FakeAsyncCursor) -> AsyncAdaptedCursor:
     adapted_conn = MagicMock()
     adapted_conn._connection = fake_conn
 
-    # AsyncAdapted{Connection,Cursor}._handle_exception is the
-    # adapter's central remap point and contractually re-raises (it
-    # has a NoReturn return type). The cursor execute / executemany
-    # methods route errors through it; without an explicit re-raise
-    # in the mock, the cursor would silently swallow the leader-flip
-    # error this test is asserting on.
+    # _handle_exception contractually re-raises (NoReturn); the mock must
+    # too, else the cursor would swallow the leader-flip error under test.
     def _reraise(error: BaseException) -> None:
         raise error
 
@@ -96,7 +79,7 @@ class TestAsyncExecutemanyLeaderFlipResetState:
         )
         cur = _make_adapted_cursor(underlying)
 
-        # Pre-populate state to ensure the up-front reset takes effect.
+        # Pre-populate state so the up-front reset is observable.
         cur.description = [("col", None, None, None, None, None, None)]
         cur.rowcount = 99
         cur.lastrowid = 42
@@ -106,16 +89,10 @@ class TestAsyncExecutemanyLeaderFlipResetState:
             cur.executemany("INSERT INTO t (v) VALUES (?) RETURNING id", [("a",)])
 
         assert ei.value.code == code
-        # Pin: the cursor stays at the no-result baseline. The up-front
-        # reset has already cleared everything; the leader-flip exception
-        # propagates without populating description/rows.
         assert cur.description is None
         assert cur.rowcount == -1
-        # ``lastrowid`` is sticky across non-INSERT executes — including
-        # failed ones — to match stdlib ``sqlite3.Cursor.lastrowid``
-        # and the dbapi-layer cursor's contract. The pre-populated
-        # value (42) survives a failing executemany.
+        # lastrowid is sticky across failed executes, matching stdlib
+        # sqlite3.Cursor.lastrowid — the pre-populated 42 survives.
         assert cur.lastrowid == 42
         assert cur._rows == deque()
-        # Cursor was closed in the finally block.
         underlying.close.assert_called_once()

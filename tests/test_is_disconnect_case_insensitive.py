@@ -1,7 +1,5 @@
-"""``is_disconnect`` substring fallback matches case-insensitively so a
-future upper-case rewording of a wire-layer / client-layer message
-does not silently drop the classification.
-"""
+"""is_disconnect's substring fallback matches case-insensitively so a reworded-case
+wire/client message does not silently drop the classification."""
 
 from __future__ import annotations
 

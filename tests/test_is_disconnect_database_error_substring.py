@@ -1,12 +1,7 @@
-"""Pin: ``is_disconnect`` substring fallback fires for bare ``DatabaseError``.
+"""is_disconnect substring fallback fires for bare DatabaseError.
 
-``_classify_operational`` routes SQLite codes 11/24/26
-(CORRUPT/FORMAT/NOTADB) to bare ``DatabaseError`` (not
-``OperationalError``). The substring fallback must compare the
-disconnect-message patterns against ``DatabaseError`` causes too —
-otherwise a "wire stream error" / "wire decode failed" tail glued to a
-CORRUPT-coded server message would leak past the classifier and the
-pool would keep a desynced wire socket.
+Codes 11/24/26 (CORRUPT/FORMAT/NOTADB) route to bare DatabaseError, so the
+substring fallback must scan those causes too or a desynced wire socket stays pooled.
 """
 
 from __future__ import annotations
@@ -16,10 +11,7 @@ from sqlalchemydqlite.base import DqliteDialect
 
 
 def test_database_error_with_wire_decode_substring_classifies_as_disconnect() -> None:
-    """Bare ``DatabaseError`` (CORRUPT, code=11) carrying a
-    transport-shaped substring must be classified as a disconnect.
-    Without the widening this fell straight through to
-    ``super().is_disconnect`` → False, leaving the slot in the pool."""
+    """Bare DatabaseError (CORRUPT, code=11) with a transport-shaped substring is a disconnect."""
     e = DatabaseError(
         "database disk image is malformed; wire decode failed at offset 42",
         code=11,
@@ -28,25 +20,13 @@ def test_database_error_with_wire_decode_substring_classifies_as_disconnect() ->
 
 
 def test_database_error_with_slot_fatal_code_classifies_even_without_substring() -> None:
-    """A bare ``DatabaseError`` carrying one of the slot-fatal codes
-    (CORRUPT=11 / FORMAT=24 / NOTADB=26) classifies as disconnect
-    regardless of message — pre-fix this returned False (the substring
-    gate blocked classification on the canonical engine wording);
-    post-fix the bare-DBE arm short-circuits ``return True`` for the
-    code set, mirroring ``do_ping``'s arm at base.py:2935-2945. See
-    ``test_is_disconnect_bare_dbe_short_circuits_on_slot_fatal_codes.py``
-    for the full pin set explaining the HIGH-severity hazard the
-    pre-fix behaviour created (without ``pool_pre_ping=True``, a slot
-    surfacing CORRUPT stayed in the pool and re-tripped on every
-    subsequent checkout)."""
+    """Bare DatabaseError with a slot-fatal code (11/24/26) classifies regardless of message."""
     e = DatabaseError("database disk image is malformed", code=11)
     assert DqliteDialect().is_disconnect(e, None, None) is True
 
 
 def test_database_error_via_cause_walk() -> None:
-    """The widening also benefits the cause-walk: a bare
-    ``DatabaseError`` wrapped inside an unrelated exception must still
-    classify via the substring fallback."""
+    """A bare DatabaseError wrapped in an unrelated exception classifies via the cause-walk."""
     inner = DatabaseError(
         "database disk image is malformed; connection closed",
         code=11,
@@ -61,19 +41,9 @@ def test_database_error_via_cause_walk() -> None:
 
 
 def test_integrity_error_with_disconnect_substring_not_classified() -> None:
-    """Negative pin for the substring widening false-positive surface:
-    an ``IntegrityError`` whose message contains a transport-shaped
-    substring (e.g., a user-defined ``RAISE(ABORT, '...timed out...')``
-    in a constraint trigger) must NOT be classified as a disconnect.
-
-    Without this guard, SA pool would invalidate the slot and retry —
-    duplicating non-idempotent INSERTs.
-
-    The substring scan must be restricted to OperationalError + bare
-    DatabaseError with the BARE_DATABASE_ERROR_CODES set (11/24/26);
-    IntegrityError (code 19), DataError, etc. must NOT match the
-    substring branch.
-    """
+    """IntegrityError with a transport-shaped substring must NOT classify, else SA
+    retries and duplicates non-idempotent INSERTs. Substring scan is restricted to
+    OperationalError + bare DatabaseError codes 11/24/26."""
     from dqlitedbapi.exceptions import IntegrityError
 
     e = IntegrityError(
@@ -84,9 +54,7 @@ def test_integrity_error_with_disconnect_substring_not_classified() -> None:
 
 
 def test_data_error_with_disconnect_substring_not_classified() -> None:
-    """Symmetric to ``IntegrityError``: ``DataError`` (also a
-    DatabaseError subclass) carrying a substring like ``"connection
-    closed"`` in a server message must NOT classify as disconnect."""
+    """DataError (a DatabaseError subclass) with a disconnect substring must NOT classify."""
     from dqlitedbapi.exceptions import DataError
 
     e = DataError(
@@ -97,10 +65,7 @@ def test_data_error_with_disconnect_substring_not_classified() -> None:
 
 
 def test_bare_database_error_with_non_motivating_code_not_classified() -> None:
-    """Pin the code-restriction explicitly: bare ``DatabaseError`` with
-    a code OUTSIDE {11, 24, 26} (i.e. outside
-    ``BARE_DATABASE_ERROR_CODES``) must not match the substring
-    branch even with a transport-shaped message."""
+    """Bare DatabaseError with a code outside {11, 24, 26} must not match the substring branch."""
     e = DatabaseError(
         "wire decode failed in column 42",
         code=99,  # not in {11, 24, 26}

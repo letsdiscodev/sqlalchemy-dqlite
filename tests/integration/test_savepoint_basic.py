@@ -1,16 +1,5 @@
-"""Pin SAVEPOINT / RELEASE / ROLLBACK_TO_SAVEPOINT end-to-end against dqlite.
-
-The dialect inherits SAVEPOINT machinery from SQLAlchemy's parent
-``DefaultDialect`` (issuing ``SAVEPOINT <name>`` /
-``RELEASE SAVEPOINT <name>`` / ``ROLLBACK TO SAVEPOINT <name>``) without
-override. ``requirements.savepoints`` advertises savepoints as
-supported, but no integration test currently round-trips them through
-the full SA → dbapi → client → wire → server path.
-
-The "no transaction is active" substring suppression in the dbapi's
-``commit``/``rollback`` and the substring fallback in the dialect's
-``is_disconnect`` are both potential interaction points; pinning the
-end-to-end contract here surfaces any regression in those layers.
+"""Pin SAVEPOINT / RELEASE / ROLLBACK_TO_SAVEPOINT end-to-end against dqlite,
+through the full SA -> dbapi -> client -> wire -> server path.
 """
 
 from __future__ import annotations
@@ -88,7 +77,6 @@ class TestSavepointBasic:
                 sp = conn.begin_nested()
                 conn.execute(insert(table).values(label="inner"))
                 sp.rollback()
-                # Outer tx still active; commits at context-manager exit.
 
             rows = conn.execute(select(table.c.label).order_by(table.c.id)).all()
             assert [r.label for r in rows] == ["outer"]

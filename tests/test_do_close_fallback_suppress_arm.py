@@ -1,16 +1,6 @@
-"""Pin: ``DqliteDialect.do_close``'s fallback wraps
-``force_close_transport()`` in ``contextlib.suppress(*_FORCE_CLOSE_TAIL_EXCEPTIONS)``.
-The suppress arm is the load-bearing "never raises" contract — by the
-time the fallback fires, the primary close already failed and SA's pool
-slot must release regardless.
-
-Existing tests stub ``force_close_transport = MagicMock()`` with no
-side effect; the suppress arm is never traversed. These pins drive
-``force_close_transport.side_effect`` with each exception class the
-production tuple covers and assert ``do_close`` returns ``None``
-without raising. A negative twin pins that non-transport classes (e.g.
-``AttributeError`` from a refactor) DO propagate — the suppress is
-narrow, not broad.
+"""Pin: ``do_close``'s fallback wraps ``force_close_transport()`` in
+``suppress(*_FORCE_CLOSE_TAIL_EXCEPTIONS)`` (never-raises contract); a
+non-transport class still propagates — the suppress is narrow, not broad.
 """
 
 from __future__ import annotations
@@ -49,10 +39,8 @@ from sqlalchemydqlite.base import DqliteDialect
             OperationalError("first"),
             DqliteConnectionError("second"),
         ),
-        # ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` widens to include RuntimeError
-        # (cross-loop ``RuntimeError("Event loop is closed")`` from a
-        # defunct loop) and ReferenceError (dead-proxy weakref on a
-        # half-collected AsyncAdaptedConnection). Pin both.
+        # Tuple widens to RuntimeError ("Event loop is closed") and
+        # ReferenceError (dead-proxy weakref). Pin both.
         (
             OperationalError("first"),
             RuntimeError("Event loop is closed"),
@@ -66,26 +54,21 @@ from sqlalchemydqlite.base import DqliteDialect
 def test_do_close_fallback_suppresses_secondary_failure(
     first_exc: BaseException, second_exc: BaseException
 ) -> None:
-    """The dialect-level suppress absorbs a secondary transport-class
-    raise from ``force_close_transport`` itself. SA's pool slot must
-    still release; ``do_close`` must not propagate the secondary
-    failure."""
+    """A secondary transport-class raise from ``force_close_transport`` is
+    absorbed; ``do_close`` does not propagate it."""
     dialect = DqliteDialect()
     mock_conn = MagicMock()
     mock_conn.close.side_effect = first_exc
     mock_conn.force_close_transport.side_effect = second_exc
 
-    # Must NOT raise.
     dialect.do_close(mock_conn)
 
     mock_conn.force_close_transport.assert_called_once()
 
 
 def test_do_close_fallback_propagates_non_transport_class_from_force_close() -> None:
-    """Negative twin: a non-transport-class exception from
-    ``force_close_transport`` (programmer bug — ``AttributeError`` /
-    ``TypeError``) is NOT suppressed. The narrow suppress tuple is
-    designed to let real bugs surface."""
+    """A non-transport-class exception from ``force_close_transport`` is NOT
+    suppressed."""
     dialect = DqliteDialect()
     mock_conn = MagicMock()
     mock_conn.close.side_effect = OperationalError("first")
@@ -96,8 +79,7 @@ def test_do_close_fallback_propagates_non_transport_class_from_force_close() -> 
 
 
 def test_do_close_fallback_propagates_type_error_from_force_close() -> None:
-    """Symmetric negative twin for ``TypeError`` (also a programmer-
-    bug class outside ``_FORCE_CLOSE_TAIL_EXCEPTIONS``)."""
+    """Symmetric negative twin for ``TypeError``."""
     dialect = DqliteDialect()
     mock_conn = MagicMock()
     mock_conn.close.side_effect = OperationalError("first")
@@ -118,9 +100,7 @@ def test_do_close_fallback_propagates_type_error_from_force_close() -> None:
 def test_async_dialect_do_close_fallback_suppresses_secondary_failure(
     first_exc: BaseException, second_exc: BaseException
 ) -> None:
-    """The async dialect inherits ``do_close`` from the sync sibling;
-    pin that the inherited suppress arm absorbs secondary failures
-    from ``force_close_transport`` on the async side too."""
+    """The inherited suppress arm absorbs secondary failures on the async side."""
     dialect = DqliteDialect_aio()
     mock_conn = MagicMock()
     mock_conn.close.side_effect = first_exc

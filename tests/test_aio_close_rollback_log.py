@@ -1,10 +1,5 @@
-"""Pin the DEBUG-log breadcrumb on AsyncAdaptedConnection.close.
-
-The narrow ``contextlib.suppress`` used to hide failed rollbacks
-(leader flip, transport timeout, etc.) silently. Replace with a
-try/except that DEBUG-logs before continuing to the close. Programming
-bugs (AttributeError, RuntimeError, etc.) still propagate.
-"""
+"""close() DEBUG-logs failed rollbacks before continuing; programming bugs
+(AttributeError, RuntimeError, etc.) still propagate."""
 
 from __future__ import annotations
 
@@ -18,12 +13,6 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection
 
 
 class _FakeAsyncConn:
-    """A synchronous stand-in: sqlalchemy.util.await_only accepts a plain
-    callable's return when the adapter is driven by greenlet glue. For
-    testing we short-circuit to a sync method and let ``await_only``
-    see the already-complete coroutine-ish value.
-    """
-
     def __init__(self, rollback_exc: BaseException | None) -> None:
         self._rollback_exc = rollback_exc
         self.close_calls = 0
@@ -40,12 +29,9 @@ def test_close_logs_rollback_failure(caplog: pytest.LogCaptureFixture) -> None:
     fake = _FakeAsyncConn(OperationalError("server gone"))
     adapter = AsyncAdaptedConnection(fake)
 
-    # sqlalchemy.util.await_only drives the coroutine; using a live
-    # engine is overkill for an observability test. Stub await_only.
     from sqlalchemydqlite import aio as aio_module
 
     def _fake_await_only(coro: object) -> object:
-        # ``coro`` is a coroutine object; run it synchronously via send.
         import asyncio
 
         return asyncio.new_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
@@ -70,9 +56,8 @@ def test_close_logs_rollback_failure(caplog: pytest.LogCaptureFixture) -> None:
     assert matching, f"expected DEBUG 'rollback failed' record; got {caplog.records!r}"
     assert matching[0].exc_info is not None
     assert isinstance(matching[0].exc_info[1], OperationalError)
-    assert fake.close_calls == 1  # close still ran
-    # Correlation fields: id=<num> and peer=<addr-or-None> so operators
-    # can attribute the log record to a specific adapter instance / node.
+    assert fake.close_calls == 1
+    # Correlation fields id=/peer= let operators attribute the record to a node.
     msg = matching[0].getMessage()
     assert f"id={id(adapter)}" in msg, msg
     assert "peer=" in msg, msg
@@ -104,9 +89,7 @@ def test_close_propagates_programming_bug() -> None:
 
 
 def test_close_with_also_failing_transport_errors(caplog: pytest.LogCaptureFixture) -> None:
-    """The full category tuple (OSError, TimeoutError, ConnectionError, etc.)
-    is all caught and DEBUG-logged.
-    """
+    """The full transport-error category is caught and DEBUG-logged."""
     fake = _FakeAsyncConn(DqliteConnectionError("peer reset"))
     adapter = AsyncAdaptedConnection(fake)
 
@@ -153,17 +136,8 @@ def test_close_with_also_failing_transport_errors(caplog: pytest.LogCaptureFixtu
 def test_close_suppresses_os_level_rollback_errors(
     caplog: pytest.LogCaptureFixture, exc: BaseException
 ) -> None:
-    """The narrow suppression tuple on ``close()`` catches every
-    stdlib transport-error shape via the single ``OSError`` entry.
-    ``ConnectionError``, ``BrokenPipeError``, ``ConnectionResetError``,
-    ``ConnectionAbortedError``, ``ConnectionRefusedError``, and
-    ``TimeoutError`` are all ``OSError`` subclasses since Python
-    3.3/3.10, so enumerating them separately would be redundant —
-    parametrize the full family so a refactor that narrows the
-    ``OSError`` clause (e.g. back to a subset like ``BrokenPipeError``)
-    is caught by at least one of these branches rather than silently
-    re-raising and leaking the underlying AsyncConnection.
-    """
+    """The single OSError clause must catch every stdlib transport-error
+    subclass; narrowing it would leak the AsyncConnection."""
     fake = _FakeAsyncConn(exc)
     adapter = AsyncAdaptedConnection(fake)
 
@@ -192,20 +166,13 @@ def test_close_suppresses_os_level_rollback_errors(
         if r.levelno == logging.DEBUG and "rollback failed" in r.getMessage()
     ]
     assert matching, f"no DEBUG log captured for {type(exc).__name__}: {caplog.records!r}"
-    # Log line carries the exception type (so operators triaging a
-    # noisy pool can correlate the cause without enabling exc_info
-    # rendering). ``%s`` with ``type(exc).__name__`` in the format.
+    # Log line carries the exception type so operators can correlate the cause.
     assert type(exc).__name__ in matching[0].getMessage()
-    # close() ran regardless of which transport error fired the
-    # suppression branch.
     assert fake.close_calls == 1
 
 
 def test_close_propagates_value_error_out_of_tuple() -> None:
-    """Inverse pin: a ``ValueError`` from rollback is not in the
-    narrow tuple and must propagate. Guards against a refactor
-    widening the suppression back to ``except Exception``.
-    """
+    """A ValueError from rollback is outside the narrow tuple and must propagate."""
     fake = _FakeAsyncConn(ValueError("parameter out of range"))
     adapter = AsyncAdaptedConnection(fake)
 

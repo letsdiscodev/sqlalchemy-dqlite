@@ -38,8 +38,7 @@ class _FakeConnection:
 
 
 def _sync_await(coro: Any) -> Any:
-    """Run a coroutine synchronously; stand-in for ``await_only`` in
-    tests so we don't need a greenlet context."""
+    """Run a coroutine synchronously; stand-in for ``await_only`` (no greenlet needed)."""
     try:
         return asyncio.new_event_loop().run_until_complete(coro)
     except Exception:
@@ -47,8 +46,7 @@ def _sync_await(coro: Any) -> Any:
 
 
 def _reraise(error: BaseException) -> None:
-    """Stand-in for AsyncAdaptedConnection._handle_exception in tests
-    that don't go through a real adapt-connection."""
+    """Stand-in for AsyncAdaptedConnection._handle_exception."""
     raise error
 
 
@@ -80,13 +78,10 @@ def test_stale_rows_cleared_when_execute_raises(monkeypatch: pytest.MonkeyPatch)
 
     assert adapter.description is None
     assert adapter.rowcount == -1
-    # ``lastrowid`` is sticky across non-INSERT executes — including
-    # failed ones — to match stdlib ``sqlite3.Cursor.lastrowid`` and
-    # the dbapi-layer cursor's contract. The seeded value (10) survives
-    # a failing SELECT.
+    # lastrowid is sticky across non-INSERT executes (even failed ones), per stdlib sqlite3.
     assert adapter.lastrowid == 10
     assert list(adapter._rows) == []
-    assert adapter.fetchone() is None  # Not the stale (1,).
+    assert adapter.fetchone() is None  # not the stale (1,)
 
 
 def test_stale_rows_cleared_when_executemany_raises(

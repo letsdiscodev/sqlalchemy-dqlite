@@ -1,15 +1,5 @@
-"""Pin: ``AsyncAdaptedConnection.close()`` routes the loop-mismatch
-``RuntimeError`` through ``_handle_exception`` so SA's
-``is_disconnect`` (gated on ``DatabaseError``) classifies it.
-
-The remap covers ``commit`` / ``rollback`` / ``execute`` /
-``executemany`` / ``close``. Cross-loop close (e.g. from
-``engine.dispose()`` after the loop closes) would otherwise
-propagate a bare ``RuntimeError("attached to a different loop")``
-past pool teardown.
-
-Test runs through SA's ``greenlet_spawn`` so ``await_only`` works.
-"""
+"""close() routes the loop-mismatch RuntimeError through _handle_exception
+so SA's is_disconnect (gated on DatabaseError) can classify it."""
 
 from __future__ import annotations
 

@@ -1,10 +1,5 @@
-"""is_disconnect walks the full ``__cause__`` / ``__context__`` chain.
-
-A single-hop check catches today's ``_call_client`` wrap but breaks as
-soon as any further wrap layer is added (retry decorator, telemetry
-middleware, circuit breaker). The bounded-walk variant surfaces the
-inner transport-level cause no matter how deep the wrap tower is.
-"""
+"""is_disconnect walks the full __cause__/__context__ chain so the inner transport
+cause is found no matter how many wrap layers (retry/telemetry/circuit-breaker) are added."""
 
 from __future__ import annotations
 
@@ -27,8 +22,6 @@ class TestCauseChainWalk:
             assert dialect.is_disconnect(wrapped, None, None) is True
 
     def test_two_hop_cause_matches(self) -> None:
-        """A retry middleware, telemetry shim, or circuit breaker can
-        add a second wrap layer; the walk must descend through it."""
         dialect = DqliteDialect()
         inner = _client_exc.DqliteConnectionError("peer rst")
         try:
@@ -43,52 +36,39 @@ class TestCauseChainWalk:
                 assert dialect.is_disconnect(outer, None, None) is True
 
     def test_context_fallback_when_cause_is_none(self) -> None:
-        """``__context__`` is set implicitly by a ``raise`` inside an
-        ``except`` block even without ``from e``. The walk must
-        traverse it too — otherwise non-``from`` wraps silently drop
-        the disconnect signal.
-        """
+        """__context__ (set by a bare raise in an except block) must be walked too,
+        else non-`from` wraps drop the disconnect signal."""
         dialect = DqliteDialect()
         try:
             try:
                 raise _client_exc.DqliteConnectionError("peer rst")
             except _client_exc.DqliteConnectionError:
-                # Note: no ``from e``; __context__ captures the inner.
+                # No `from e`; __context__ captures the inner.
                 raise _dbapi_exc.OperationalError("implicit chain")  # noqa: B904
         except _dbapi_exc.OperationalError as outer:
             assert dialect.is_disconnect(outer, None, None) is True
 
     def test_self_cycle_does_not_hang(self) -> None:
-        """A pathological ``raise X from X`` must not spin."""
+        """A pathological ``raise X from X`` self-cycle must not spin."""
         dialect = DqliteDialect()
         e = _dbapi_exc.OperationalError("loop")
-        e.__cause__ = e  # self-cycle
-        # No assertion on True/False — the invariant is "returns
-        # promptly without recursing / looping." Substring-branch
-        # should reach False.
+        e.__cause__ = e
         assert dialect.is_disconnect(e, None, None) is False
 
 
 class TestWalkBoundedDepth:
     def test_very_deep_chain_does_not_hang(self) -> None:
-        """Build a deep non-cyclic chain and verify the walk terminates."""
+        """A deep non-cyclic chain must terminate promptly."""
         dialect = DqliteDialect()
         deep: BaseException = _dbapi_exc.OperationalError("leaf")
         for i in range(50):
             wrap = _dbapi_exc.OperationalError(f"wrap {i}")
             wrap.__cause__ = deep
             deep = wrap
-        # Must return promptly; no assertion on True/False — the leaf
-        # is a bare OperationalError, so substring-branch handles the
-        # final decision.
         _ = dialect.is_disconnect(deep, None, None)
 
     def test_disconnect_within_cap_is_found(self) -> None:
-        """DqliteConnectionError at depth 9 (well inside the 25-hop cap)
-        must still be classified as disconnect. Pins the upper edge of
-        the walker: a regression lowering the cap would invalidate pool
-        slots off a telemetry/retry stack shorter than the current
-        tower."""
+        """A disconnect at depth 9 (inside the 25-hop cap) must still classify."""
         dialect = DqliteDialect()
         target = _client_exc.DqliteConnectionError("peer rst")
         cur: BaseException = target
@@ -102,12 +82,8 @@ class TestWalkBoundedDepth:
         assert dialect.is_disconnect(top, None, None) is True
 
     def test_disconnect_beyond_cap_is_not_found_by_type_walk(self) -> None:
-        """DqliteConnectionError hidden past the 25-hop cutoff is
-        invisible to the type-dispatch walk. Give the outer
-        OperationalError a non-matching message so the substring
-        fallback cannot flip the verdict; this isolates the walker's
-        depth behaviour.
-        """
+        """A disconnect past the 25-hop cutoff is invisible to the type walk; the outer
+        message is non-matching so the substring fallback can't flip the verdict."""
         dialect = DqliteDialect()
         target = _client_exc.DqliteConnectionError("peer rst")
         cur: BaseException = target

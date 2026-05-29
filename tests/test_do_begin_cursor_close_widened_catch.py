@@ -1,22 +1,7 @@
-"""Pin: ``do_begin``'s post-BEGIN ``cursor.close()`` catch is the
-wider ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` tuple, symmetric with
-``do_close``.
-
-The narrower ``_TRANSPORT_CLASS_EXCEPTIONS`` previously left two
-shapes — ``RuntimeError("Event loop is closed")`` from cross-loop
-dispose and ``ReferenceError`` from a dead ``weakref.proxy`` — to
-escape the ``finally`` body and mask the BEGIN-time exception per
-Python's "finally replaces propagating exception" rule. SA's
-exception wrapping then saw the wrong-class diagnostic and the
-user observed a confusing "Event loop is closed" instead of the
-real BEGIN-time fault.
-
-Mirrors ``do_close``'s wider catch at the same surface (cursor /
-connection close under cross-loop dispose / dead-proxy state).
-Programmer-bug shapes (``AttributeError`` / ``TypeError``) and any
-``IntegrityError`` from a custom audit trigger remain outside the
-wide tuple and propagate as documented.
-"""
+"""Pin: ``do_begin``'s post-BEGIN ``cursor.close()`` uses the wider
+``_FORCE_CLOSE_TAIL_EXCEPTIONS`` tuple (symmetric with ``do_close``), so cross-loop
+``RuntimeError`` / dead-proxy ``ReferenceError`` can't escape the finally and mask the BEGIN
+fault. Programmer-bug shapes (``AttributeError``/``TypeError``) stay outside and propagate."""
 
 from __future__ import annotations
 
@@ -46,10 +31,8 @@ def _make_dialect_and_conn(
 
 
 def test_do_begin_preserves_operational_error_through_runtime_error_close() -> None:
-    """``cursor.close()`` raising ``RuntimeError("Event loop is closed")``
-    after a BEGIN that raised ``OperationalError`` must NOT mask the
-    BEGIN exception. The wider catch swallows the RuntimeError so the
-    OperationalError surfaces as the propagating exception."""
+    """A close-time ``RuntimeError("Event loop is closed")`` must not mask the BEGIN-time
+    ``OperationalError``."""
     dialect, conn = _make_dialect_and_conn(
         begin_exc=OperationalError("real begin error"),
         close_exc=RuntimeError("Event loop is closed"),
@@ -60,9 +43,8 @@ def test_do_begin_preserves_operational_error_through_runtime_error_close() -> N
 
 
 def test_do_begin_preserves_operational_error_through_reference_error_close() -> None:
-    """Symmetric: ``cursor.close()`` raising ``ReferenceError`` from a
-    dead ``weakref.proxy`` post-BEGIN must NOT mask the BEGIN exception.
-    """
+    """Symmetric: a close-time ``ReferenceError`` from a dead ``weakref.proxy`` must not mask
+    the BEGIN exception."""
     dialect, conn = _make_dialect_and_conn(
         begin_exc=OperationalError("real begin error"),
         close_exc=ReferenceError("weakly-referenced object no longer exists"),
@@ -73,9 +55,8 @@ def test_do_begin_preserves_operational_error_through_reference_error_close() ->
 
 
 def test_do_begin_lets_attribute_error_close_propagate() -> None:
-    """Programmer-bug ``AttributeError`` from ``cursor.close()`` is NOT
-    in the wider tuple; it must escape so the bug surfaces. (BEGIN
-    succeeds here so the close-time error is the only candidate.)"""
+    """Programmer-bug ``AttributeError`` from ``cursor.close()`` is outside the wide tuple and
+    must escape so the bug surfaces (BEGIN succeeds here)."""
     dialect, conn = _make_dialect_and_conn(
         begin_exc=None,
         close_exc=AttributeError("cursor lost its close hook"),

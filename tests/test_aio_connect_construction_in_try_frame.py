@@ -1,15 +1,5 @@
-"""Pin: ``DqliteDialect_aio.connect()`` constructs ``raw_conn`` inside
-the ``try`` frame so a ``BaseException`` delivered by the construction
-itself routes through the cleanup arm rather than leaking an orphan
-``AsyncConnection``.
-
-Without the construct-inside-try discipline, a creator factory that
-raises ``BaseException`` (KeyboardInterrupt / SystemExit window) before
-returning leaks the freshly-built object — registered loop locks plus
-``weakref.finalize`` warning surface — without orderly cleanup. The fix
-threads the construction inside the same try frame as the ``connect()``
-await so the cleanup arm runs whenever ``raw_conn`` was bound.
-"""
+"""Pin: ``connect()`` constructs ``raw_conn`` inside the ``try`` frame so a
+``BaseException`` from the construction routes through cleanup, not an orphan leak."""
 
 from typing import Any
 from unittest.mock import MagicMock
@@ -25,12 +15,7 @@ class _Boom(BaseException):
 
 
 async def test_connect_propagates_baseexception_from_creator_fn() -> None:
-    """The creator factory raising ``BaseException`` must propagate
-    untouched. With the construction inside the try frame, ``raw_conn``
-    is still ``None`` so the cleanup arm short-circuits and we re-raise
-    cleanly without an ``UnboundLocalError`` on the ``raw_conn``
-    reference.
-    """
+    """raw_conn is still None, so the cleanup arm short-circuits without UnboundLocalError."""
     dialect = DqliteDialect_aio()
     dialect.loaded_dbapi = MagicMock()
 
@@ -42,9 +27,7 @@ async def test_connect_propagates_baseexception_from_creator_fn() -> None:
 
 
 async def test_connect_propagates_baseexception_from_dbapi_connect() -> None:
-    """Default-factory path: ``loaded_dbapi.connect`` raising
-    ``BaseException`` must also propagate cleanly.
-    """
+    """Default-factory path: ``loaded_dbapi.connect`` raising must propagate cleanly."""
     dialect = DqliteDialect_aio()
 
     def boom(*_a: Any, **_kw: Any) -> Any:
@@ -59,16 +42,10 @@ async def test_connect_propagates_baseexception_from_dbapi_connect() -> None:
 
 
 async def test_connect_cleanup_arm_handles_raw_conn_none() -> None:
-    """The cleanup arm must not ``NameError`` on ``raw_conn`` when
-    construction itself raises (covered by the ``raw_conn is not None``
-    guard added when the construction moved inside the try frame).
-    """
+    """The ``raw_conn is not None`` guard must short-circuit before NameError."""
     dialect = DqliteDialect_aio()
 
     def creator() -> Any:
-        # Raise an Exception that the cleanup arm would otherwise want
-        # to call ``terminate()`` on. The guard must short-circuit
-        # before referencing ``raw_conn``.
         raise RuntimeError("creator failed before binding raw_conn")
 
     with pytest.raises(RuntimeError, match="creator failed"):
@@ -76,11 +53,7 @@ async def test_connect_cleanup_arm_handles_raw_conn_none() -> None:
 
 
 async def test_connect_cleanup_arm_terminates_after_successful_construction() -> None:
-    """When ``raw_conn`` is bound but ``connect()`` raises, the
-    cleanup arm must invoke ``terminate()`` on the AsyncAdaptedConnection
-    wrapping the bound raw_conn — i.e., the fix does not regress the
-    pre-existing cleanup discipline.
-    """
+    """When ``raw_conn`` is bound but ``connect()`` raises, cleanup must terminate it."""
 
     class _ConnRaises:
         def __init__(self) -> None:

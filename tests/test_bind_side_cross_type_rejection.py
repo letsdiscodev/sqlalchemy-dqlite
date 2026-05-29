@@ -1,22 +1,6 @@
-"""Pin: SA bind processors must reject cross-type payloads that the
-result-side already rejects, so a bind→read round-trip via the same
-dialect doesn't write a cell that the same dialect's reader rejects.
-
-The result-side closures raise ``DataError`` on:
-- ``DateTime`` column receiving ``datetime.time`` (no defensible date)
-- ``Date`` column receiving ``datetime.time`` (no defensible date)
-- ``Time`` column receiving ``datetime.datetime`` → narrow
-
-Symmetric bind-side fixes:
-- ``_DqliteDateTime.bind_processor``: reject ``datetime.time`` (raise)
-- ``_DqliteDate.bind_processor``: define one (was None) — narrow
-  ``datetime.datetime`` to ``.date()``, reject ``datetime.time``
-
-Pysqlite parity reference: pysqlite's DATE.bind_processor emits only
-``YYYY-MM-DD`` and rejects time inputs; pysqlite's DATETIME.bind_processor
-likewise rejects time. The result-side rejections chose ``DataError``
-(PEP 249); use the same class for bind-side symmetry.
-"""
+"""SA bind processors reject cross-type payloads symmetrically with the
+result-side, so a bind→read round-trip can't write a cell the reader
+rejects. ``DataError`` (PEP 249) matches the result-side class."""
 
 from __future__ import annotations
 
@@ -42,22 +26,17 @@ class TestDqliteDateTimeBindRejectsTimeOnlyPayload:
             proc(datetime.time(12, 30, 0, tzinfo=datetime.UTC))
 
     def test_well_formed_datetime_still_passes(self) -> None:
-        """A well-formed ``datetime`` is now formatted directly with
-        six fractional digits so cross-writer literal-string
-        predicates match pysqlite bit-identically. The previous
-        identity pass-through routed through dqlitedbapi's encoder
-        which omits the suffix when microseconds are zero."""
+        """Formatted with six fractional digits so cross-writer
+        literal-string predicates match pysqlite bit-identically (the
+        dbapi encoder omits the suffix when microseconds are zero)."""
         proc = _DqliteDateTime(timezone=False).bind_processor(None)
         assert proc is not None
         dt = datetime.datetime(2024, 1, 2, 3, 4, 5)
         assert proc(dt) == "2024-01-02 03:04:05.000000"
 
     def test_bare_date_still_widens_to_midnight(self) -> None:
-        """The pysqlite-parity widen at the existing bind-side
-        branch must not regress. Output is the formatted string
-        with explicit ``.000000`` fractional component so
-        cross-writer literal-string predicates match pysqlite
-        bit-identically."""
+        """A bare date widens to midnight with explicit ``.000000`` so
+        cross-writer literal-string predicates match pysqlite."""
         proc = _DqliteDateTime(timezone=False).bind_processor(None)
         assert proc is not None
         d = datetime.date(2024, 1, 2)
@@ -66,18 +45,15 @@ class TestDqliteDateTimeBindRejectsTimeOnlyPayload:
 
 class TestDqliteDateBindNarrowsDatetimeAndRejectsTime:
     def test_datetime_payload_narrows_to_date(self) -> None:
-        """A ``datetime`` bound to a Date column must serialize as
-        ``YYYY-MM-DD`` only — pysqlite-parity. Without the narrowing
-        the dbapi writes a full timestamp into a Date cell, breaking
-        cross-writer parity."""
+        """A ``datetime`` bound to a Date column narrows to
+        ``YYYY-MM-DD`` (pysqlite-parity)."""
         proc = _DqliteDate().bind_processor(None)
         assert proc is not None
         dt = datetime.datetime(2020, 5, 17, 14, 30, 0)
         result = proc(dt)
         assert result == datetime.date(2020, 5, 17)
         assert isinstance(result, datetime.date)
-        # datetime.date is NOT a subclass of datetime.datetime
-        # (the reverse is true), so the narrow is observable.
+        # date is NOT a subclass of datetime, so the narrow is observable.
         assert not isinstance(result, datetime.datetime)
 
     def test_time_only_payload_raises_data_error(self) -> None:

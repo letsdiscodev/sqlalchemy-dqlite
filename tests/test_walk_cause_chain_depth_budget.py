@@ -1,11 +1,7 @@
-"""Pin: ``_walk_cause_chain`` reaches deep leaves through group fan-out.
+"""``_walk_cause_chain`` reaches deep leaves through group fan-out.
 
-Two contracts:
-
-1. Group children enqueue at the parent's depth (fan-out, not a wrap
-   layer) so the spine-depth budget for cause/context is preserved.
-2. ``max_depth`` is high enough (25) for realistic retry + telemetry +
-   circuit-breaker + group-fanout towers.
+Group children enqueue at the parent's depth (not a wrap layer), preserving the spine-depth
+budget for cause/context, and ``max_depth=25`` covers realistic wrap towers.
 """
 
 from __future__ import annotations
@@ -15,8 +11,7 @@ from sqlalchemydqlite.base import DqliteDialect, _walk_cause_chain
 
 
 def _wrap(n: int, leaf: BaseException) -> BaseException:
-    """Return a chain of ``n`` ``RuntimeError`` wrappers ending in
-    ``leaf`` via ``__cause__``."""
+    """Return ``n`` ``RuntimeError`` wrappers ending in ``leaf`` via ``__cause__``."""
     cur: BaseException = leaf
     for i in range(n):
         outer = RuntimeError(f"wrap-{i}")
@@ -26,10 +21,7 @@ def _wrap(n: int, leaf: BaseException) -> BaseException:
 
 
 def test_deep_wrap_tower_with_group_at_root_classifies_leaf() -> None:
-    """A group at depth 0 with each child being a deep wrap tower
-    (depth 12) ending in DqliteConnectionError must be classified as
-    disconnect. With the old depth=10 + children-at-depth+1 contract,
-    the leaves would sit at depth 13 and be missed."""
+    """A group whose child is a depth-12 wrap tower to DqliteConnectionError is a disconnect."""
     leaf = _client_exc.DqliteConnectionError("addr: timed out")
     deep_wrap = _wrap(12, leaf)
     group = BaseExceptionGroup("pool init failed", [deep_wrap])
@@ -37,9 +29,7 @@ def test_deep_wrap_tower_with_group_at_root_classifies_leaf() -> None:
 
 
 def test_group_children_enqueue_at_parent_depth() -> None:
-    """Direct walk pin: a group at depth 0 wrapping a chain of 24
-    causes must yield the leaf — children at parent depth means the
-    spine-depth budget is fully available to the cause walk."""
+    """A group wrapping a 24-cause chain yields the leaf: children sit at the parent's depth."""
     leaf = _client_exc.DqliteConnectionError("leaf")
     deep_wrap = _wrap(24, leaf)
     group = BaseExceptionGroup("g", [deep_wrap])
@@ -67,15 +57,13 @@ def test_pathological_cycle_still_terminates() -> None:
     b.__cause__ = a
 
     yielded = list(_walk_cause_chain(a))
-    # Both visited once.
     assert len(yielded) == 2
     assert yielded[0] is a
     assert yielded[1] is b
 
 
 def test_nested_groups_traverse_via_queue() -> None:
-    """Nested group: outer group → inner group → leaf. Must reach the
-    leaf even with both groups present."""
+    """Nested groups (outer to inner to leaf) still reach the leaf."""
     leaf = _client_exc.DqliteConnectionError("leaf in nested group")
     inner_group = BaseExceptionGroup("inner", [leaf])
     outer_group = BaseExceptionGroup("outer", [inner_group])

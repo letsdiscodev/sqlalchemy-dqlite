@@ -1,19 +1,8 @@
-"""Pin: ``is_disconnect``'s bare-``DatabaseError`` arm uses type
-identity (``type(cause) is DatabaseError``), NOT ``isinstance``.
+"""Pin: is_disconnect's bare-DatabaseError arm uses type identity, NOT isinstance.
 
-The dbapi class hierarchy has many ``DatabaseError`` subclasses
-(``OperationalError``, ``IntegrityError``, ``InternalError``,
-``ProgrammingError``, ``DataError``, ``NotSupportedError``). An
-``isinstance`` check would catch all of them via MRO and route them
-through the bare-``DatabaseError`` substring scan; if any future
-release ever assigns CORRUPT / FORMAT / NOTADB as an extended code on
-a subclass, a caller-bug ``ProgrammingError`` could silently classify
-as a disconnect — SA's retry path would then re-run the broken caller
-code against a fresh connection, duplicating non-idempotent INSERTs.
-
-Pin every ``DatabaseError`` subclass × benign-and-disconnect-code-and-
-message permutation as ``is_disconnect() is False``.
-"""
+isinstance would catch every DatabaseError subclass via MRO, so a caller-bug
+ProgrammingError carrying a slot-fatal code could classify as disconnect and have SA's
+retry duplicate non-idempotent INSERTs."""
 
 from __future__ import annotations
 
@@ -34,8 +23,6 @@ def _dialect() -> DqliteDialect:
     return DqliteDialect.__new__(DqliteDialect)
 
 
-# Subclasses of DatabaseError that must NOT trigger disconnect
-# classification via the bare-DatabaseError arm.
 _SUBCLASSES = [
     IntegrityError,
     InternalError,
@@ -49,12 +36,8 @@ _SUBCLASSES = [
 @pytest.mark.parametrize(
     "code",
     [
-        # Codes inside _BARE_DBE_DISCONNECT_CODES: would activate the
-        # substring scan via isinstance leakage; type-identity blocks
-        # this.
+        # Slot-fatal codes: would leak via isinstance; type-identity blocks them.
         *list(_BARE_DBE_DISCONNECT_CODES),
-        # Codes outside: would be inert today via the code-set
-        # intersection, included for completeness.
         21,  # SQLITE_MISUSE
         25,  # SQLITE_RANGE
         None,
@@ -70,17 +53,13 @@ _SUBCLASSES = [
 def test_databaseerror_subclasses_do_not_classify_as_disconnect(
     subclass: type[DatabaseError], code: int | None, message: str
 ) -> None:
-    """Every ``DatabaseError`` subclass is a caller-bug surface or a
-    syntactic-error surface and MUST propagate unchanged. The type-
-    identity check on the bare-``DatabaseError`` arm enforces this."""
     if code is None:
         exc = subclass(message)
     else:
         try:
             exc = subclass(message, code=code)
         except TypeError:
-            # NotSupportedError doesn't accept code kwarg; skip the
-            # coded permutation for it.
+            # NotSupportedError doesn't accept the code kwarg.
             pytest.skip(f"{subclass.__name__} does not accept code kwarg")
             return
     dialect = _dialect()
@@ -95,11 +74,7 @@ def test_databaseerror_subclasses_do_not_classify_as_disconnect(
 def test_bare_databaseerror_with_disconnect_code_and_substring_does_classify(
     code: int,
 ) -> None:
-    """Sanity: a BARE ``DatabaseError`` (not a subclass) with a code in
-    ``_BARE_DBE_DISCONNECT_CODES`` classifies as disconnect — pin the
-    type-identity arm's positive side. After the substring-gate fix,
-    the disconnect-style message is no longer required (mirrors
-    do_ping's code-only classification)."""
+    """Positive side: a bare DatabaseError with a slot-fatal code classifies as disconnect."""
     exc = DatabaseError("wire decode failed validation", code=code)
     dialect = _dialect()
     assert dialect.is_disconnect(exc, None, None) is True
@@ -109,14 +84,7 @@ def test_bare_databaseerror_with_disconnect_code_and_substring_does_classify(
 def test_bare_databaseerror_with_disconnect_code_classifies_regardless_of_message(
     code: int,
 ) -> None:
-    """Sanity: bare ``DatabaseError`` with disconnect code classifies
-    as disconnect regardless of message — the code is the load-bearing
-    signal. Pre-fix this returned False (the substring gate blocked
-    classification on the canonical engine wordings); post-fix it
-    short-circuits ``return True`` mirroring ``do_ping``'s arm at
-    base.py:2935-2945. See
-    ``test_is_disconnect_bare_dbe_short_circuits_on_slot_fatal_codes.py``
-    for the full parametrised coverage."""
+    """A slot-fatal code classifies regardless of message — the code is the signal."""
     exc = DatabaseError("some unrelated server message", code=code)
     dialect = _dialect()
     assert dialect.is_disconnect(exc, None, None) is True

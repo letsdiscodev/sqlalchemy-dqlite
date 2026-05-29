@@ -1,25 +1,6 @@
-"""Pin: ``AsyncAdaptedConnection.close()`` and
-``AsyncAdaptedCursor.close()`` must release their strong
-back-references so a closed adapter retained by SA's pool
-diagnostics ring / pytest session-fixture cache does not pin
-the inner dbapi ``AsyncConnection`` (and through it the
-client-layer state, registered finalizers, and traceback
-references on ``_invalidation_cause``).
-
-Mirrors the dbapi-layer fix on ``Cursor.close`` /
-``AsyncCursor.close`` (cursor → connection back-reference)
-and ``AsyncConnection.close`` finally clause (inner conn
-clear). SA's reference adapter (``aiosqlite``) does not do
-this — but the dqlite stack's amplification factor
-(registered weakref.finalize, loop-bound primitives, frame-
-pinning ``_invalidation_cause``) makes the discipline
-materially worth applying.
-
-``weakref.proxy`` preserves the API (calls forward to the
-inner while it is alive) — only after the inner is
-genuinely GC'd does ``ReferenceError`` surface, which is
-benign post-close.
-"""
+"""close() on connection and cursor must drop strong back-refs so a closed
+adapter retained by SA's pool ring / pytest fixture cache cannot pin the
+inner dbapi AsyncConnection (and through it client state and finalizers)."""
 
 from __future__ import annotations
 
@@ -48,8 +29,7 @@ def test_async_adapted_connection_close_drops_strong_inner_ref() -> None:
     inner_ref = weakref.ref(inner)
     adapter = AsyncAdaptedConnection(inner)
 
-    # Stub out ``await_only`` and ``in_greenlet`` so close() runs
-    # in-process without a real greenlet context.
+    # Stub await_only / in_greenlet so close() runs without a greenlet context.
     from sqlalchemydqlite import aio as aio_module
 
     async def _no_op() -> None:
@@ -92,8 +72,7 @@ def test_async_adapted_cursor_close_drops_strong_inner_conn_ref() -> None:
     adapter = AsyncAdaptedConnection(inner)
     cur = AsyncAdaptedCursor(adapter)
 
-    # Stub out ``await_only`` and ``in_greenlet`` so adapter.close()
-    # runs in-process without a real greenlet context.
+    # Stub await_only / in_greenlet so adapter.close() runs without a greenlet.
     from sqlalchemydqlite import aio as aio_module
 
     real_await = aio_module.await_only  # type: ignore[attr-defined]
@@ -119,10 +98,7 @@ def test_async_adapted_cursor_close_drops_strong_inner_conn_ref() -> None:
 
     inner_ref = weakref.ref(inner)
     del inner
-    # The closed adapter is left reachable (mirrors SA's pool
-    # diagnostic ring / pytest fixture cache pattern). Verify that
-    # the inner dbapi AsyncConnection is GC'able anyway — both
-    # adapter and cursor must have dropped their strong refs.
+    # Adapter left reachable (mirrors SA's pool ring); inner must still be GC'able.
     gc.collect()
 
     assert inner_ref() is None, (

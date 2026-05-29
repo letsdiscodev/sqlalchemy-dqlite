@@ -1,13 +1,5 @@
-"""Pin: async ``DqliteDialect_aio.do_ping`` mirrors the sync sibling's
-exception arms when the synchronous ``AsyncConnection.cursor()`` call
-inside ``_async_ping`` raises.
-
-The async sibling's outer catch list was earlier missing
-``DatabaseError``; the arm now includes it (gating on
-``_BARE_DBE_DISCONNECT_CODES`` for codes 11/24/26 = CORRUPT / FORMAT /
-NOTADB). This test pins that contract end-to-end so a future refactor
-that drops the arm is caught at unit level.
-"""
+"""Pin: async ``do_ping`` mirrors the sync exception arms when inner ``cursor()`` raises,
+including ``DatabaseError`` gated on ``_BARE_DBE_DISCONNECT_CODES``."""
 
 from __future__ import annotations
 
@@ -59,9 +51,7 @@ async def test_do_ping_returns_false_on_transport_class_cursor_raise(
 async def test_do_ping_returns_false_on_databaseerror_disconnect_code(
     code: int,
 ) -> None:
-    """``DatabaseError`` with code in ``_BARE_DBE_DISCONNECT_CODES``
-    (CORRUPT/FORMAT/NOTADB) classifies as ping-fail — the slot is
-    not usable. Mirrors the sync sibling's arm at ``base.py``."""
+    """``DatabaseError`` with a disconnect code classifies as ping-fail."""
     adapter = _make_adapter_with_cursor_raise(DatabaseError("CORRUPT: image truncated", code=code))
     dialect = DqliteDialect_aio()
     result = await greenlet_spawn(dialect.do_ping, adapter)
@@ -69,10 +59,7 @@ async def test_do_ping_returns_false_on_databaseerror_disconnect_code(
 
 
 async def test_do_ping_propagates_databaseerror_non_disconnect_code() -> None:
-    """``DatabaseError`` with a code OUTSIDE
-    ``_BARE_DBE_DISCONNECT_CODES`` is a genuine database fault that
-    should NOT be reinterpreted as a transport failure. Propagate so
-    the caller sees the real cause; pool stays unchanged."""
+    """``DatabaseError`` with a non-disconnect code is a real fault and must propagate."""
     adapter = _make_adapter_with_cursor_raise(DatabaseError("not-found shape", code=12))
     dialect = DqliteDialect_aio()
     with pytest.raises(DatabaseError):

@@ -1,19 +1,5 @@
-"""Pin: SQLite-incompatible capability flags
-(``supports_sequences``, ``supports_identity_columns``,
-``preexecute_autoincrement_sequences``) are explicitly pinned at
-class scope rather than inherited.
-
-The dialect carries an elaborate drift-defence block re-pinning
-inherited flags whose inherited value happens to match the desired
-value, on the rationale that a future ``DefaultDialect`` default
-flip would silently change behaviour. Three SQLite-incompatible
-flags fit the same pattern but were inherited rather than pinned
-locally — fixed by adding explicit ``False`` declarations.
-
-Without the explicit pins, an upstream flip of any of these three
-defaults would silently emit DDL the dqlite cluster rejects with
-syntax errors.
-"""
+"""Pin: SQLite-incompatible capability flags are declared False at class scope, not inherited,
+so an upstream default flip can't silently emit DDL the dqlite cluster rejects."""
 
 from __future__ import annotations
 
@@ -23,7 +9,6 @@ from sqlalchemydqlite.base import DqliteDialect
 def test_supports_sequences_pinned_false() -> None:
     """SQLite (and dqlite) has no SEQUENCE primitive."""
     assert DqliteDialect.supports_sequences is False
-    # The flag must be set on the dialect class body, not inherited.
     assert "supports_sequences" in DqliteDialect.__dict__
 
 

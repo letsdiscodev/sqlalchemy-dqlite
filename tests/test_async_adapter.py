@@ -15,20 +15,15 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection, AsyncAdaptedCursor
 def _simulated_greenlet_for_patched_await_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Tests in this module patch ``sqlalchemydqlite.aio.await_only``
-    with a sync driver to resolve coroutines without a real SA
-    greenlet. The ``in_greenlet()`` preflight on close()/terminate()
-    would otherwise short-circuit to the sync force-close path
-    before the patched ``await_only`` is reached. Pretend we're in
-    an SA greenlet so the patched ``await_only`` actually drives.
-    """
+    """Pretend we're in an SA greenlet so the ``in_greenlet()`` preflight
+    on close()/terminate() doesn't short-circuit past the patched
+    ``await_only`` to the sync force-close path."""
     from sqlalchemydqlite import aio as aio_module
 
     monkeypatch.setattr(aio_module, "in_greenlet", lambda: True)
 
 
 def _make_cursor() -> AsyncAdaptedCursor:
-    """Create an AsyncAdaptedCursor with a mocked connection."""
     mock_conn = MagicMock()
     adapted_conn = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
     adapted_conn._connection = mock_conn
@@ -39,8 +34,7 @@ def _make_cursor() -> AsyncAdaptedCursor:
 def _run_sync(coro_or_value: object) -> object:
     """Replacement for await_only that resolves coroutines synchronously."""
     if hasattr(coro_or_value, "__await__") or hasattr(coro_or_value, "cr_await"):
-        # It's a coroutine -- we can't actually await it in sync context,
-        # but our mocks return plain values, so send(None) is enough.
+        # Mocks return plain values, so a single send(None) resolves them.
         try:
             coro_or_value.send(None)  # type: ignore[attr-defined]
         except StopIteration as e:
@@ -53,10 +47,8 @@ class TestAsyncAdaptedCursorRowsCleared:
         """After a SELECT then an INSERT, fetchone() must return None."""
         cursor = _make_cursor()
 
-        # Simulate that a previous SELECT populated _rows
         cursor._rows = deque([(1, "alice")])
 
-        # Set up a mock inner cursor that returns no description (DML)
         mock_inner = MagicMock()
         mock_inner.description = None
         mock_inner.lastrowid = 1
@@ -77,11 +69,9 @@ class TestAsyncAdaptedCursorRowsCleared:
         """
         cursor = _make_cursor()
 
-        # Simulate that a previous SELECT populated _rows
         cursor._rows = deque([(1, "alice"), (2, "bob")])
 
         mock_inner = MagicMock()
-        # DML: underlying cursor reports no description.
         mock_inner.description = None
         mock_inner.lastrowid = 3
         mock_inner.rowcount = 2
@@ -98,12 +88,8 @@ class TestAsyncAdaptedCursorRowsCleared:
         assert cursor.description is None
 
     def test_executemany_returning_captures_rows_and_description(self) -> None:
-        """When executemany is run with a RETURNING clause, the underlying
-        cursor accumulates rows across parameter sets. The adapter must
-        mirror execute()'s pattern: read description and drain fetchall
-        into self._rows so downstream SQLAlchemy result handling sees the
-        rows. Before the fix the adapter silently dropped them.
-        """
+        """executemany with RETURNING must drain accumulated rows into
+        self._rows (mirroring execute), not drop them."""
         cursor = _make_cursor()
 
         mock_inner = MagicMock()
@@ -114,15 +100,11 @@ class TestAsyncAdaptedCursorRowsCleared:
         ]
         mock_inner.description = description
         mock_inner.executemany.return_value = None
-        # The adapter consumes via ``drain_rows`` (sync, ownership-
-        # transfer) instead of ``fetchall`` to avoid an intermediate
-        # copy. ``drain_rows`` is the SA-adapter contract; ``fetchall``
-        # is the user-facing fetch.
+        # Adapter consumes via ``drain_rows`` (ownership-transfer), not
+        # ``fetchall``, to avoid an intermediate copy.
         mock_inner.drain_rows.return_value = returned_rows
         mock_inner.close.return_value = None
-        # Underlying AsyncCursor sets rowcount = len(rows) for the
-        # RETURNING path; the adapter must mirror it so
-        # result.rowcount in SQLAlchemy is not stuck at -1.
+        # Mirror the RETURNING-path rowcount so result.rowcount isn't -1.
         mock_inner.rowcount = len(returned_rows)
         mock_inner.lastrowid = 3
         cursor._connection.cursor.return_value = mock_inner
@@ -142,11 +124,8 @@ class TestAsyncAdaptedCursorRowsCleared:
         assert cursor.fetchone() is None
 
     def test_execute_returning_captures_rows_rowcount_and_lastrowid(self) -> None:
-        """Single-execute RETURNING: the adapter must copy rowcount
-        and lastrowid from the underlying cursor alongside description
-        and rows, so SQLAlchemy's Result layer sees the affected-row
-        count for INSERT ... RETURNING.
-        """
+        """Single-execute RETURNING copies rowcount and lastrowid alongside
+        description and rows, so SA's Result layer sees the affected count."""
         cursor = _make_cursor()
 
         mock_inner = MagicMock()
@@ -157,8 +136,6 @@ class TestAsyncAdaptedCursorRowsCleared:
         ]
         mock_inner.description = description
         mock_inner.execute.return_value = None
-        # Adapter consumes via drain_rows (ownership-transfer); see
-        # the executemany sibling test for the rationale.
         mock_inner.drain_rows.return_value = returned_rows
         mock_inner.close.return_value = None
         mock_inner.rowcount = 1
@@ -176,7 +153,7 @@ class TestAsyncAdaptedCursorRowsCleared:
 
 
 def _has_finally_with_close(func: object) -> bool:
-    """Check if a function has cursor.close() inside a finally block."""
+    """True if the function calls ``.close()`` inside a finally block."""
     source = textwrap.dedent(inspect.getsource(func))  # type: ignore[arg-type]
     tree = ast.parse(source)
 
@@ -238,13 +215,8 @@ class TestAsyncAdaptedCursorCleanup:
 
 
 class TestAsyncAdaptedConnectionClose:
-    """close() attempts rollback before closing.
-
-    SQLAlchemy's async adapter previously closed the connection without
-    a rollback, leaving any open server-side transaction dangling in
-    unpooled / NullPool usage. Verify rollback is called first, and
-    verify rollback failure does not prevent close.
-    """
+    """close() rolls back before closing, so an open server-side transaction
+    doesn't dangle under NullPool; rollback failure must not prevent close."""
 
     def test_close_attempts_rollback_first(self) -> None:
         mock_conn = MagicMock()
@@ -261,9 +233,7 @@ class TestAsyncAdaptedConnectionClose:
         assert calls == ["rollback", "close"], f"Expected rollback then close, got {calls}"
 
     def test_close_proceeds_when_rollback_raises_connection_error(self) -> None:
-        """A failing rollback caused by a connection-level error (e.g.
-        broken transport, OS-level disconnect, server already closed)
-        must not block close — resource cleanup is more important."""
+        """A connection-level rollback failure must not block close."""
         from dqlitedbapi.exceptions import OperationalError
 
         mock_conn = MagicMock()
@@ -285,9 +255,8 @@ class TestAsyncAdaptedConnectionClose:
         assert "close" in calls, "close() must run even if rollback raised"
 
     def test_close_propagates_programming_error_from_rollback(self) -> None:
-        """A failing rollback that looks like a programming bug
-        (AttributeError / TypeError / bare RuntimeError) must propagate
-        so refactor regressions don't get swallowed silently."""
+        """A rollback failure that looks like a programming bug
+        (AttributeError / TypeError / bare RuntimeError) must propagate."""
         import pytest
 
         mock_conn = MagicMock()
@@ -305,12 +274,9 @@ class TestAsyncAdaptedConnectionClose:
 
 
 class TestAioDialectConnectCleanup:
-    """DqliteDialect_aio.connect() eagerly establishes the TCP
-    connection. If that raises, raw_conn (already constructed) must
-    be closed — otherwise the partial connection leaks. Cleanup must
-    also fire on cancellation so a parent asyncio.timeout() firing
-    mid-connect doesn't leave the raw_conn dangling.
-    """
+    """DqliteDialect_aio.connect() eagerly opens the TCP connection; if that
+    raises (or is cancelled mid-connect), the partial raw_conn must be closed
+    so it doesn't leak."""
 
     def test_close_is_called_when_eager_connect_fails(self) -> None:
         import pytest
@@ -337,9 +303,8 @@ class TestAioDialectConnectCleanup:
         raw_conn.close.assert_called_once()
 
     def test_close_is_called_on_cancellation(self) -> None:
-        """CancelledError during eager connect must trigger cleanup
-        AND still propagate — callers rely on structured-concurrency
-        signal fidelity."""
+        """CancelledError during eager connect triggers cleanup and still
+        propagates (structured-concurrency signal fidelity)."""
         import asyncio
 
         import pytest
@@ -377,9 +342,8 @@ class TestAioAllExports:
 
 class TestAioCursorSetInputSizes:
     """``setinputsizes`` accepts both PEP 249's single-sequence shape and
-    SA's connector-reference variadic shape (the no-op body ignores
-    the sizes either way; the wide accept-arm avoids a TypeError on
-    the SA-internal variadic call shape)."""
+    SA's variadic shape (the wide accept-arm avoids a TypeError on SA's
+    internal variadic call)."""
 
     def test_accepts_single_sequence_argument(self) -> None:
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
@@ -387,21 +351,20 @@ class TestAioCursorSetInputSizes:
         cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
         # __new__ skips __init__; seed the _closed flag the guard reads.
         cursor._closed = False
-        cursor.setinputsizes([10, None, 20])  # no error
+        cursor.setinputsizes([10, None, 20])
 
     def test_accepts_variadic_sa_shape(self) -> None:
-        """SA's connector reference uses ``setinputsizes(*inputsizes)``.
-        The adapter must accept that shape."""
+        """SA's connector reference uses ``setinputsizes(*inputsizes)``."""
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
         cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
         cursor._closed = False
-        cursor.setinputsizes(10, None, 20)  # no error
-        cursor.setinputsizes()  # empty variadic — no error
+        cursor.setinputsizes(10, None, 20)
+        cursor.setinputsizes()  # empty variadic
 
 
 class TestAioAdapterReturnAnnotations:
-    """Lock in the narrower return annotations on the async adapter surface."""
+    """Lock in the narrower return annotations on the adapter surface."""
 
     def test_execute_and_executemany_return_none(self) -> None:
         import inspect
@@ -415,21 +378,14 @@ class TestAioAdapterReturnAnnotations:
         assert sig.return_annotation is None or sig.return_annotation == "None"
 
     def test_execute_parameters_narrowed(self) -> None:
-        """``parameters`` must not widen back to ``Any``: mypy --strict
-        then cannot warn callers who pass a bare ``str`` (a common typo
-        for ``(val,)``) or a mapping (forbidden under qmark). PEP 249
-        single-execute shape is Sequence | Mapping | None.
-        """
+        """``parameters`` must not widen back to ``Any``, so mypy --strict
+        can warn callers passing a bare ``str`` or a mapping."""
         import typing
 
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
         hints = typing.get_type_hints(AsyncAdaptedCursor.execute)
         annotation = hints["parameters"]
-        # Resolved union of Sequence[Any], Mapping[str, Any], None —
-        # the narrow tuple of allowed shapes. The precise check is
-        # that ``Any`` is NOT the bare annotation; a union with
-        # multiple branches is sufficient.
         assert annotation is not typing.Any, "execute(parameters) must not be typed as bare Any"
 
     def test_executemany_seq_of_parameters_narrowed(self) -> None:
@@ -444,11 +400,8 @@ class TestAioAdapterReturnAnnotations:
         )
 
     def test_iter_returns_self(self) -> None:
-        """``__iter__`` returns ``Self`` (PEP 673) so subclass typing
-        is preserved through ``iter(cursor)``. Mirrors the dbapi sibling
-        cursors (``Cursor.__iter__`` and ``AsyncCursor.__aiter__``).
-        Accept either the resolved ``Self`` object or the stringified
-        form."""
+        """``__iter__`` returns ``Self`` (PEP 673) so subclass typing is
+        preserved through ``iter(cursor)``."""
         import inspect
 
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
@@ -457,10 +410,7 @@ class TestAioAdapterReturnAnnotations:
         assert "Self" in str(sig.return_annotation)
 
     def test_next_returns_row_tuple(self) -> None:
-        """``__next__`` returns ``tuple[Any, ...]`` to match the
-        cursor's documented row type (``fetchone()`` returns
-        ``tuple[Any, ...] | None``). Pin against silent widening back
-        to bare ``Any``."""
+        """``__next__`` returns ``tuple[Any, ...]``, not bare ``Any``."""
         import inspect
 
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
@@ -470,11 +420,8 @@ class TestAioAdapterReturnAnnotations:
 
 
 class TestAioAdapterCursorFetchMethods:
-    """The adapter's fetch* methods buffer rows into a deque populated
-    by ``execute``. The integration tests exercise them via SQLAlchemy
-    Result, which bypasses these entry points entirely — so direct
-    unit tests pin the semantics for non-SQLAlchemy consumers.
-    """
+    """Direct unit tests for the fetch* deque semantics — SA's Result layer
+    bypasses these entry points, so they only matter to non-SA consumers."""
 
     def _cursor_with_rows(self, rows: list[tuple[object, ...]]) -> object:
         from collections import deque
@@ -484,9 +431,7 @@ class TestAioAdapterCursorFetchMethods:
         cursor = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
         cursor._rows = deque(rows)
         cursor.arraysize = 1
-        # Adapter fetch methods enforce the closed-state check; set
-        # the flag to False so the mock cursor behaves like a
-        # freshly-opened one.
+        # Fetch methods enforce a closed-state check; seed it open.
         cursor._closed = False
         return cursor
 
@@ -498,16 +443,12 @@ class TestAioAdapterCursorFetchMethods:
         assert cursor.fetchone() is None  # type: ignore[attr-defined]
 
     def test_fetchone_return_annotation_admits_none(self) -> None:
-        """Pin ``fetchone -> tuple[Any, ...] | None`` so a silent
-        widening (e.g. back to ``Any | None`` which collapses to
-        ``Any`` under mypy gradual typing, or further to ``Any``)
-        is caught here rather than at a downstream type-check site.
-        """
+        """Pin ``fetchone -> tuple[Any, ...] | None`` against silent
+        widening to ``Any``."""
         import typing
 
         hints = typing.get_type_hints(AsyncAdaptedCursor.fetchone)
         args = typing.get_args(hints["return"])
-        # Union members: tuple[Any, ...] and NoneType.
         non_none = [a for a in args if a is not type(None)]
         assert type(None) in args
         assert len(non_none) == 1
@@ -519,7 +460,6 @@ class TestAioAdapterCursorFetchMethods:
         cursor = self._cursor_with_rows([(1,), (2,), (3,), (4,)])
         cursor.arraysize = 2  # type: ignore[attr-defined]
         assert list(cursor.fetchmany()) == [(1,), (2,)]  # type: ignore[attr-defined]
-        # Remaining rows are still available.
         assert list(cursor.fetchmany()) == [(3,), (4,)]  # type: ignore[attr-defined]
 
     def test_fetchmany_explicit_size(self) -> None:
@@ -539,11 +479,9 @@ class TestAioAdapterCursorFetchMethods:
 
 
 class TestAioAdapterConnectionDelegations:
-    """AsyncAdaptedConnection.commit / rollback / cursor are thin
-    sync-over-async shims via ``await_only``. A refactor that awaits
-    the wrong attribute would silently skip transaction boundaries or
-    hand back a cursor of the wrong type. Unit tests are cheap.
-    """
+    """commit / rollback / cursor are thin sync-over-async shims via
+    ``await_only``; awaiting the wrong attribute would silently skip a
+    transaction boundary or return the wrong cursor type."""
 
     def test_commit_delegates_through_await_only(self) -> None:
         from unittest.mock import AsyncMock, MagicMock, patch
@@ -599,10 +537,9 @@ class TestAioAdapterConnectionDelegations:
 
 
 class TestAsyncAdaptedCursorDescriptionConsistency:
-    """If ``fetchall`` raises mid-call, ``description`` must not be
-    left set with an empty ``_rows`` buffer — SQLAlchemy's Result
-    layer treats that pair as an empty result set, indistinguishable
-    from "execute succeeded but fetched no rows"."""
+    """If row-draining raises mid-call, ``description`` must roll back to
+    None — SA's Result layer reads description-set + empty ``_rows`` as a
+    legitimately empty result set."""
 
     def test_fetchall_raise_leaves_description_none(self) -> None:
         import pytest
@@ -613,11 +550,8 @@ class TestAsyncAdaptedCursorDescriptionConsistency:
         mock_inner.description = (("id", 1, None, None, None, None, None),)
         mock_inner.execute.return_value = None
         mock_inner.close.return_value = None
-        # ``drain_rows`` raises before returning — the adapter must not
-        # commit ``description`` nor leave ``_rows`` in a half-assigned
-        # state. The test originally asserted on ``fetchall`` because the
-        # adapter used to call that; we now drive the ownership-transfer
-        # path via ``drain_rows`` so the failure-injection moves with it.
+        # ``drain_rows`` raises before returning: the adapter must not commit
+        # ``description`` nor leave ``_rows`` half-assigned.
         mock_inner.drain_rows.side_effect = RuntimeError("synthetic drain_rows failure")
         cursor._connection.cursor.return_value = mock_inner
 
@@ -636,16 +570,13 @@ class TestAsyncAdaptedCursorDescriptionConsistency:
 
 
 class TestAsyncAdaptedCursorDescriptionType:
-    """``cursor.description`` is a PEP 249 sequence of sequences. The
-    adapter must accept (and pass through) any sequence the underlying
-    dbapi cursor returns — list, tuple, or other — without
-    converting."""
+    """``cursor.description`` is passed through unconverted, whatever
+    sequence type the underlying dbapi cursor returns."""
 
     def test_description_passes_through_tuple_of_tuples(self) -> None:
         cursor = _make_cursor()
 
         mock_inner = MagicMock()
-        # Underlying cursor returns a tuple-of-tuples description.
         mock_inner.description = (
             ("id", 1, None, None, None, None, None),
             ("name", 3, None, None, None, None, None),
@@ -660,5 +591,4 @@ class TestAsyncAdaptedCursorDescriptionType:
         with patch("sqlalchemydqlite.aio.await_only", side_effect=_run_sync):
             cursor.execute("SELECT id, name FROM t")
 
-        # Adapter must preserve the description untouched.
         assert cursor.description == mock_inner.description

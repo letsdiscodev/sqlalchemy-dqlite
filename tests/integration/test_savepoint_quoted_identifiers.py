@@ -1,18 +1,10 @@
-"""SAVEPOINT names that require double-quoting must round-trip through
-SA → dbapi → client → wire → server.
+"""Quoted-identifier SAVEPOINT names must round-trip through
+SA -> dbapi -> client -> wire -> server.
 
-SQLAlchemy auto-generates bare identifiers (``sa_savepoint_N``); user
-code rarely supplies SAVEPOINT names directly. But raw ``connection
-.execute(text('SAVEPOINT "..."'))`` is legal SQLite and the dialect
-must transparently pass quoted identifiers through.
-
-The dialect inherits ``do_savepoint`` / ``do_release_savepoint`` /
-``do_rollback_to_savepoint`` from ``DefaultDialect``; this test pins
-the contract that quoted-identifier SAVEPOINTs work end-to-end. After
-the client-side tracker fix that stops tracking quoted names locally
-(``_parse_savepoint_name`` returns None for double-quoted forms), the
-local ``in_transaction`` flag will reflect the trade-off — but the
-SAVEPOINT round-trip itself remains functional.
+Note the client-side tracker stops tracking quoted names locally
+(``_parse_savepoint_name`` returns None for double-quoted forms), so the
+local ``in_transaction`` flag reflects that trade-off; the round-trip itself
+remains functional.
 """
 
 from __future__ import annotations
@@ -80,13 +72,8 @@ async def async_quoted_sp_table(
 
 @pytest.mark.integration
 class TestSavepointQuotedIdentifiers:
-    """Sync round-trip tests for SAVEPOINT names that require quoting.
-
-    Use raw ``text()`` so the assertions are about end-to-end behaviour
-    of the dialect / dbapi / wire stack, not about SA's
-    ``IdentifierPreparer`` internals. The identifier formatter is SA's
-    responsibility; we only need to know dqlite accepts quoted names.
-    """
+    """Raw ``text()`` so assertions pin the dialect/dbapi/wire stack,
+    not SA's ``IdentifierPreparer`` internals."""
 
     def test_savepoint_with_reserved_word_name(self, quoted_sp_table: tuple[Engine, Table]) -> None:
         engine, table = quoted_sp_table
@@ -116,7 +103,6 @@ class TestSavepointQuotedIdentifiers:
             conn.execute(insert(table).values(label="inner"))
             conn.execute(text('ROLLBACK TO SAVEPOINT "1stcheckpoint"'))
             conn.execute(text('RELEASE SAVEPOINT "1stcheckpoint"'))
-            # Inner row was rolled back; outer survives.
             rows = conn.execute(select(table.c.label).order_by(table.c.id)).all()
             assert [r.label for r in rows] == ["outer"]
 

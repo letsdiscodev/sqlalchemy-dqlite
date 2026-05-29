@@ -1,12 +1,5 @@
-"""``AsyncAdaptedCursor`` implements the PEP 234 iterator protocol.
-
-``iter(cursor)`` must return the cursor itself so that ``for row in
-cursor`` and ``next(cursor)`` share the same underlying state. The
-previous generator-based ``__iter__`` returned a fresh generator per
-``iter()`` call and pulled rows directly out of ``_rows`` via
-``popleft()``, while ``__next__`` went through ``fetchone()`` —
-leaving two incompatible iteration paths reading the same row buffer.
-"""
+"""``AsyncAdaptedCursor`` iterator protocol: ``iter(cursor)`` returns self so
+``for`` and ``next()`` share one row buffer (a fresh-generator ``__iter__`` would not)."""
 
 from __future__ import annotations
 
@@ -17,9 +10,6 @@ from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
 
 def _make_cursor(rows: list[tuple[int, ...]]) -> AsyncAdaptedCursor:
-    # ``AsyncAdaptedCursor`` is normally instantiated via
-    # ``AsyncAdaptedConnection.cursor()``; we don't need the connection
-    # for iteration-protocol tests — we just need the _rows deque.
     cur = AsyncAdaptedCursor.__new__(AsyncAdaptedCursor)
     cur._rows = collections.deque(rows)
     cur._closed = False

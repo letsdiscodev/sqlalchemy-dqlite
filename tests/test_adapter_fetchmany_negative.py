@@ -1,16 +1,4 @@
-"""AsyncAdaptedCursor.fetchmany must mirror stdlib sqlite3 and the
-underlying dqlitedbapi cursor's negative-size contract: ``size < 0``
-returns all remaining rows.
-
-The dbapi-layer cursors (``dqlitedbapi.Cursor.fetchmany`` and
-``dqlitedbapi.aio.AsyncCursor.fetchmany``) were aligned with the
-stdlib via the resolved cross-driver-parity issue. The SA async
-adapter cursor was left at the older strict-reject contract from an
-earlier triage. Cross-driver code that uses ``fetchmany(-1)`` as
-"drain all" (stdlib + libpq + psycopg-style convention) breaks at the
-SA layer despite working through the dbapi layer directly. Align the
-SA leaf so the contract is uniform across all three layers.
-"""
+"""``AsyncAdaptedCursor.fetchmany(size < 0)`` returns all remaining rows (stdlib parity)."""
 
 from __future__ import annotations
 
@@ -21,10 +9,6 @@ from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
 
 def test_fetchmany_negative_size_returns_all_remaining() -> None:
-    """``size < 0`` returns all remaining rows, mirroring stdlib
-    ``sqlite3.Cursor.fetchmany(-1)`` and the underlying
-    ``dqlitedbapi`` cursors. The deque is fully drained.
-    """
     conn = MagicMock()
     cur = AsyncAdaptedCursor(conn)
     cur._rows = deque([("a",), ("b",), ("c",)])
@@ -35,9 +19,6 @@ def test_fetchmany_negative_size_returns_all_remaining() -> None:
 
 
 def test_fetchmany_negative_size_on_empty_deque_returns_empty() -> None:
-    """``fetchmany(-1)`` on an empty deque returns ``[]`` (stdlib
-    parity — drain-all on already-empty is a no-op).
-    """
     conn = MagicMock()
     cur = AsyncAdaptedCursor(conn)
     cur._rows = deque()
@@ -46,10 +27,7 @@ def test_fetchmany_negative_size_on_empty_deque_returns_empty() -> None:
 
 
 def test_fetchmany_zero_size_returns_empty() -> None:
-    """Existing behaviour: size=0 returns [] without consuming the deque.
-    Distinct from ``size < 0`` which drains; aligns with the dbapi
-    cursor's documented size=0 divergence note (deterministic empty
-    return, no draining)."""
+    """size=0 returns [] without draining the deque (distinct from size < 0)."""
     conn = MagicMock()
     cur = AsyncAdaptedCursor(conn)
     cur._rows = deque([("a",)])

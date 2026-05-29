@@ -1,15 +1,5 @@
-"""Pin: SA's ``is_disconnect`` matches the leader-lost upstream
-substring case-insensitively — defends against an upstream wording
-capitalisation change (e.g. ``"No database opened"`` with a capital
-``N``).
-
-The previous code named the variable ``msg_lc`` but never called
-``.lower()``. The substring constant
-``LEADER_LOST_DB_LOOKUP_SUBSTRING`` is lowercase by convention; a
-capitalised upstream wording would silently break the classifier
-arm. The fix lowercases the haystack so the variable name reflects
-reality and the comparison is robust against upstream drift.
-"""
+"""is_disconnect matches the leader-lost upstream substring case-insensitively,
+defending against an upstream capitalisation change (e.g. "No database opened")."""
 
 from __future__ import annotations
 
@@ -31,7 +21,7 @@ def _make_dialect() -> DqliteDialect:
         "no database opened: <db>",
         "No database opened: <db>",
         "NO DATABASE OPENED: <db>",
-        "  no Database Opened",  # leading whitespace stripped by SA classifier? not necessarily
+        "  no Database Opened",
     ],
 )
 def test_is_disconnect_classifies_leader_lost_case_insensitive(raw_message: str) -> None:
@@ -39,17 +29,13 @@ def test_is_disconnect_classifies_leader_lost_case_insensitive(raw_message: str)
 
     dialect = _make_dialect()
     if raw_message.lower().startswith("no database opened"):
-        # The actual contract: lowercase form must start with the
-        # canonical lowercase substring. The whitespace-leading case
-        # is excluded because .startswith() is positional.
+        # .startswith() is positional, so the whitespace-leading case is excluded.
         err = OperationalError("no database opened", 12, raw_message=raw_message)
         assert dialect.is_disconnect(err, None, None) is True
 
 
 def test_is_disconnect_does_not_classify_off_topic_notfound(_: Any = None) -> None:
-    """Negative pin: SQLITE_NOTFOUND with a different message
-    (e.g. ``LOOKUP_STMT`` arm: "no statement with the given id ...")
-    is NOT classified as a leader-lost disconnect."""
+    """SQLITE_NOTFOUND with the LOOKUP_STMT wording is NOT a leader-lost disconnect."""
     from dqlitedbapi.exceptions import OperationalError
 
     dialect = _make_dialect()

@@ -1,12 +1,4 @@
-"""Pin: ``sqlalchemydqlite.dialect`` and ``.dialect_aio`` are
-``Final``-annotated class aliases.
-
-The SA convention is that every dialect package exposes a public
-``<package>.dialect`` attribute pointing at the default sync class.
-Mutating that alias at runtime is the kind of mistake mypy strict
-should catch — workspace ``Final`` discipline (precedent: the
-``__version__`` family) applies.
-"""
+"""Pin: ``sqlalchemydqlite.dialect`` and ``.dialect_aio`` are ``Final``-annotated aliases."""
 
 
 def test_dialect_alias_is_final_annotated() -> None:

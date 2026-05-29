@@ -1,10 +1,5 @@
-"""Pin: ``DqliteDialect_aio.do_ping`` returns ``False`` (slot retired)
-when ``_async_ping`` raises a ``RuntimeError`` outside the three known
-loop-state phrasings that ``_handle_exception`` remaps.
-
-Without this, an un-remapped RuntimeError escapes do_ping entirely and
-SA's pool keeps the dead slot indefinitely.
-"""
+"""Pin: ``do_ping`` returns ``False`` when ``_async_ping`` raises a RuntimeError outside the
+known loop-state phrasings, so an un-remapped RuntimeError never escapes and pins a dead slot."""
 
 from __future__ import annotations
 
@@ -26,8 +21,7 @@ from sqlalchemydqlite.aio import AsyncAdaptedConnection, DqliteDialect_aio
     ],
 )
 async def test_do_ping_runtime_error_returns_false(message: str) -> None:
-    """Unmapped RuntimeError on the ping path → slot-fatal (return
-    False), not an escape past the disconnect classifier."""
+    """Unmapped RuntimeError on the ping path returns False, not an escape."""
     dialect = DqliteDialect_aio()
 
     cursor = MagicMock()

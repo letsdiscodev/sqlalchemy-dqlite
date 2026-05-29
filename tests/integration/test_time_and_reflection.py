@@ -1,15 +1,9 @@
 """Coverage for Time columns and metadata reflection.
 
-- ``Column(Time)`` is not overridden in the dialect's
-  ``colspecs`` because the C server tags only DATETIME/DATE/TIMESTAMP
-  as ``DQLITE_ISO8601``; TIME columns come back as plain TEXT and the
-  inherited SQLAlchemy ``Time`` processor parses the string. Verified
-  here end-to-end.
-
-- The dialect inherits SQLite's reflection methods, which
-  lean on PRAGMA queries. dqlite wraps SQLite but we had zero proof
-  that reflection round-trips over the wire. These tests exercise the
-  common paths.
+TIME isn't in the dialect's ``colspecs``: the C server tags only
+DATETIME/DATE/TIMESTAMP as ``DQLITE_ISO8601``, so TIME comes back as plain
+TEXT and SA's inherited ``Time`` processor parses it. Reflection rides on
+PRAGMA queries; these tests prove both round-trip over the wire.
 """
 
 import datetime
@@ -70,7 +64,6 @@ class TestReflection:
     def test_reflect_round_trip(self, engine_url: str) -> None:
         engine = create_engine(engine_url)
         try:
-            # Create a schema with a handful of features.
             src = MetaData()
             Table(
                 "authors",
@@ -90,7 +83,6 @@ class TestReflection:
             )
             src.create_all(engine)
             try:
-                # Reflect into a fresh MetaData and check the shape.
                 dst = MetaData()
                 dst.reflect(bind=engine)
                 assert {"authors", "books"}.issubset(dst.tables.keys())
@@ -105,7 +97,6 @@ class TestReflection:
                     books.columns.keys()
                 )
 
-                # Inspector-level checks.
                 insp = inspect(engine)
                 cols = {c["name"] for c in insp.get_columns("books")}
                 assert cols == {"id", "title", "author_id", "published", "updated_at"}

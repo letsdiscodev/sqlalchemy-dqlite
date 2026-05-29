@@ -1,20 +1,8 @@
-"""Integration tests for async-dialect executemany.
+"""Integration tests for ``AsyncAdaptedCursor.executemany`` against a real server.
 
-Pins ``AsyncAdaptedCursor.executemany`` against a real dqlite server:
-
-- rowcount sums across parameter sets for plain DML.
-- Parallel tasks executing executemany do not cross-contaminate rows.
-- The async adapter forwards to the underlying dbapi cursor's
-  executemany (which has its own RETURNING-accumulation tests — see
-  python-dqlite-dbapi/tests/integration/test_executemany_returning.py).
-
-Scope note: SQLAlchemy 2.0+ `insertmanyvalues` rewrites
-``INSERT ... RETURNING`` + sequence params into a single multi-row
-INSERT, which dqlite's gateway rejects with "nonempty statement tail"
-in some orderings. The RETURNING case is therefore tested at the
-lower dbapi layer only; the SQLAlchemy-layer test pins rowcount
-summation and parallel-task isolation, which is where the async
-adapter's forwarding invariants actually surface.
+RETURNING is tested at the dbapi layer only: SA 2.0+ insertmanyvalues rewrites
+``INSERT ... RETURNING`` into a multi-row INSERT that dqlite's gateway rejects
+with "nonempty statement tail" in some orderings.
 """
 
 from __future__ import annotations
@@ -49,15 +37,10 @@ class TestAsyncExecutemany:
     async def test_async_executemany_sequential_tasks_no_state_leak(
         self, async_engine_url: str
     ) -> None:
-        """Sequential executemany from two async tasks (same engine)
-        must not leak cursor state across tasks. Guards against any
-        shared-mutable-state regression in the async adapter's
-        per-cursor row accumulation.
+        """Sequential executemany from two tasks must not leak cursor state.
 
-        Sequential (not concurrent) because dqlite serializes writes
-        via Raft — two concurrent writers produce ``database is
-        locked``, a protocol-level quirk unrelated to adapter state
-        correctness."""
+        Sequential (not concurrent) because dqlite serializes writes via Raft;
+        concurrent writers would hit ``database is locked``, unrelated here."""
         engine = create_async_engine(async_engine_url)
         try:
             async with engine.begin() as conn:
@@ -77,8 +60,6 @@ class TestAsyncExecutemany:
                     )
                     return int(result.rowcount)
 
-            # Run workers sequentially, each inside its own engine.begin()
-            # transaction. The async adapter must give each a clean cursor.
             a_rc = await worker("a", 3)
             b_rc = await worker("b", 4)
 

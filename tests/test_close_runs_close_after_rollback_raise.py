@@ -1,16 +1,6 @@
-"""AsyncAdaptedConnection.close() must run the underlying close() even if
-rollback() raises outside the narrow suppression tuple.
-
-SQLAlchemy's async pool calls close() during dispose / teardown. If
-rollback() raises an exception not in the narrow catch tuple
-(``BaseException`` like ``CancelledError``, programming bugs, etc.),
-control previously skipped the final ``await_only(self._connection.close())``
-line and the underlying AsyncConnection leaked. SA's pool does NOT
-re-call close() on failure, so the leak is permanent.
-
-Wrap rollback in ``try/finally`` so close() runs on any rollback
-outcome. Mirror of the inverse leak guarded by the connect() path.
-"""
+"""AsyncAdaptedConnection.close() runs the underlying close() even if
+rollback() raises outside the narrow suppression tuple. SA's pool does
+not re-call close() on failure, so a skipped close leaks permanently."""
 
 from __future__ import annotations
 
@@ -35,14 +25,8 @@ class _FakeAsyncConn:
 
 
 def _install_fake_await_only() -> tuple[object, object, object]:
-    """Replace await_only in the aio module with a sync driver so tests
-    don't need a live SA engine / greenlet context.
-
-    Also patch ``in_greenlet`` to return True so the preflight in
-    ``close()`` / ``terminate()`` doesn't short-circuit to the
-    sync force-close path — these tests are exercising the
-    in-greenlet branch.
-    """
+    """Sync-drive await_only (no live engine) and force in_greenlet=True
+    so close()/terminate() exercise the in-greenlet branch."""
     from sqlalchemydqlite import aio as aio_module
 
     def _fake_await_only(coro: object) -> object:
@@ -61,10 +45,8 @@ def _restore_await_only(aio_module: object, orig_await: object, orig_in_greenlet
 
 
 def test_close_runs_after_rollback_raises_cancelled_error() -> None:
-    """CancelledError is a BaseException and not in the narrow catch
-    tuple. The underlying close() must still run — and then the
-    CancelledError propagates as the active exception.
-    """
+    """CancelledError (BaseException, not in the catch tuple) still runs
+    close(), then propagates."""
     fake = _FakeAsyncConn(asyncio.CancelledError())
     adapter = AsyncAdaptedConnection(fake)
 
@@ -79,9 +61,7 @@ def test_close_runs_after_rollback_raises_cancelled_error() -> None:
 
 
 def test_close_runs_after_rollback_raises_attribute_error() -> None:
-    """A programming bug in rollback (AttributeError) still must not
-    prevent close() from running, even though the bug propagates.
-    """
+    """An AttributeError in rollback still runs close(), then propagates."""
     fake = _FakeAsyncConn(AttributeError("bug"))
     adapter = AsyncAdaptedConnection(fake)
 

@@ -1,12 +1,6 @@
-"""Pin: ``DqliteDialect.do_executemany`` is defined locally for drift
-defence.
-
-The dialect already pins ``supports_sane_multi_rowcount = True`` and
-``insert_executemany_returning = True`` locally; the matching
-dispatch hook must be pinned too so an upstream SA refactor of
-``DefaultDialect.do_executemany`` (per-parameter iteration,
-paramstyle conversion, ...) cannot silently change executemany
-semantics for this dialect.
+"""Pin: ``do_executemany`` is defined locally for drift defence, so an
+upstream SA refactor of ``DefaultDialect.do_executemany`` can't silently
+change executemany semantics for this dialect.
 """
 
 from __future__ import annotations
@@ -24,9 +18,7 @@ def test_do_executemany_is_overridden_locally() -> None:
 
 
 def test_do_executemany_body_is_byte_equivalent_to_sa_default() -> None:
-    """The body must be the same one-line pass-through SA's
-    ``DefaultDialect.do_executemany`` is. Drive a stub cursor and
-    assert it sees one call with the verbatim arguments."""
+    """Body must match SA's one-line pass-through."""
     dialect = DqliteDialect.__new__(DqliteDialect)
     cursor = MagicMock()
 
@@ -39,9 +31,7 @@ def test_do_executemany_body_is_byte_equivalent_to_sa_default() -> None:
 
 
 def test_do_executemany_accepts_optional_context_kwarg() -> None:
-    """SA's default signature accepts ``context`` (sometimes the
-    ``ExecutionContext`` instance). Mirror it so SA's call sites
-    that pass ``context=...`` continue to work."""
+    """Signature accepts ``context`` so SA call sites passing it still work."""
     dialect = DqliteDialect.__new__(DqliteDialect)
     cursor = MagicMock()
     statement = "UPDATE t SET v = ? WHERE k = ?"

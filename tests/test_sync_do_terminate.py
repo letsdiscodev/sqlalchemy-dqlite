@@ -1,16 +1,5 @@
-"""Pin: sync dialect carries ``has_terminate = True`` and a
-:meth:`do_terminate` override that routes through the dbapi's
-:meth:`Connection.force_close_transport`.
-
-SA's pool gates its forced-disposal path on ``has_terminate``. The
-inherited default is ``False`` (do_terminate falls back to do_close),
-which would route ``engine.dispose()``'s forced reclaim through the
-dbapi's bounded-by-``self._timeout`` close path (default 10 s). Under
-partition + SIGTERM that 10 s blocks operator shutdown SLAs.
-
-The local pin lands SA's terminate path on the bounded
-``force_close_transport`` (gated on ``close_timeout``, default 0.5 s)
-mirroring the async sibling's contract.
+"""Pin: sync dialect has ``has_terminate=True`` + a ``do_terminate`` routing through
+``force_close_transport`` (0.5s), not the inherited do_close fallback (10s, blocks shutdown).
 """
 
 from __future__ import annotations
@@ -25,20 +14,16 @@ class TestHasTerminatePinned:
         assert DqliteDialect.has_terminate is True
 
     def test_flag_is_local_to_class(self) -> None:
-        """The pin must live in ``DqliteDialect.__dict__`` so an upstream
-        ``DefaultDialect`` default flip cannot silently revert it."""
+        """Pin lives in the class dict so an upstream default flip can't revert it."""
         assert "has_terminate" in DqliteDialect.__dict__
 
     def test_do_terminate_is_local_override(self) -> None:
-        """The override must live on the sync dialect's own class, not be
-        picked up via MRO from ``DefaultDialect`` (whose default
-        ``do_terminate`` falls back to ``do_close``)."""
+        """Override must be on the class, not inherited via MRO (default falls back to do_close)."""
         assert "do_terminate" in DqliteDialect.__dict__
 
 
 class TestDoTerminateDelegation:
     def test_delegates_to_force_close_transport(self) -> None:
-        """``do_terminate`` calls ``dbapi_connection.force_close_transport()``."""
         conn = MagicMock()
 
         DqliteDialect().do_terminate(conn)
@@ -46,8 +31,7 @@ class TestDoTerminateDelegation:
         conn.force_close_transport.assert_called_once_with()
 
     def test_does_not_call_close(self) -> None:
-        """Forced reclaim must NOT route through ``close()`` — that path
-        awaits ``_close_async`` which can block on a parked wire read."""
+        """Must not route through close(): it awaits _close_async, which can block on a read."""
         conn = MagicMock()
 
         DqliteDialect().do_terminate(conn)
@@ -55,13 +39,10 @@ class TestDoTerminateDelegation:
         conn.close.assert_not_called()
 
     def test_swallows_force_close_transport_exception(self) -> None:
-        """``has_terminate=True`` promises SA a non-raising path. A
-        partial-state connection whose ``force_close_transport`` raises
-        must not crash the pool finalize."""
+        """has_terminate=True promises SA a non-raising path; a raising transport must not crash."""
         conn = MagicMock()
         conn.force_close_transport.side_effect = RuntimeError("transport already gone")
 
-        # Must not propagate.
         DqliteDialect().do_terminate(conn)
 
         conn.force_close_transport.assert_called_once_with()

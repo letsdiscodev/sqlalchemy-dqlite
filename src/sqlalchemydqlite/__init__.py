@@ -29,17 +29,12 @@ from sqlalchemydqlite.base import DqliteCompiler, DqliteDialect
 
 __version__: _Final[str] = "0.2.2"
 
-# SA convention (every shipped dialect package — sqlite, mysql, mssql,
-# oracle, postgresql): expose ``<package>.dialect`` pointing at the
-# default sync class. Pysqlite at ``.venv/.../sqlite/__init__.py:34``
-# does ``base.dialect = dialect = pysqlite.dialect``; we follow the same
-# pattern so ``from sqlalchemydqlite import dialect`` resolves
-# canonically.
+# SA convention: every shipped dialect package exposes ``<package>.dialect``
+# pointing at the default sync class.
 dialect: _Final[type[DqliteDialect]] = DqliteDialect
 dialect_aio: _Final[type[DqliteDialect_aio]] = DqliteDialect_aio
 
-__all__ = [  # grouped: dialect entry points, then SA-shared SQLite types
-    # Dialect entry points
+__all__ = [
     "DqliteCompiler",
     "DqliteDialect",
     "DqliteDialect_aio",
@@ -48,7 +43,6 @@ __all__ = [  # grouped: dialect entry points, then SA-shared SQLite types
     "dialect",
     "dialect_aio",
     "insert",
-    # SA-shared SQLite type re-exports (alphabetical within group)
     "BLOB",
     "BOOLEAN",
     "CHAR",
@@ -67,9 +61,5 @@ __all__ = [  # grouped: dialect entry points, then SA-shared SQLite types
     "VARCHAR",
 ]
 
-# Convention from the Python logging HOWTO: attach a ``NullHandler``
-# to the library's top-level logger so applications that have not
-# configured logging don't see the ``lastResort`` stderr emission,
-# and downstream code can silence the library cleanly via
-# ``getLogger("sqlalchemydqlite").propagate = False``.
+# NullHandler keeps the library quiet until the application configures logging.
 logging.getLogger(__name__).addHandler(logging.NullHandler())

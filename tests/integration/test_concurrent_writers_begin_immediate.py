@@ -1,28 +1,8 @@
-"""Pin: SA's standard ``BEGIN → SELECT → INSERT → COMMIT`` pattern
-survives N concurrent writers without caller-side retry.
+"""Pin: N concurrent BEGIN→SELECT→INSERT→COMMIT writers commit without retry.
 
-Stdlib ``sqlite3 + aiosqlite + :memory:?cache=shared`` runs the same
-workload without failures because shared-cache mode bypasses WAL /
-MVCC entirely — concurrent writers serialize through the in-process
-mutex. Against dqlite (and any real WAL backend) the SELECTs acquire
-a read-snapshot that a concurrent committer can invalidate, and the
-subsequent INSERT then surfaces ``SQLITE_BUSY_SNAPSHOT (517)`` —
-unrecoverable without a transaction restart.
-
-dqlite-server's own advice (``vfs.c:1579`` in dqlite-upstream)
-recommends ``BEGIN IMMEDIATE`` for write-bearing transactions: it
-acquires the writer-lock at BEGIN time so the SELECTs can't be
-overtaken. The dbapi layer rewrites bare ``BEGIN`` (and explicit
-``BEGIN DEFERRED`` / ``BEGIN TRANSACTION``) to ``BEGIN IMMEDIATE``
-by default. Concurrent ``BEGIN IMMEDIATE`` calls contend at the
-writer-lock and surface as ordinary ``SQLITE_BUSY (5)``, which the
-existing busy_timeout retry absorbs transparently — matching what
-stdlib SQLite does for its plain-BUSY path.
-
-This integration test reproduces the user-reported failure (8
-concurrent ``AsyncSession.begin()`` each doing two SELECTs + one
-INSERT) and asserts all N writers commit without caller-side
-retry. Pre-fix: 6/8 fail with SNAPSHOT; post-fix: 8/8 commit.
+The dbapi rewrites bare ``BEGIN`` to ``BEGIN IMMEDIATE`` so the writer-lock is
+taken at BEGIN time, turning the unrecoverable SQLITE_BUSY_SNAPSHOT (517) race
+into ordinary SQLITE_BUSY (5) that the busy_timeout retry absorbs.
 """
 
 from __future__ import annotations

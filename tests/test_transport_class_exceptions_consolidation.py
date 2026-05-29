@@ -1,16 +1,6 @@
-"""Pin the consolidated ``_TRANSPORT_CLASS_EXCEPTIONS`` tuple and the
-``_BARE_DBE_DISCONNECT_CODES`` frozenset shared between the sync and
-async dialects.
-
-Both constants live at module scope in ``base.py`` so a future addition
-or removal updates one place. ``do_begin``'s post-BEGIN cursor-close
-arm and the async adapter's ``close()`` / ``terminate()`` cleanup arms
-all reference the same tuple — pin that they remain in sync, and pin
-the narrowing of ``do_begin``'s tuple from the older ``DatabaseError``
-umbrella to the narrower transport-class set (an ``IntegrityError``
-from a buggy audit trigger inside ``cursor.close()`` should propagate,
-not be silently swallowed).
-"""
+"""Pin the shared _TRANSPORT_CLASS_EXCEPTIONS tuple and _BARE_DBE_DISCONNECT_CODES frozenset.
+do_begin's cursor-close arm uses the narrow transport set, not the old DatabaseError umbrella,
+so an IntegrityError from a buggy audit trigger in cursor.close() propagates rather than hides."""
 
 from __future__ import annotations
 
@@ -29,16 +19,10 @@ from sqlalchemydqlite.base import (
 
 class TestTransportClassExceptionsTuple:
     def test_tuple_is_immutable(self) -> None:
-        """Module-level constant is a tuple — immutable so a
-        misbehaving caller can't mutate the set under the dialect's
-        feet."""
         assert isinstance(_TRANSPORT_CLASS_EXCEPTIONS, tuple)
 
     def test_tuple_membership(self) -> None:
-        """Pin the exact membership: OperationalError + InterfaceError
-        from the dbapi, DqliteConnectionError from the client, and
-        OSError for stdlib transport faults (covers
-        ConnectionError/BrokenPipeError/TimeoutError as subclasses)."""
+        """OSError covers ConnectionError/BrokenPipeError/TimeoutError as subclasses."""
         assert set(_TRANSPORT_CLASS_EXCEPTIONS) == {
             _dbapi_exc.OperationalError,
             _dbapi_exc.InterfaceError,
@@ -47,19 +31,12 @@ class TestTransportClassExceptionsTuple:
         }
 
     def test_excludes_database_error_umbrella(self) -> None:
-        """``DatabaseError`` (the PEP 249 parent of Integrity / Data /
-        Internal / Operational / NotSupported) must NOT be in the
-        tuple — that would silently swallow constraint violations
-        from a custom audit trigger inside ``cursor.close()`` and
-        mask real programmer bugs."""
+        """DatabaseError (PEP 249 parent) excluded: it would swallow constraint violations."""
         assert _dbapi_exc.DatabaseError not in _TRANSPORT_CLASS_EXCEPTIONS
 
     def test_excludes_programming_error(self) -> None:
-        """``ProgrammingError`` (cross-loop reuse) must NOT be in the
-        cleanup tuple — it has its own remap path via
-        ``_handle_exception`` and ``do_ping`` carries its own broader
-        tuple. Including it on cleanup paths would mask the cross-
-        loop fault that the remap relies on surfacing."""
+        """ProgrammingError excluded: it has its own remap path via _handle_exception;
+        swallowing it on cleanup would mask the cross-loop fault the remap relies on."""
         assert _dbapi_exc.ProgrammingError not in _TRANSPORT_CLASS_EXCEPTIONS
 
 
@@ -68,16 +45,10 @@ class TestBareDbeDisconnectCodes:
         assert isinstance(_BARE_DBE_DISCONNECT_CODES, frozenset)
 
     def test_set_membership(self) -> None:
-        """SQLITE_CORRUPT (11), SQLITE_FORMAT (24), SQLITE_NOTADB (26)
-        — the codes ``_classify_operational`` routes to bare
-        ``DatabaseError``, all of which the SA dialect treats as
-        slot-fatal."""
+        """Codes _classify_operational routes to bare DatabaseError; all slot-fatal here."""
         assert frozenset({11, 24, 26}) == _BARE_DBE_DISCONNECT_CODES
 
     def test_set_imported_from_wire(self) -> None:
-        """The set references the wire-layer constants, not magic
-        numbers. A future rename in the wire layer would surface as
-        an import error rather than a silent drift."""
         from dqlitewire import SQLITE_CORRUPT, SQLITE_FORMAT, SQLITE_NOTADB
 
         assert SQLITE_CORRUPT in _BARE_DBE_DISCONNECT_CODES
@@ -85,21 +56,15 @@ class TestBareDbeDisconnectCodes:
         assert SQLITE_NOTADB in _BARE_DBE_DISCONNECT_CODES
 
     def test_set_is_wire_layer_ssot(self) -> None:
-        """The SA set IS the wire-layer ``BARE_DATABASE_ERROR_CODES``.
-        Identity equality means the SA dialect can not silently drift
-        from the wire-layer truth: a future wire-layer addition
-        propagates here automatically. Pin the cross-package SSOT
-        relationship."""
+        """Identity with the wire-layer set: a wire addition propagates here automatically."""
         from dqlitewire import BARE_DATABASE_ERROR_CODES
 
         assert _BARE_DBE_DISCONNECT_CODES is BARE_DATABASE_ERROR_CODES
 
 
 class TestDoBeginCloseNarrowing:
-    """Pin that ``do_begin``'s post-BEGIN cursor-close arm uses the
-    narrow transport-class tuple — an ``IntegrityError`` from
-    ``cursor.close()`` (e.g. a custom audit trigger fires) propagates
-    rather than being silently swallowed."""
+    """do_begin's cursor-close arm uses the narrow transport tuple, so a non-transport
+    exception from cursor.close() propagates rather than being swallowed."""
 
     @pytest.mark.parametrize(
         "transport_exc",
@@ -111,26 +76,18 @@ class TestDoBeginCloseNarrowing:
         ],
     )
     def test_swallows_transport_class_close_failures(self, transport_exc: BaseException) -> None:
-        """Each transport-class exception from ``cursor.close()`` after
-        a successful BEGIN must be debug-logged and absorbed (so the
-        BEGIN succeeded and the engine sees a clean return)."""
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_cursor.close.side_effect = transport_exc
         mock_conn.cursor.return_value = mock_cursor
 
-        # Must not raise.
         dialect.do_begin(mock_conn)
         mock_cursor.execute.assert_called_once_with("BEGIN")
         mock_cursor.close.assert_called_once_with()
 
     def test_does_not_swallow_integrity_error_on_close(self) -> None:
-        """An ``IntegrityError`` from ``cursor.close()`` is implausible
-        in practice (close doesn't fire constraints) but if some custom
-        audit trigger / extension produces one, it must propagate so
-        the bug is visible — not be silently swallowed under the
-        previous ``DatabaseError``-umbrella catch."""
+        """An IntegrityError from cursor.close() must propagate, not be swallowed."""
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -141,7 +98,7 @@ class TestDoBeginCloseNarrowing:
             dialect.do_begin(mock_conn)
 
     def test_does_not_swallow_data_error_on_close(self) -> None:
-        """``DataError`` from ``cursor.close()`` similarly propagates."""
+        """DataError from cursor.close() similarly propagates."""
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -152,12 +109,8 @@ class TestDoBeginCloseNarrowing:
             dialect.do_begin(mock_conn)
 
     def test_does_not_swallow_attribute_error(self) -> None:
-        """An ``AttributeError`` from ``cursor.close()`` (not in the
-        ``_FORCE_CLOSE_TAIL_EXCEPTIONS`` tuple) propagates —
-        programmer-bug shapes must stay visible. ``RuntimeError`` and
-        ``ReferenceError`` ARE in the wider tuple (cross-loop dispose /
-        dead-proxy shapes that mask the BEGIN exception) and are
-        swallowed; the rationale is symmetric with ``do_close``."""
+        """AttributeError propagates (programmer bug); RuntimeError/ReferenceError are in
+        _FORCE_CLOSE_TAIL_EXCEPTIONS (cross-loop/dead-proxy shapes) and are swallowed."""
         dialect = DqliteDialect()
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -169,17 +122,12 @@ class TestDoBeginCloseNarrowing:
 
 
 class TestHandleExceptionConsolidation:
-    """Pin the consolidated ``_handle_exception`` shape: a single
-    ``isinstance(error, (RuntimeError, ProgrammingError))`` check
-    feeds a single substring scan against ``"different loop"``,
-    matching both Python's ``"attached to a different loop"``
-    wording (RuntimeError) and dqlitedbapi's
-    ``"different event loop"`` wording (ProgrammingError)."""
+    """_handle_exception scans both RuntimeError and ProgrammingError for "different loop":
+    Python's "attached to a different loop" and dqlitedbapi's "different event loop"."""
 
     @pytest.fixture
     def adapter(self) -> object:
-        """Bare adapter shell with only the methods the test exercises;
-        avoids needing a real connect/close cycle."""
+        """Bare adapter shell, avoiding a real connect/close cycle."""
         from sqlalchemydqlite.aio import AsyncAdaptedConnection
 
         return AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
@@ -211,37 +159,26 @@ class TestHandleExceptionConsolidation:
         msg: str,
         expected_substring: str,
     ) -> None:
-        """Both RuntimeError and ProgrammingError variants of the
-        cross-loop fault remap to OperationalError(code=None) so the
-        SA dialect's substring branch picks them up and the pool
-        invalidates the slot. RuntimeError carries Python's
-        ``"different loop"`` wording; ProgrammingError carries
-        dqlitedbapi's distinct ``"different event loop"`` wording —
-        the dialect's substring list contains both."""
+        """Both cross-loop variants remap to OperationalError(code=None) so the dialect's
+        substring branch invalidates the slot."""
         with pytest.raises(_dbapi_exc.OperationalError) as exc_info:
             adapter._handle_exception(exc_cls(msg))  # type: ignore[attr-defined]
         assert exc_info.value.code is None
         assert expected_substring in str(exc_info.value)
 
     def test_passes_through_unrelated_runtime_error(self, adapter: object) -> None:
-        """A RuntimeError without ``"different loop"`` propagates
-        unchanged — programmer-bug shapes (Event loop is closed,
-        unawaited coroutine) must stay visible."""
+        """A RuntimeError without "different loop" propagates unchanged."""
         with pytest.raises(RuntimeError, match="something else entirely"):
             adapter._handle_exception(RuntimeError("something else entirely"))  # type: ignore[attr-defined]
 
     def test_passes_through_unrelated_programming_error(self, adapter: object) -> None:
-        """A ProgrammingError without ``"different loop"`` propagates
-        unchanged — bind-count mismatches and similar bugs must stay
-        visible."""
+        """A ProgrammingError without "different loop" propagates unchanged."""
         with pytest.raises(_dbapi_exc.ProgrammingError, match="bad bind count"):
             adapter._handle_exception(_dbapi_exc.ProgrammingError("bad bind count"))  # type: ignore[attr-defined]
 
     def test_dbapi_programming_error_remap_classified_as_disconnect(self, adapter: object) -> None:
-        """End-to-end pin: the ProgrammingError remap reaches the SA
-        dialect's ``is_disconnect`` substring branch and returns True.
-        The dialect's substring list includes ``"different event loop"``
-        — without it the cross-loop fault would survive in the pool slot."""
+        """End-to-end: the remapped error reaches is_disconnect and returns True, since the
+        dialect's substring list includes "different event loop"."""
         try:
             adapter._handle_exception(  # type: ignore[attr-defined]
                 _dbapi_exc.ProgrammingError("AsyncConnection used from a different event loop")

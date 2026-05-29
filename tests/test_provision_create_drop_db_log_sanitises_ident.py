@@ -1,14 +1,5 @@
-"""Pin: ``_dqlite_create_db`` and ``_dqlite_drop_db`` route ``ident``
-through ``_safe_for_log`` so a forged ident containing U+2028 /
-U+2029 / bidi controls cannot splice the operator log.
-
-The sibling ``reap_dbs`` site already routes through the same
-helper; this brings the three provision log sites into uniform
-discipline.
-
-The tests reach the inner function bodies via ``.fns["dqlite"]`` on
-the SA-dispatch wrapper so no live cfg / engine is required.
-"""
+"""Pin: ``_dqlite_create_db`` / ``_dqlite_drop_db`` route ``ident`` through
+``_safe_for_log`` so a forged ident cannot splice the operator log."""
 
 from __future__ import annotations
 

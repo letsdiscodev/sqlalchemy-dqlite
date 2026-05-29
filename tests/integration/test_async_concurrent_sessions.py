@@ -1,29 +1,5 @@
-"""Two ``AsyncSession``s racing transactions on the same async engine.
-
-The existing ``test_async_executemany.py`` runs workers sequentially
-inside their own ``engine.begin()`` blocks. There is no test that
-launches two ``AsyncSession`` transactions concurrently via
-``asyncio.gather`` — the canonical "is the async dialect safe under
-load?" smoke test.
-
-Pin two contracts:
-
-1. **Primary-key conflict**: two sessions racing INSERT on the same
-   PK resolve via exactly one success and one failure. Under real
-   transactional semantics the loser may surface either an
-   ``IntegrityError`` (if its INSERT actually executes and trips
-   the UNIQUE constraint) or an ``OperationalError("database is
-   locked")`` (if it cannot acquire the writer lock before its
-   sibling commits). Both shapes are valid losing-end states; the
-   test asserts "exactly one survives", not the specific error
-   class.
-
-2. **Disjoint primary keys**: two sessions inserting different PKs
-   serialise through the single-writer Raft channel and both
-   eventually commit. The test runs them sequentially-in-time
-   (without artificial overlap) so neither hits the writer-lock
-   contention surface — the test is about pool slot independence
-   and final state, not about contention semantics.
+"""Two ``AsyncSession``s racing transactions on the same async engine,
+launched concurrently via ``asyncio.gather`` — the async-under-load smoke test.
 """
 
 from __future__ import annotations
@@ -39,12 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 @pytest.mark.integration
 class TestAsyncConcurrentSessions:
     async def test_two_sessions_pk_conflict_one_loses(self, async_engine_url: str) -> None:
-        """Two AsyncSessions race INSERT on the same primary key.
-        Exactly one succeeds; the other gets either an
-        ``IntegrityError`` (UNIQUE constraint trip) or an
-        ``OperationalError`` (writer-lock contention). Both shapes
-        are valid losing-end outcomes under dqlite's single-writer
-        Raft channel + real transactions."""
+        """Two sessions race INSERT on the same PK: exactly one succeeds; the
+        loser gets IntegrityError (UNIQUE) or OperationalError (writer-lock)."""
         engine = create_async_engine(async_engine_url, pool_size=2, max_overflow=0)
         try:
             async with engine.begin() as conn:
@@ -68,29 +40,16 @@ class TestAsyncConcurrentSessions:
 
             async with engine.begin() as conn:
                 rows = (await conn.execute(text("SELECT id FROM async_pk_conflict"))).all()
-            # SA Row supports __eq__ with tuples at runtime; mypy's
-            # type stubs for ``Sequence[Row[Any]]`` don't reflect that.
+            # SA Row's __eq__ with tuples isn't reflected in mypy's stubs.
             assert [tuple(r) for r in rows] == [(1,)]
         finally:
             await engine.dispose()
 
     async def test_two_sessions_disjoint_keys_both_commit(self, async_engine_url: str) -> None:
-        """Disjoint PKs: both sessions commit and final state has both
-        rows. Confirms pool-slot independence and that the dialect can
-        drive two concurrent sessions to a successful joint outcome.
-
-        ``asyncio.gather`` runs the two writers concurrently; dqlite
-        serialises writes through a single Raft writer lock, so a
-        writer that tries to INSERT while a sibling is still inside
-        its uncommitted transaction sees ``OperationalError("database
-        is locked")``. That is the SQLite engine's documented response
-        to writer contention — not a dqlite-specific quirk. Real
-        applications respond by retrying with backoff (the same
-        pattern stdlib ``sqlite3`` users follow when they hit
-        SQLITE_BUSY). Mirror that here so the test pins "both commits
-        eventually land" rather than "both commits land on the first
-        try", which is not a contract dqlite (or stock SQLite) gives.
-        """
+        """Disjoint PKs: both sessions commit. dqlite serialises writes via a
+        single Raft writer lock, so a writer overlapping a sibling's tx sees
+        ``database is locked`` (SQLITE_BUSY); retrying with backoff is the
+        expected response, so the test pins "both eventually commit"."""
         engine = create_async_engine(async_engine_url, pool_size=2, max_overflow=0)
         try:
             async with engine.begin() as conn:
@@ -98,12 +57,9 @@ class TestAsyncConcurrentSessions:
                 await conn.execute(text("CREATE TABLE async_pk_disjoint (id INTEGER PRIMARY KEY)"))
 
             async def writer(key: int) -> None:
-                # Bounded retry on writer-lock contention. Backoff
-                # caps at ~1.6s total over 5 attempts — enough for the
-                # sibling's tx to commit (typical commit latency is
-                # sub-millisecond on a healthy local cluster) without
-                # masking a genuine deadlock (which would never
-                # resolve and would surface on the final attempt).
+                # Bounded retry on writer-lock contention (5 attempts, ~1.6s
+                # total): enough for the sibling to commit, short enough that a
+                # genuine deadlock still surfaces on the final attempt.
                 last_exc: OperationalError | None = None
                 backoff = 0.05
                 for _ in range(5):

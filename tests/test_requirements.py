@@ -55,17 +55,13 @@ class TestRequirements:
                 f"Requirements.{prop_name} returns a bare bool; "
                 f"should return exclusions.open() or exclusions.closed()"
             )
-            # Should have the enabled_for_config method used by the test runner
             assert hasattr(value, "enabled_for_config"), (
                 f"Requirements.{prop_name} return value lacks enabled_for_config method"
             )
 
     def test_override_names_exist_on_sa_base(self) -> None:
-        """Every override must name a real attribute on SA's
-        ``SuiteRequirements``; otherwise the suite's decorators never
-        consult it and the dqlite contract silently falls through to
-        the SA default.
-        """
+        """Every override must name a real ``SuiteRequirements`` attribute,
+        else the suite never consults it and the contract is dead code."""
         from sqlalchemy.testing.requirements import SuiteRequirements
 
         override_names = [
@@ -98,28 +94,20 @@ class TestRequirements:
             )
 
     def test_regexp_match_is_closed(self) -> None:
-        """dqlite has no server-side REGEXP function and no
-        ``create_function`` hook on the DBAPI, so the compliance suite
-        must skip ``regexp_match`` cases rather than run them and fail.
-        """
+        """dqlite has no server-side REGEXP nor a ``create_function`` hook,
+        so ``regexp_match`` cases must be skipped, not run."""
         req = Requirements()
         assert req.regexp_match.enabled is False
 
     def test_ctes_with_update_delete_is_open(self) -> None:
-        """SA's base default is ``closed()``. Our override is the only
-        behaviour-changing entry in the new requirement set: SQLite
-        >= 3.35 (which dqlite ships) supports CTEs riding UPDATE /
-        DELETE, so the suite cases must run."""
+        """SA defaults to ``closed()``, but SQLite >= 3.35 (shipped by dqlite)
+        supports CTEs on UPDATE/DELETE, so the cases must run."""
         req = Requirements()
         assert req.ctes_with_update_delete.enabled is True
 
 
 class TestRequirementsReturnAnnotations:
-    """Static pin: every property on the Requirements class advertises
-    its actual return type as ``compound``. If a future maintainer adds
-    a property returning ``Any`` (or a helper that yields a bare bool),
-    this test catches it before the return-type drift makes it into a
-    release."""
+    """Static pin: every Requirements property annotates its return as ``compound``."""
 
     def test_every_property_annotates_compound_return(self) -> None:
         import typing

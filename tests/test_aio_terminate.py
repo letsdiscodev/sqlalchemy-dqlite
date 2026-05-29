@@ -1,18 +1,7 @@
-"""Pin ``has_terminate = True`` and the terminate integration path.
-
-SQLAlchemy's async pool gates its forced-disposal path on the dialect's
-``has_terminate`` flag plus a working ``do_terminate(dbapi_connection)``
-override. Without both, ``engine.dispose()`` on a stuck connection
-defers to the full graceful-close path and can block on a hanging
-rollback. These tests fence three invariants:
-
-1. The flag is pinned locally on ``DqliteDialect_aio`` (not merely
-   inherited from ``DefaultDialect`` / parent MRO).
-2. ``do_terminate`` delegates to the adapter's ``terminate()``.
-3. ``terminate()`` closes the underlying connection without first
-   invoking rollback — the whole point of ``terminate`` is to skip
-   any graceful teardown that could hang.
-"""
+"""``has_terminate = True`` plus a working ``do_terminate`` override gate
+SA's forced-disposal path; without both, dispose() on a stuck connection
+falls back to graceful close and can block on a hanging rollback.
+terminate() must close without invoking rollback."""
 
 from __future__ import annotations
 
@@ -36,9 +25,8 @@ class TestHasTerminatePinned:
         assert DqliteDialect_aio.has_terminate is True
 
     def test_flag_is_local_to_class(self) -> None:
-        """The pin must live in ``DqliteDialect_aio.__dict__`` so an
-        upstream DefaultDialect default flip cannot silently revert it.
-        """
+        """The flag must live in ``DqliteDialect_aio.__dict__`` so an
+        upstream DefaultDialect default flip cannot revert it."""
         assert "has_terminate" in DqliteDialect_aio.__dict__
 
     def test_do_terminate_is_local_override(self) -> None:
@@ -47,11 +35,8 @@ class TestHasTerminatePinned:
 
 class TestAsyncAdaptedConnectionTerminate:
     def test_terminate_skips_rollback(self) -> None:
-        """``terminate()`` must NOT call rollback — that's the whole
-        point of the forced-disposal path. Stub ``await_only`` so the
-        sync-driven call resolves deterministically without a real
-        event loop.
-        """
+        """``terminate()`` must not call rollback — the point of the
+        forced-disposal path."""
         fake = _FakeAsyncConn()
         adapter = AsyncAdaptedConnection(fake)
 
@@ -78,16 +63,10 @@ class TestAsyncAdaptedConnectionTerminate:
 
 
 class TestTerminateSuppressesTransportExceptions:
-    """``terminate()`` is SA's forced-disposal path and
-    ``has_terminate = True`` promises it never raises — an unhandled
-    exception here would abort ``engine.dispose()`` mid-flight and
-    leak subsequent pool slots. The narrow catch tuple
-    ``(OperationalError, InterfaceError, DqliteConnectionError,
-    OSError)`` must genuinely suppress every class, so a future audit
-    that drops one silently re-introduces the leak.
-
-    Pins each class individually so the failure mode is named.
-    """
+    """terminate() must never raise (else dispose() aborts and leaks pool
+    slots); its catch tuple (OperationalError, InterfaceError,
+    DqliteConnectionError, OSError) must suppress every class. Pinned
+    individually so a dropped class names its failure mode."""
 
     @staticmethod
     def _swap_await_only() -> tuple[object, object, object]:
@@ -101,10 +80,8 @@ class TestTerminateSuppressesTransportExceptions:
         orig = aio_module.await_only  # type: ignore[attr-defined]
         orig_in_greenlet = aio_module.in_greenlet  # type: ignore[attr-defined]
         aio_module.await_only = _fake  # type: ignore[assignment,attr-defined]
-        # Pretend we're inside an SA greenlet so the terminate()
-        # ``in_greenlet()`` preflight enters the await_only path
-        # under test rather than short-circuiting to the sync
-        # force-close.
+        # Pretend we're inside an SA greenlet so terminate() enters the
+        # await_only path rather than the sync force-close.
         aio_module.in_greenlet = lambda: True  # type: ignore[attr-defined]
         return aio_module, orig, orig_in_greenlet
 
@@ -146,9 +123,8 @@ class TestTerminateSuppressesTransportExceptions:
         assert fake.close_calls == 1
 
     def test_programmer_bug_attribute_error_propagates(self) -> None:
-        """Guard against a future audit widening the except list: a
-        programmer bug (AttributeError, TypeError, etc.) must still
-        escape so a refactor regression doesn't get silently eaten."""
+        """A programmer bug (AttributeError, TypeError, ...) must still
+        escape; guards against widening the except list."""
         import pytest
 
         fake = _FakeAsyncConnWithExc(close_exc=AttributeError("wrong attr"))
@@ -160,13 +136,11 @@ class TestTerminateSuppressesTransportExceptions:
         finally:
             aio_module.await_only = orig  # type: ignore[attr-defined]
             aio_module.in_greenlet = orig_in_greenlet  # type: ignore[attr-defined]
-        # Close was still attempted before the exception escaped.
-        assert fake.close_calls == 1
+        assert fake.close_calls == 1  # close attempted before the raise
 
 
 class _FakeAsyncConnWithExc:
-    """Mirror of ``_FakeAsyncConn`` that raises from ``close``. Kept
-    separate so the happy-path fixture above stays trivial."""
+    """Like ``_FakeAsyncConn`` but raises from ``close``."""
 
     def __init__(self, close_exc: BaseException | None = None) -> None:
         self._close_exc = close_exc
@@ -185,10 +159,8 @@ class _FakeAsyncConnWithExc:
 
 class TestDoTerminateDelegatesToAdapter:
     def test_do_terminate_calls_terminate_on_dbapi_connection(self) -> None:
-        """``dialect.do_terminate(dbapi_conn)`` is SQLAlchemy's single
-        integration point; verify it forwards to the adapter's
-        ``terminate()`` rather than reaching into private state.
-        """
+        """``do_terminate`` forwards to the adapter's ``terminate()``
+        rather than reaching into private state."""
         calls: list[str] = []
 
         class _DbapiConn:
@@ -201,8 +173,8 @@ class TestDoTerminateDelegatesToAdapter:
         assert calls == ["terminate"]
 
     def test_do_terminate_leaves_rollback_alone(self) -> None:
-        """Under a mocked connection, do_terminate must not invoke
-        rollback even as a side-effect of teardown logic elsewhere."""
+        """do_terminate must not invoke rollback as a teardown
+        side-effect."""
         fake = _FakeAsyncConn()
         adapter = AsyncAdaptedConnection(fake)
         dialect = DqliteDialect_aio()

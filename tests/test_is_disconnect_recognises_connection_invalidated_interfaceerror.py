@@ -1,24 +1,8 @@
-"""Pin: ``is_disconnect`` recognises the dbapi's
-``InterfaceError("Connection invalidated (id=...); reconnect before
-retrying commit / rollback. ...")`` raise with ``code=None`` so the
-SA pool reclaims the slot after a sibling-task ``_invalidate``.
+"""is_disconnect recognises the dbapi's "Connection invalidated (id=...)"
+InterfaceError so the SA pool reclaims the slot.
 
-Threat model: leader-flip + retry pattern. Cancel-during-execute
-lands on the client; ``_invalidate`` nulls ``_protocol``. The
-caller catches the cancel and retries via SA pool checkout. The
-dbapi pre-lock guard at ``aio/connection.py:1124-1130`` (and three
-sibling sites) raises ``InterfaceError("Connection invalidated
-(id=...); ...")`` with ``code=None``. Without recognition in
-``is_disconnect``, the SA pool keeps the slot and the next checkout
-returns the same dead inner connection.
-
-The fix matches the lowercased substring ``"connection invalidated
-(id="`` on the InterfaceError arm of ``is_disconnect``, alongside the
-existing ``"connection is closed"`` / ``"cursor is closed"`` cases.
-The ``(id=`` parenthesis is the dbapi's contract at every raise site
-— including it in the substring eliminates false positives on user-
-raised ``InterfaceError`` messages that happen to lexically contain
-the unparenthesised text.
+The ``(id=`` parenthesis is the dbapi's contract at every raise site;
+matching it avoids false positives on user-raised InterfaceErrors.
 """
 
 from __future__ import annotations
@@ -28,7 +12,6 @@ from sqlalchemydqlite.base import DqliteDialect
 
 
 def _make_dialect() -> DqliteDialect:
-    """Construct a minimal DqliteDialect for is_disconnect testing."""
     d = DqliteDialect()
     return d
 
@@ -44,53 +27,33 @@ def test_connection_invalidated_interfaceerror_recognised_as_disconnect() -> Non
 
 
 def test_unrelated_interfaceerror_not_classified_as_disconnect() -> None:
-    """Regression guard: a user-raised InterfaceError that doesn't
-    contain 'connection invalidated' / 'connection is closed' /
-    'cursor is closed' must NOT be classified as disconnect."""
+    """A user-raised InterfaceError with no disconnect substring → False."""
     dialect = _make_dialect()
     e = InterfaceError("user-raised: bad parameter shape")
     assert dialect.is_disconnect(e, None, None) is False
 
 
 def test_unrelated_connection_invalidated_text_not_classified_as_disconnect() -> None:
-    """False-positive guard: a user-raised ``InterfaceError`` whose
-    lowercased text contains ``"connection invalidated"`` BUT NOT the
-    full ``(id=`` form (the dbapi's contract) must NOT be classified
-    as a disconnect.
-
-    Examples that previously tripped a false positive under the broad
-    ``"connection invalidated"`` substring:
-
-    - ``"Connection invalidated by user trigger"``
-    - ``"Connection invalidated by ALTER TABLE"``
-    - ``"connection invalidated by trigger BEFORE INSERT"``
-
-    The dbapi's actual raise text is always
-    ``"Connection invalidated (id=N); ..."``; tightening the substring
-    to include the parenthesis closes the user-text collision while
-    still recognising every dbapi raise."""
+    """Text with "connection invalidated" but no ``(id=`` form → False."""
     dialect = _make_dialect()
     e = InterfaceError("Connection invalidated by user trigger")
     assert dialect.is_disconnect(e, None, None) is False
 
 
 def test_existing_connection_is_closed_still_recognised() -> None:
-    """Regression guard for the prior arm."""
     dialect = _make_dialect()
     e = InterfaceError("connection is closed (id=99)")
     assert dialect.is_disconnect(e, None, None) is True
 
 
 def test_existing_cursor_is_closed_still_recognised() -> None:
-    """Regression guard for the prior arm."""
     dialect = _make_dialect()
     e = InterfaceError("cursor is closed (id=99)")
     assert dialect.is_disconnect(e, None, None) is True
 
 
 def test_connection_invalidated_match_is_case_insensitive() -> None:
-    """Match against ``raw.lower()``; uppercase variant of the dbapi's
-    actual ``(id=N)`` lexeme must also classify."""
+    """Match is case-insensitive; an uppercase ``(ID=N)`` variant classifies."""
     dialect = _make_dialect()
     e = InterfaceError("CONNECTION INVALIDATED (ID=42); reconnect")
     assert dialect.is_disconnect(e, None, None) is True

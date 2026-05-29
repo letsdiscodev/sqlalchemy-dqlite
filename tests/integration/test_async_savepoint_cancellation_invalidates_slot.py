@@ -1,30 +1,9 @@
-"""End-to-end pin: a CancelledError fired during a SAVEPOINT-family
-operation invalidates the SA pool slot.
+"""A CancelledError during a SAVEPOINT-family op invalidates the SA pool slot.
 
-Sibling tests cover BEGIN cancellation
-(``test_async_cancel_inside_engine_begin.py``) and COMMIT
-cancellation (``test_async_cancel_during_commit_invalidates_slot.py``).
-This file covers the three SAVEPOINT-related round-trips that
-SQLAlchemy's ``Connection.begin_nested()`` triggers via the inherited
-``DefaultDialect`` hooks:
-
-- ``do_savepoint`` emits ``SAVEPOINT <name>``
-- ``do_release_savepoint`` emits ``RELEASE SAVEPOINT <name>``
-- ``do_rollback_to_savepoint`` emits ``ROLLBACK TO SAVEPOINT <name>``
-
-The contract under test for each window:
-
-1. ``CancelledError`` / ``TimeoutError`` propagates through SA's
-   nested-tx context manager unchanged.
-2. SA classifies the cancel as ``is_exit_exception`` and invalidates
-   the underlying connection slot.
-3. ``engine.dispose`` post-cancel completes without hanging.
-4. The next acquire returns a fresh, healthy connection.
-
-Methodology mirrors the COMMIT-cancel sibling: monkey-patch the
-dbapi cursor's ``execute`` to inject a ``sleep`` when the SQL
-prefix matches the SAVEPOINT family, then drive the SA path under
-an outer ``asyncio.timeout`` short enough to land inside the sleep.
+Covers the three round-trips ``begin_nested()`` triggers (SAVEPOINT,
+RELEASE SAVEPOINT, ROLLBACK TO SAVEPOINT); BEGIN and COMMIT cancellation are
+covered in sibling files. The cursor ``execute`` patch sleeps when the SQL
+prefix matches so the outer ``asyncio.timeout`` lands inside the sleep.
 """
 
 from __future__ import annotations
@@ -39,14 +18,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 
 def _slowing_execute(prefix: str, original: Any, sleep_seconds: float = 2.0) -> Any:
-    """Build a replacement for ``AsyncCursor.execute`` that sleeps when
-    the SQL leading-prefix matches.
-
-    Other statements (CREATE TABLE, INSERT, SELECT, BEGIN) pass
-    through unchanged — a blanket sleep would also park CREATE
-    TABLE etc. and stop the test from progressing to the SAVEPOINT
-    statement.
-    """
+    """Replacement for ``AsyncCursor.execute`` that sleeps only when the SQL
+    leading-prefix matches, so setup statements still run."""
 
     async def _patched(self: Any, operation: str, parameters: Sequence[Any] | None = None) -> Any:
         if operation.lstrip().upper().startswith(prefix.upper()):
@@ -81,8 +54,7 @@ class TestAsyncSavepointCancellationInvalidatesSlot:
 
         engine = create_async_engine(async_engine_url, pool_size=1, max_overflow=0)
         try:
-            # Setup table BEFORE patching execute so the CREATE TABLE
-            # is not parked.
+            # Set up the table before patching execute so it isn't parked.
             async with engine.begin() as conn:
                 await conn.execute(text("DROP TABLE IF EXISTS sp_cancel"))
                 await conn.execute(text("CREATE TABLE sp_cancel (id INTEGER PRIMARY KEY)"))
@@ -95,23 +67,17 @@ class TestAsyncSavepointCancellationInvalidatesSlot:
                         async with conn.begin():
                             await conn.execute(text("INSERT INTO sp_cancel VALUES (1)"))
                             sp = await conn.begin_nested()
-                            # SAVEPOINT round-trip happens above. If the
-                            # patched prefix is "SAVEPOINT", the
-                            # sleep parks here and the timeout fires
-                            # inside it.
+                            # SAVEPOINT round-trip ran above; if prefix is
+                            # "SAVEPOINT" the timeout already fired in its sleep.
                             if trigger_release:
                                 await conn.execute(text("INSERT INTO sp_cancel VALUES (2)"))
-                                # RELEASE SAVEPOINT round-trip parks here.
                                 await sp.commit()
                             elif trigger_rollback:
                                 await conn.execute(text("INSERT INTO sp_cancel VALUES (2)"))
-                                # ROLLBACK TO SAVEPOINT round-trip parks here.
                                 await sp.rollback()
 
-            # Restore execute so the post-cancel acquire works normally.
             monkeypatch.setattr(AsyncCursor, "execute", original_execute)
 
-            # Post-cancel acquire returns a healthy connection.
             async with engine.connect() as conn:
                 row = (await conn.execute(text("SELECT 1"))).scalar()
                 assert row == 1

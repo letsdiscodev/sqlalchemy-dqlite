@@ -1,8 +1,5 @@
-"""Pin: sync ``DqliteDialect.connect`` rejects non-callable
-``creator_fn`` and async-def ``creator_fn`` with a precise
-``ArgumentError``. Mirrors the async sibling's discipline at
-``aio.py`` (which rejects sync ``async_creator_fn``).
-"""
+"""Sync ``DqliteDialect.connect`` rejects non-callable and async-def
+``creator_fn`` with a precise ``ArgumentError`` (mirrors the async sibling)."""
 
 from __future__ import annotations
 

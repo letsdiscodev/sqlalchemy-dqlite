@@ -2029,7 +2029,7 @@ class DqliteDialect_aio(DqliteDialect):
         survives.
 
         Run ``SELECT 1`` directly through the dbapi async cursor
-        instead — one execute + one fetch + one close, all under a
+        instead — one execute + one close, all under a
         single ``await_only`` hop, with explicit RuntimeError routing
         through ``_handle_exception`` so loop-state shapes classify as
         ``OperationalError`` and SA evicts the slot. Mirrors asyncpg's
@@ -2070,7 +2070,7 @@ class DqliteDialect_aio(DqliteDialect):
 
     async def _async_ping(self, dbapi_connection: Any) -> None:
         """Async leg of ``do_ping``: open a cursor, run ``SELECT 1``,
-        fetch one row, close. ``cursor()`` on the dbapi
+        close. ``cursor()`` on the dbapi
         ``AsyncConnection`` is synchronous (returns an ``AsyncCursor``);
         ``execute`` / ``fetchone`` on the cursor are coroutines;
         ``close`` is synchronous by design (see ``AsyncCursor.close``

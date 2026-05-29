@@ -692,6 +692,15 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
+    def percent_schema_names(self) -> compound:
+        """``%`` and spaces in table/column names round-trip via SQLite
+        identifier quoting (this requirement is about quoted identifiers,
+        not DB schemas, despite the name). The reference SQLite dialect
+        opens it; dqlite inherits the conservative base-closed default.
+        Opening it un-skips ``PercentSchemaNamesTest``."""
+        return exclusions.open()
+
+    @property
     def comment_reflection(self) -> compound:
         """SQLite does NOT support inline column comments; the
         ``sqlite_master.sql`` round-trip does not preserve any

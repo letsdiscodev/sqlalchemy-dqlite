@@ -482,8 +482,8 @@ class Requirements(SuiteRequirements):
 
     @property
     def foreign_key_constraint_option_reflection_ondelete(self) -> compound:
-        """ON DELETE action reflected via PRAGMA foreign_key_list (dqlite doesn't
-        enforce FKs by default, but the declared action still round-trips)."""
+        """ON DELETE action reflected via PRAGMA foreign_key_list (the declared
+        action round-trips regardless of enforcement)."""
         return exclusions.open()
 
     @property

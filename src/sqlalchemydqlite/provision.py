@@ -25,7 +25,6 @@ from sqlalchemy.testing.provision import (
     drop_db,
     follower_url_from_main,
     generate_driver_url,
-    post_configure_engine,
     run_reap_dbs,
     stop_test_class_outside_fixtures,
     temp_table_keyword_args,
@@ -275,25 +274,6 @@ def _dqlite_stop_test_class_outside_fixtures(config: Any, db: Any, cls: Any) -> 
 def _dqlite_temp_table_keyword_args(cfg: Any, eng: Any) -> dict[str, Any]:
     """Use SQLite ``TEMPORARY`` prefix; per-connection temp scoping is load-bearing for xdist."""
     return {"prefixes": ["TEMPORARY"]}
-
-
-@post_configure_engine.for_db("dqlite")
-def _dqlite_post_configure_engine(url: Any, engine: Any, follower_ident: Any) -> None:
-    """Attach a connect listener enabling FK enforcement for the compliance suite only.
-
-    The production dialect deliberately leaves FK enforcement to the
-    user; without this listener the suite's FK batteries would run
-    against an FK-disabled connection and never fire IntegrityError.
-    """
-    from sqlalchemy import event
-
-    @event.listens_for(engine, "connect")
-    def _enable_foreign_keys(dbapi_connection: Any, _connection_record: Any) -> None:
-        cursor = dbapi_connection.cursor()
-        try:
-            cursor.execute("PRAGMA foreign_keys=ON")
-        finally:
-            cursor.close()
 
 
 @upsert.for_db("dqlite")

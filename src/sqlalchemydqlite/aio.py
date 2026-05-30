@@ -29,9 +29,10 @@ from dqlitedbapi import (
 from sqlalchemydqlite.base import (
     _AUTOCOMMIT_REJECTION_MSG,
     _BARE_DBE_DISCONNECT_CODES,
-    _FORCE_CLOSE_TAIL_EXCEPTIONS,
     _TRANSPORT_CLASS_EXCEPTIONS,
     DqliteDialect,
+    _do_terminate_logging,
+    _is_int_not_bool,
     _log_safe_peer,
     _walk_cause_chain,
 )
@@ -115,6 +116,24 @@ class AsyncAdaptedCursor:
     async def _async_soft_close(self) -> None:
         return
 
+    def _suppress_close_on_execute(self, cursor: "AsyncCursor", method_name: str) -> None:
+        """Close ``cursor``, suppressing/logging any close failure so it can't
+        replace a primary execute exception (covers greenlet cancel; KI/SystemExit
+        still propagate)."""
+        try:
+            cursor.close()
+        except (Exception, asyncio.CancelledError) as exc:
+            peer = _log_safe_peer(self._adapt_connection._connection)
+            logger.debug(
+                "AsyncAdaptedCursor.%s (id=%s, peer=%s): "
+                "underlying cursor close raised %s; suppressed",
+                method_name,
+                id(self),
+                peer,
+                type(exc).__name__,
+                exc_info=True,
+            )
+
     @property
     def arraysize(self) -> int:
         return self._arraysize
@@ -123,7 +142,7 @@ class AsyncAdaptedCursor:
     def arraysize(self, value: int) -> None:
         # Rejects bool/non-int (dqlite footgun guard); 0 and negative accepted
         # to match SA's reference adapter and stdlib sqlite3.
-        if not isinstance(value, int) or isinstance(value, bool):
+        if not _is_int_not_bool(value):
             raise ProgrammingError(f"arraysize must be an int, got {value!r}")
         self._arraysize = value
 
@@ -199,20 +218,7 @@ class AsyncAdaptedCursor:
                 self._adapt_connection._handle_exception(error)
         finally:
             if cursor is not None:
-                # Suppress close failure so it can't replace a primary execute
-                # exception; covers greenlet cancel but lets KI/SystemExit pass.
-                try:
-                    cursor.close()
-                except (Exception, asyncio.CancelledError) as exc:
-                    peer = _log_safe_peer(self._adapt_connection._connection)
-                    logger.debug(
-                        "AsyncAdaptedCursor.execute (id=%s, peer=%s): "
-                        "underlying cursor close raised %s; suppressed",
-                        id(self),
-                        peer,
-                        type(exc).__name__,
-                        exc_info=True,
-                    )
+                self._suppress_close_on_execute(cursor, "execute")
 
     def executemany(
         self,
@@ -260,18 +266,7 @@ class AsyncAdaptedCursor:
                 self._adapt_connection._handle_exception(error)
         finally:
             if cursor is not None:
-                try:
-                    cursor.close()
-                except (Exception, asyncio.CancelledError) as exc:
-                    peer = _log_safe_peer(self._adapt_connection._connection)
-                    logger.debug(
-                        "AsyncAdaptedCursor.executemany (id=%s, peer=%s): "
-                        "underlying cursor close raised %s; suppressed",
-                        id(self),
-                        peer,
-                        type(exc).__name__,
-                        exc_info=True,
-                    )
+                self._suppress_close_on_execute(cursor, "executemany")
 
     def fetchone(self) -> tuple[Any, ...] | None:
         if self._closed:
@@ -841,29 +836,7 @@ class DqliteDialect_aio(DqliteDialect):
         expected transport shapes DEBUG-log; anything else WARNING-logs as a
         likely dbapi-refactor regression.
         """
-        peer = _log_safe_peer(dbapi_connection)
-        try:
-            dbapi_connection.terminate()
-        except _FORCE_CLOSE_TAIL_EXCEPTIONS:
-            logger.debug(
-                "do_terminate: terminate raised on dispose for peer=%s id=%s; "
-                "proceeding (has_terminate=True non-raising contract)",
-                peer,
-                id(dbapi_connection),
-                exc_info=True,
-            )
-        except Exception:
-            # Unexpected — likely a dbapi-refactor regression; WARNING-tier so it
-            # stays visible while the has_terminate contract still holds.
-            logger.warning(
-                "do_terminate: terminate raised UNEXPECTED exception type "
-                "on dispose for peer=%s id=%s; SA has_terminate=True "
-                "contract absorbs to prevent dispose abort. Likely a "
-                "dbapi-side refactor regression — investigate.",
-                peer,
-                id(dbapi_connection),
-                exc_info=True,
-            )
+        _do_terminate_logging("terminate", dbapi_connection, dbapi_connection.terminate, logger)
 
     def do_ping(self, dbapi_connection: Any) -> bool:
         """Bespoke async ping: run SELECT 1 directly through the dbapi cursor in

@@ -154,6 +154,50 @@ def _safe_for_log(value: str) -> str:
     return _truncate_for_log(_sanitize_server_text(value))
 
 
+def _do_terminate_logging(
+    method_name: str,
+    dbapi_connection: Any,
+    terminate_func: Callable[[], Any],
+    log: logging.Logger,
+) -> None:
+    """Run ``terminate_func`` for ``do_terminate``, absorbing all tail ``Exception``
+    (has_terminate=True non-raising contract; BaseException still propagates).
+
+    Two-tier: expected transport shapes DEBUG-log; anything else WARNING-logs as a
+    likely dbapi-refactor regression. ``method_name`` names the underlying call in
+    the log lines (sync ``force_close_transport`` vs async ``terminate``); ``log``
+    is the caller's module logger so the record's name stays per-module.
+    """
+    peer = _log_safe_peer(dbapi_connection)
+    try:
+        terminate_func()
+    except _FORCE_CLOSE_TAIL_EXCEPTIONS:
+        log.debug(
+            "do_terminate: %s raised on dispose for peer=%s id=%s; "
+            "proceeding (has_terminate=True non-raising contract)",
+            method_name,
+            peer,
+            id(dbapi_connection),
+            exc_info=True,
+        )
+    except Exception:
+        log.warning(
+            "do_terminate: %s raised UNEXPECTED exception type on dispose "
+            "for peer=%s id=%s; SA has_terminate=True contract absorbs to "
+            "prevent dispose abort. Likely a dbapi-side refactor regression "
+            "— investigate.",
+            method_name,
+            peer,
+            id(dbapi_connection),
+            exc_info=True,
+        )
+
+
+def _is_int_not_bool(v: object) -> bool:
+    """True for a real ``int`` while rejecting ``bool`` (an ``int`` subclass)."""
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
 def _log_safe_peer(obj: object) -> str | None:
     """Return ``obj.address`` sanitized for line-oriented log output, or ``None``.
 
@@ -181,6 +225,10 @@ _AUTOCOMMIT_REJECTION_MSG: Final[str] = (
     "autocommit-by-default; this is about SA's transaction "
     "model, not the wire.)"
 )
+
+# SSOT for the bare two-phase-commit rejection diagnostic shared across the four
+# stub methods (do_begin_twophase adds caller guidance and keeps its own wording).
+_TWOPHASE_NOT_SUPPORTED_MSG: Final[str] = "dqlite does not support two-phase commit."
 
 
 def _walk_cause_chain(
@@ -972,21 +1020,14 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         ),
         "max_total_rows": (
             lambda s: _parse_url_int_or_none("max_total_rows", s, upper=2**31 - 1),
-            lambda v: (
-                v is None or (isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 2**31 - 1)
-            ),
+            lambda v: v is None or (_is_int_not_bool(v) and 0 < v <= 2**31 - 1),
         ),
         "max_continuation_frames": (
             lambda s: _parse_url_int_or_none(
                 "max_continuation_frames", s, upper=_URL_MAX_CONTINUATION_FRAMES_CAP
             ),
             lambda v: (
-                v is None
-                or (
-                    isinstance(v, int)
-                    and not isinstance(v, bool)
-                    and 0 < v <= _URL_MAX_CONTINUATION_FRAMES_CAP
-                )
+                v is None or (_is_int_not_bool(v) and 0 < v <= _URL_MAX_CONTINUATION_FRAMES_CAP)
             ),
         ),
         # ``max_message_size``: wire inbound frame cap. ``None`` = wire-default
@@ -994,9 +1035,7 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # the real upper bound (a SA cap would mask legitimate larger values).
         "max_message_size": (
             lambda s: _parse_url_int_or_none("max_message_size", s, upper=2**31 - 1),
-            lambda v: (
-                v is None or (isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 2**31 - 1)
-            ),
+            lambda v: v is None or (_is_int_not_bool(v) and 0 < v <= 2**31 - 1),
         ),
         "trust_server_heartbeat": (
             lambda s: _parse_url_bool("trust_server_heartbeat", s),
@@ -1348,7 +1387,7 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         # (validation already ran at execution_options time).
         raw_mode = getattr(target, "_dqlite_session_mode", "immediate")
         mode = raw_mode.lower() if isinstance(raw_mode, str) and raw_mode else "immediate"
-        if mode == "deferred" or mode == "read_only":
+        if mode in ("deferred", "read_only"):
             # read_only rides DEFERRED (its PRAGMA query_only blocks writes); emit
             # the explicit literal so the contract is visible at the SA layer too.
             begin_sql = "BEGIN DEFERRED"
@@ -1567,7 +1606,7 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         )
 
     def do_prepare_twophase(self, connection: Any, xid: Any) -> None:
-        raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+        raise _dbapi_exc.NotSupportedError(_TWOPHASE_NOT_SUPPORTED_MSG)
 
     def do_commit_twophase(
         self,
@@ -1576,7 +1615,7 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         is_prepared: bool = True,
         recover: bool = False,
     ) -> None:
-        raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+        raise _dbapi_exc.NotSupportedError(_TWOPHASE_NOT_SUPPORTED_MSG)
 
     def do_rollback_twophase(
         self,
@@ -1585,12 +1624,12 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         is_prepared: bool = True,
         recover: bool = False,
     ) -> None:
-        raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+        raise _dbapi_exc.NotSupportedError(_TWOPHASE_NOT_SUPPORTED_MSG)
 
     def do_recover_twophase(self, connection: Any) -> NoReturn:
         # ``NoReturn`` (not ``list[Any]``) so type-checkers flag downstream code
         # as unreachable — the body unconditionally raises.
-        raise _dbapi_exc.NotSupportedError("dqlite does not support two-phase commit.")
+        raise _dbapi_exc.NotSupportedError(_TWOPHASE_NOT_SUPPORTED_MSG)
 
     def do_close(self, dbapi_connection: Any) -> None:
         """SA pool checkin / ``engine.dispose()`` graceful close path.
@@ -1624,32 +1663,12 @@ class DqliteDialect(SQLiteDialect_pysqlite):
         transport shapes DEBUG-log; unexpected (likely a dbapi refactor regression)
         WARNING-log.
         """
-        peer = _log_safe_peer(dbapi_connection)
-        try:
-            dbapi_connection.force_close_transport()
-        except _FORCE_CLOSE_TAIL_EXCEPTIONS:
-            # Expected transport-class shapes — DEBUG-log + absorb.
-            logger.debug(
-                "do_terminate: force_close_transport raised on dispose for "
-                "peer=%s id=%s; proceeding (has_terminate=True non-raising "
-                "contract)",
-                peer,
-                id(dbapi_connection),
-                exc_info=True,
-            )
-        except Exception:
-            # Unexpected shape — likely a dbapi refactor regression. Absorb (the
-            # non-raising contract) but WARNING-tier so it stays visible.
-            logger.warning(
-                "do_terminate: force_close_transport raised UNEXPECTED "
-                "exception type on dispose for peer=%s id=%s; SA "
-                "has_terminate=True contract absorbs to prevent dispose "
-                "abort. Likely a dbapi-side refactor regression — "
-                "investigate.",
-                peer,
-                id(dbapi_connection),
-                exc_info=True,
-            )
+        _do_terminate_logging(
+            "force_close_transport",
+            dbapi_connection,
+            dbapi_connection.force_close_transport,
+            logger,
+        )
 
     def do_ping(self, dbapi_connection: Any) -> bool:
         """Check if the connection is still alive.

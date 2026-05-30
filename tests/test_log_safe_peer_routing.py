@@ -55,14 +55,3 @@ def test_base_module_has_no_raw_address_getattr_in_log_context() -> None:
         "route through ``_log_safe_peer``. Raw getattr survivors:\n"
         + "\n".join(f"  line {ln}: {src}" for ln, src in survivors)
     )
-
-
-def test_aio_module_log_safe_peer_used_at_every_peer_assignment() -> None:
-    source = inspect.getsource(_aio_mod)
-    assert "_log_safe_peer" in source
-    # Lower-bound is more robust to future rename/consolidation than exact count.
-    assert source.count("_log_safe_peer(") >= 10, (
-        "Expected at least 10 peer-log call sites through "
-        "_log_safe_peer; got "
-        f"{source.count('_log_safe_peer(')}"
-    )

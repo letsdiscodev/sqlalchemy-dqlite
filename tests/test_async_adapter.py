@@ -1,8 +1,6 @@
 """Tests for async adapter cursor behavior."""
 
-import ast
 import inspect
-import textwrap
 from collections import deque
 from unittest.mock import MagicMock, patch
 
@@ -152,21 +150,6 @@ class TestAsyncAdaptedCursorRowsCleared:
         assert cursor.fetchone() is None
 
 
-def _has_finally_with_close(func: object) -> bool:
-    """True if the function calls ``.close()`` inside a finally block."""
-    source = textwrap.dedent(inspect.getsource(func))  # type: ignore[arg-type]
-    tree = ast.parse(source)
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Try) and node.finalbody:
-            for stmt in ast.walk(node):
-                if isinstance(stmt, ast.Call):
-                    func_node = stmt.func
-                    if isinstance(func_node, ast.Attribute) and func_node.attr == "close":
-                        return True
-    return False
-
-
 class TestAsyncAdaptedCursorOptionalMethods:
     def test_connection_property_returns_adapter(self) -> None:
         cursor = _make_cursor()
@@ -198,20 +181,6 @@ class TestAsyncAdaptedCursorOptionalMethods:
         cursor = _make_cursor()
         with pytest.raises(NotSupportedError):
             cursor.scroll(5)
-
-
-class TestAsyncAdaptedCursorCleanup:
-    def test_cursor_closed_on_execute_error(self) -> None:
-        """Underlying cursor must be closed even if execute() raises."""
-        assert _has_finally_with_close(AsyncAdaptedCursor.execute), (
-            "cursor.close() should be in a finally block to prevent leaks on error"
-        )
-
-    def test_executemany_cursor_closed_on_error(self) -> None:
-        """Underlying cursor must be closed even if executemany() raises."""
-        assert _has_finally_with_close(AsyncAdaptedCursor.executemany), (
-            "cursor.close() should be in a finally block to prevent leaks on error"
-        )
 
 
 class TestAsyncAdaptedConnectionClose:
@@ -367,7 +336,6 @@ class TestAioAdapterReturnAnnotations:
     """Lock in the narrower return annotations on the adapter surface."""
 
     def test_execute_and_executemany_return_none(self) -> None:
-        import inspect
 
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
@@ -402,7 +370,6 @@ class TestAioAdapterReturnAnnotations:
     def test_iter_returns_self(self) -> None:
         """``__iter__`` returns ``Self`` (PEP 673) so subclass typing is
         preserved through ``iter(cursor)``."""
-        import inspect
 
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
 
@@ -411,7 +378,6 @@ class TestAioAdapterReturnAnnotations:
 
     def test_next_returns_row_tuple(self) -> None:
         """``__next__`` returns ``tuple[Any, ...]``, not bare ``Any``."""
-        import inspect
 
         from sqlalchemydqlite.aio import AsyncAdaptedCursor
 

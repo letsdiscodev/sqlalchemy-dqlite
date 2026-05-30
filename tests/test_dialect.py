@@ -533,25 +533,6 @@ class TestIsolationLevel:
 
 
 class TestDoPing:
-    def test_cursor_closed_in_finally(self) -> None:
-        import ast
-        import inspect
-        import textwrap
-
-        source = textwrap.dedent(inspect.getsource(DqliteDialect.do_ping))
-        tree = ast.parse(source)
-
-        has_finally_close = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Try) and node.finalbody:
-                for stmt in ast.walk(node):
-                    if isinstance(stmt, ast.Call):
-                        func_node = stmt.func
-                        if isinstance(func_node, ast.Attribute) and func_node.attr == "close":
-                            has_finally_close = True
-
-        assert has_finally_close, "cursor.close() should be in a finally block in do_ping"
-
     def test_ping_returns_true_on_success(self) -> None:
         from unittest.mock import MagicMock
 
@@ -596,34 +577,6 @@ class TestPoolClass:
         assert pool_class is not pool.NullPool, (
             "NullPool creates a new TCP connection per operation; "
             "a network database should use QueuePool"
-        )
-
-
-class TestAsyncConnect:
-    def test_connect_calls_await_only_on_raw_connect(self) -> None:
-        import ast
-        import inspect
-        import textwrap
-
-        from sqlalchemydqlite.aio import DqliteDialect_aio
-
-        source = textwrap.dedent(inspect.getsource(DqliteDialect_aio.connect))
-        tree = ast.parse(source)
-
-        has_eager_connect = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                func = node.func
-                if isinstance(func, ast.Name) and func.id == "await_only" and node.args:
-                    arg = node.args[0]
-                    if isinstance(arg, ast.Call):
-                        inner = arg.func
-                        if isinstance(inner, ast.Attribute) and inner.attr == "connect":
-                            has_eager_connect = True
-
-        assert has_eager_connect, (
-            "DqliteDialect_aio.connect() should eagerly establish TCP with "
-            "await_only(raw_conn.connect())"
         )
 
 

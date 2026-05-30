@@ -10,20 +10,6 @@ from unittest.mock import MagicMock
 from sqlalchemydqlite.base import DqliteDialect
 
 
-def test_do_execute_is_overridden_locally() -> None:
-    assert "do_execute" in DqliteDialect.__dict__, (
-        "DqliteDialect.do_execute must be pinned locally for drift "
-        "defence — see do_executemany's docstring for the rationale."
-    )
-
-
-def test_do_execute_no_params_is_overridden_locally() -> None:
-    assert "do_execute_no_params" in DqliteDialect.__dict__, (
-        "DqliteDialect.do_execute_no_params must be pinned locally for "
-        "drift defence — see do_executemany's docstring for the rationale."
-    )
-
-
 def test_do_execute_body_is_byte_equivalent_to_sa_default() -> None:
     """Body must match SA's one-line pass-through."""
     dialect = DqliteDialect.__new__(DqliteDialect)

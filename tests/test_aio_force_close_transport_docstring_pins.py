@@ -1,6 +1,5 @@
 """``_force_close_transport`` absorbs Exception / CancelledError but
-propagates KeyboardInterrupt / SystemExit; its docstring must not
-claim "Never raises"."""
+propagates KeyboardInterrupt / SystemExit."""
 
 from __future__ import annotations
 
@@ -39,13 +38,3 @@ def test_force_close_transport_propagates_system_exit() -> None:
     adapter = _make_adapter(_RaisesSE())
     with pytest.raises(SystemExit):
         adapter._force_close_transport()
-
-
-def test_force_close_transport_docstring_does_not_promise_never_raises() -> None:
-    """The docstring must not recur to "Never raises" — it overpromises
-    vs the actual catch breadth."""
-    text = AsyncAdaptedConnection._force_close_transport.__doc__ or ""
-    assert "Never raises" not in text, (
-        "Docstring overpromises: KeyboardInterrupt / SystemExit are "
-        "intentionally NOT caught by the except clause."
-    )

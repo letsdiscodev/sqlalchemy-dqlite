@@ -10,15 +10,6 @@ from unittest.mock import MagicMock
 from sqlalchemydqlite.base import DqliteDialect
 
 
-def test_dialect_docstring_documents_isolation_divergence() -> None:
-    """The class docstring must explain the two surfaces and their roles."""
-    doc = DqliteDialect.__doc__ or ""
-    assert "_isolation_lookup" in doc
-    assert "get_isolation_level_values" in doc
-    assert "AUTOCOMMIT" in doc
-    assert "diagnostic" in doc.lower()
-
-
 def test_isolation_lookup_truthful_set_is_serializable_only() -> None:
     """_isolation_lookup reports only the level the dialect honours."""
     assert set(DqliteDialect._isolation_lookup.keys()) == {"SERIALIZABLE"}

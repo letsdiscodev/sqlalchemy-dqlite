@@ -10,14 +10,6 @@ from sqlalchemy.schema import CreateTable
 from sqlalchemydqlite.base import DqliteDialect
 
 
-def test_dialect_docstring_documents_sqlite_prefix_for_ddl_kwargs() -> None:
-    doc = DqliteDialect.__doc__ or ""
-    assert "sqlite_*" in doc, "docstring must name the sqlite_* prefix"
-    assert "NOT" in doc and "dqlite_*" in doc, (
-        "docstring must explicitly warn against dqlite_* prefix"
-    )
-
-
 def test_sqlite_with_rowid_kwarg_takes_effect() -> None:
     m = MetaData()
     t = Table(

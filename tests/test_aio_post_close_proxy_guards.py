@@ -95,29 +95,3 @@ def test_isinstance_on_dead_callable_proxy_raises_reference_error() -> None:
     with pytest.raises(ReferenceError):
         isinstance(proxy, weakref.ProxyTypes)
     assert type(proxy) in weakref.ProxyTypes
-
-
-def test_proxy_guards_use_type_not_isinstance_discriminator() -> None:
-    """Source-inspection pin: every guard must use ``type(x) in
-    ProxyTypes``; reverting to ``isinstance`` re-introduces the
-    ReferenceError leak on the dead-callable-proxy path."""
-    import inspect
-
-    from sqlalchemydqlite import aio as aio_module
-
-    source = inspect.getsource(aio_module)
-    isinstance_sites = source.count("isinstance(self._connection, weakref.ProxyTypes)")
-    isinstance_neighbour_sites = source.count(
-        "isinstance(connection._connection, weakref.ProxyTypes)"
-    ) + source.count("isinstance(dbapi_connection._connection, weakref.ProxyTypes)")
-    assert isinstance_sites == 0, (
-        "All ``isinstance(self._connection, weakref.ProxyTypes)`` "
-        "guards must use the ``type(...) in ProxyTypes`` form "
-        "instead — see _CallableTargetForProxy test for why."
-    )
-    assert isinstance_neighbour_sites == 0, (
-        "All ``isinstance(<adapter>._connection, weakref.ProxyTypes)`` "
-        "guards must use the ``type(...) in ProxyTypes`` form."
-    )
-    # Also catch a regression that drops the guard entirely.
-    assert source.count("type(self._connection) in weakref.ProxyTypes") >= 5

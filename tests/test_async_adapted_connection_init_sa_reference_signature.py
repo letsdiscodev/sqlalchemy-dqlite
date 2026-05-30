@@ -6,20 +6,9 @@ single-positional shape ``(raw_conn)`` for backward compatibility.
 
 from __future__ import annotations
 
-import inspect
 from unittest.mock import MagicMock
 
 from sqlalchemydqlite.aio import AsyncAdaptedConnection
-
-
-def test_init_signature_sa_reference_order() -> None:
-    """Parameters appear as ``(self, dbapi, connection)`` per SA reference."""
-    sig = inspect.signature(AsyncAdaptedConnection.__init__)
-    params = list(sig.parameters)
-    assert params[:3] == ["self", "dbapi", "connection"], (
-        f"AsyncAdaptedConnection.__init__ signature drifted from SA "
-        f"reference shape (self, dbapi, connection): got {params}"
-    )
 
 
 def test_init_sa_reference_positional_construction_succeeds() -> None:

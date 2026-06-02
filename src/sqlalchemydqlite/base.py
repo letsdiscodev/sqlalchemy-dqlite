@@ -164,9 +164,7 @@ def _do_terminate_logging(
     (has_terminate=True non-raising contract; BaseException still propagates).
 
     Two-tier: expected transport shapes DEBUG-log; anything else WARNING-logs as a
-    likely dbapi-refactor regression. ``method_name`` names the underlying call in
-    the log lines (sync ``force_close_transport`` vs async ``terminate``); ``log``
-    is the caller's module logger so the record's name stays per-module.
+    likely dbapi-refactor regression.
     """
     peer = _log_safe_peer(dbapi_connection)
     try:
@@ -226,8 +224,7 @@ _AUTOCOMMIT_REJECTION_MSG: Final[str] = (
     "model, not the wire.)"
 )
 
-# SSOT for the bare two-phase-commit rejection diagnostic shared across the four
-# stub methods (do_begin_twophase adds caller guidance and keeps its own wording).
+# Shared 2PC rejection message for the four stub methods.
 _TWOPHASE_NOT_SUPPORTED_MSG: Final[str] = "dqlite does not support two-phase commit."
 
 

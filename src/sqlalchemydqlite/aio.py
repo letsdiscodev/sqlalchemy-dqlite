@@ -649,11 +649,9 @@ class AsyncAdaptedConnection(AdaptedConnection):
                 # CancelledError from rollback propagates (the finally still
                 # runs close, whose cancel arm force-closes before re-raising).
             finally:
-                # Terminal teardown (has_terminate=True must-not-raise contract,
-                # matching terminate()/do_terminate): transport-class faults are
-                # suppressed; a RuntimeError (defunct/closed loop during dispose)
-                # is reaped via _force_close_transport and suppressed. Only
-                # non-RuntimeError bugs propagate.
+                # Must-not-raise teardown: transport faults and a RuntimeError
+                # (defunct/closed loop during dispose) are suppressed; other bugs
+                # propagate.
                 try:
                     await_only(self._connection.close())
                 except _TRANSPORT_CLASS_EXCEPTIONS as exc:

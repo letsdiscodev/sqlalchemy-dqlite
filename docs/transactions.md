@@ -24,6 +24,24 @@ with engine.begin() as conn:
 The same applies to `engine.connect()`: SQLAlchemy auto-begins on the first
 execute, so a user-issued `text("BEGIN")` collides the same way.
 
+## Session modes
+
+The dialect emits a bare `BEGIN`; the dbapi qualifies it according to the
+connection's session mode (`BEGIN IMMEDIATE` by default, so a read-then-write
+block cannot lose its snapshot to a concurrent writer). The engine-wide default
+comes from the `session_mode` connect argument (`?session_mode=` in the URL or
+`connect_args`); a per-connection override is the `dqlite_session_mode`
+execution option:
+
+```python
+with engine.connect().execution_options(dqlite_session_mode="read_only") as conn:
+    conn.execute(text("SELECT ..."))          # writes raise OperationalError here
+```
+
+Accepted values are `immediate`, `deferred`, `exclusive`, and `read_only`.
+The option is transactional: it cannot be changed inside an open transaction,
+and the pool restores the connect-time default on checkin.
+
 ## No `AUTOCOMMIT`
 
 `isolation_level="AUTOCOMMIT"` is rejected. Every dqlite statement goes

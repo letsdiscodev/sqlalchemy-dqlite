@@ -9,20 +9,6 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _clear_resolve_leader_cache() -> Iterator[None]:
-    """Clear the process-wide ``_RESOLVE_LEADER_CACHE`` between tests.
-
-    Without this, two SA tests targeting the same (address, governors) via
-    different ClusterClient mocks would share a stale cached instance.
-    """
-    from dqlitedbapi import connection as _conn_mod
-
-    _conn_mod._RESOLVE_LEADER_CACHE.clear()
-    yield
-    _conn_mod._RESOLVE_LEADER_CACHE.clear()
-
-
-@pytest.fixture(autouse=True)
 def _reset_unparseable_iso_warning_gate() -> Iterator[None]:
     """Reset each type-class's one-shot ``_unparseable_iso_warning_emitted``
     ClassVar per test; it would otherwise persist and silence WARNINGs that

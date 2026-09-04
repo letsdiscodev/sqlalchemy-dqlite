@@ -27,7 +27,7 @@ from sqlalchemy.dialects.sqlite import (
 from sqlalchemydqlite.aio import DqliteDialect_aio
 from sqlalchemydqlite.base import DqliteCompiler, DqliteDialect
 
-__version__: _Final[str] = "0.3.0"
+__version__: _Final[str] = "0.4.0"
 
 # SA convention: every shipped dialect package exposes ``<package>.dialect``
 # pointing at the default sync class.

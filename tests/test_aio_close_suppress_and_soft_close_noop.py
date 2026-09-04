@@ -61,7 +61,7 @@ class TestAsyncAdaptedCursorSoftCloseNoop:
         adapted_conn._connection = underlying
         cur = AsyncAdaptedCursor(adapted_conn)
         cur._rows = deque([(1,), (2,)])
-        cur.description = (("col", None, None, None, None, None, None),)
+        cur.description = (("col", 3, None, None, None, None, None),)
         cur.rowcount = 2
         cur.lastrowid = None
 
@@ -76,5 +76,5 @@ class TestAsyncAdaptedCursorSoftCloseNoop:
         # Cursor state unchanged — soft-close is documentary, not destructive.
         assert cur._rows == deque([(1,), (2,)])
         assert cur.rowcount == 2
-        assert cur.description == (("col", None, None, None, None, None, None),)
+        assert cur.description == (("col", 3, None, None, None, None, None),)
         assert cur._closed is False

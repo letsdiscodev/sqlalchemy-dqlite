@@ -41,11 +41,11 @@ class TestDetectAutocommitSetting:
         the value SA's probe keys on. Pin the value, not just the descriptor."""
         from dqlitedbapi.connection import Connection as DqliteSyncConnection
 
-        instance_unused = DqliteSyncConnection.__new__(DqliteSyncConnection)
-        # The getter raises InterfaceError on a closed connection; __new__ skips
-        # __init__, so set _closed explicitly to reach the property body.
-        instance_unused._closed = False
-        assert instance_unused.isolation_level is None
+        conn = DqliteSyncConnection("localhost:19001")
+        try:
+            assert conn.isolation_level is None
+        finally:
+            conn.close()
 
     def test_async_dbapi_connection_isolation_level_also_returns_none(self) -> None:
         """Sibling pin on the async surface."""
@@ -53,10 +53,7 @@ class TestDetectAutocommitSetting:
             AsyncConnection as DqliteAsyncConnection,
         )
 
-        instance_unused = DqliteAsyncConnection.__new__(DqliteAsyncConnection)
-        # See sync sibling: _closed must be set before the property fires.
-        instance_unused._closed = False
-        assert instance_unused.isolation_level is None
+        assert DqliteAsyncConnection("localhost:19001").isolation_level is None
 
     def test_override_remains_load_bearing_against_isolation_level_eq_none(self) -> None:
         """The override returns False even when the probe sees isolation_level is None."""

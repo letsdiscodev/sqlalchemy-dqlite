@@ -68,7 +68,7 @@ def test_stale_rows_cleared_when_execute_raises(monkeypatch: pytest.MonkeyPatch)
 
     adapter = AsyncAdaptedCursor(conn_adapter)
     # Seed stale state simulating a prior successful execute.
-    adapter.description = [("a", None, None, None, None, None, None)]
+    adapter.description = [("a", 3, None, None, None, None, None)]
     adapter._rows = deque([(1,), (2,)])
     adapter.rowcount = 2
     adapter.lastrowid = 10
@@ -104,7 +104,7 @@ def test_stale_rows_cleared_when_executemany_raises(
     )
 
     adapter = AsyncAdaptedCursor(conn_adapter)  # type: ignore[arg-type]
-    adapter.description = [("a", None, None, None, None, None, None)]
+    adapter.description = [("a", 3, None, None, None, None, None)]
     adapter._rows = deque([(1,)])
     adapter.rowcount = 3
     adapter.lastrowid = 99

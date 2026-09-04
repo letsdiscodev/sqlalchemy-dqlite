@@ -18,6 +18,7 @@ from sqlalchemy.engine import characteristics as _sa_characteristics
 from sqlalchemy.engine.interfaces import BindTyping, DBAPIConnection, IsolationLevel
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.sql.compiler import InsertmanyvaluesSentinelOpts
+from sqlalchemy.util import await_only
 
 import dqliteclient.exceptions as _client_exc
 import dqlitedbapi.exceptions as _dbapi_exc
@@ -357,9 +358,9 @@ class _DqliteDateTime(sqltypes.DateTime):
                         f"DateTime bind: tzinfo {value.tzinfo!r} returned "
                         f"None from utcoffset(); cannot serialise."
                     )
-                from dqlitedbapi.types import _format_utc_offset
+                from dqlitedbapi.types import format_utc_offset
 
-                return base + _format_utc_offset(offset)
+                return base + format_utc_offset(offset)
             return value
 
         return process
@@ -587,9 +588,9 @@ class _DqliteTime(sqltypes.Time):
                         f"returned None from utcoffset(); cannot "
                         f"serialise without a resolvable offset."
                     )
-                from dqlitedbapi.types import _format_utc_offset
+                from dqlitedbapi.types import format_utc_offset
 
-                return base + _format_utc_offset(offset)
+                return base + format_utc_offset(offset)
             return value
 
         return process
@@ -612,9 +613,9 @@ class _DqliteTime(sqltypes.Time):
             offset = value.utcoffset()
             if offset is None:
                 return f"'{base}'"
-            from dqlitedbapi.types import _format_utc_offset
+            from dqlitedbapi.types import format_utc_offset
 
-            return f"'{base + _format_utc_offset(offset)}'"
+            return f"'{base + format_utc_offset(offset)}'"
 
         return process
 
@@ -723,50 +724,28 @@ class DqliteCompiler(SQLiteCompiler):
 class DqliteSessionModeCharacteristic(_sa_characteristics.ConnectionCharacteristic):
     """Per-connection ``dqlite_session_mode`` characteristic.
 
-    Stores the mode on the underlying dqlitedbapi connection (unwrapped via
-    ``_unwrap_dqlite_connection``) so ``do_begin`` and the cursor BEGIN-rewrite
-    see it. ``transactional = True`` so mid-transaction toggles raise. Emits
-    ``PRAGMA query_only = N`` only when crossing the read_only boundary, before
-    updating the live attribute; force-closes the slot if the PRAGMA raises.
+    Delegates to the dbapi connection's ``session_mode`` / ``set_session_mode()``
+    (unwrapped via ``_unwrap_dqlite_connection``), which owns the ``PRAGMA query_only``
+    emission and the BEGIN rewrite. ``transactional = True`` so mid-transaction toggles
+    raise.
     """
 
     transactional: ClassVar[bool] = True
 
     def get_characteristic(self, dialect: Any, dbapi_conn: Any) -> str:
         target = dialect._unwrap_dqlite_connection(dbapi_conn)
-        return getattr(target, "_dqlite_session_mode", "immediate")
+        return str(getattr(target, "session_mode", "immediate"))
 
     def set_characteristic(self, dialect: Any, dbapi_conn: Any, value: Any) -> None:
         target = dialect._unwrap_dqlite_connection(dbapi_conn)
         requested = dialect._validate_dqlite_session_mode(value)
-        current = getattr(target, "_dqlite_session_mode", "immediate")
-        if current == requested:
-            return
-        need_query_only = 1 if requested == "read_only" else 0
-        was_query_only = 1 if current == "read_only" else 0
-        try:
-            if need_query_only != was_query_only:
-                # Emit on the SA-side dbapi cursor (async routes through the
-                # AsyncAdapt cursor under greenlet_spawn).
-                cur = dbapi_conn.cursor()
-                try:
-                    cur.execute(f"PRAGMA query_only = {need_query_only}")
-                finally:
-                    cur.close()
-        except BaseException:
-            # Don't return a poisoned slot to the pool; suppress force-close's own
-            # exceptions so the originating one propagates and SA invalidates.
-            with contextlib.suppress(Exception):
-                target.force_close_transport()
-            raise
-        target._dqlite_session_mode = requested
+        result = target.set_session_mode(requested)
+        if inspect.isawaitable(result):
+            await_only(result)
 
     def reset_characteristic(self, dialect: Any, dbapi_conn: Any) -> None:
-        # SA's reset passes no "before" value; restore the construct-time default
-        # captured once on ``_dqlite_session_mode_default``.
         target = dialect._unwrap_dqlite_connection(dbapi_conn)
-        default = getattr(target, "_dqlite_session_mode_default", "immediate")
-        self.set_characteristic(dialect, dbapi_conn, default)
+        self.set_characteristic(dialect, dbapi_conn, target.default_session_mode)
 
 
 class DqliteDialect(SQLiteDialect_pysqlite):
@@ -1378,36 +1357,18 @@ class DqliteDialect(SQLiteDialect_pysqlite):
     # pipeline which already classifies exceptions): do NOT mirror this raw-cursor
     # shape there.
     def do_begin(self, dbapi_connection: DBAPIConnection) -> None:
-        target = self._unwrap_dqlite_connection(dbapi_connection)
-        # Honour only a known str literal; any other shape (test MagicMock, etc.)
-        # falls back to "immediate" — do_begin is the wrong place to surface misuse
-        # (validation already ran at execution_options time).
-        raw_mode = getattr(target, "_dqlite_session_mode", "immediate")
-        mode = raw_mode.lower() if isinstance(raw_mode, str) and raw_mode else "immediate"
-        if mode in ("deferred", "read_only"):
-            # read_only rides DEFERRED (its PRAGMA query_only blocks writes); emit
-            # the explicit literal so the contract is visible at the SA layer too.
-            begin_sql = "BEGIN DEFERRED"
-        elif mode == "exclusive":
-            begin_sql = "BEGIN EXCLUSIVE"
-        else:
-            # "immediate" and any unknown value: bare BEGIN. The dbapi rewrites to
-            # IMMEDIATE unless its engine-wide default (connect_args session_mode)
-            # is non-immediate, in which case bare BEGIN is sent verbatim.
-            begin_sql = "BEGIN"
+        # pysqlite's parent is a no-op because stdlib auto-BEGINs; dqlite has no
+        # auto-BEGIN, so emit one. The dbapi qualifies it per the connection's
+        # session mode (IMMEDIATE by default).
         cursor = dbapi_connection.cursor()
         try:
-            cursor.execute(begin_sql)
+            cursor.execute("BEGIN")
         finally:
             # Guard close so a transport-class failure doesn't replace the
-            # propagating BEGIN exception (Python's finally-replaces rule) — SA's
-            # wrapping must see the BEGIN error directly, not as __context__.
+            # propagating BEGIN exception (Python's finally-replaces rule).
             try:
                 cursor.close()
             except _FORCE_CLOSE_TAIL_EXCEPTIONS:
-                # Wider tuple (matching do_close) so cross-loop RuntimeError /
-                # dead-proxy ReferenceError don't escape and mask the BEGIN error;
-                # programmer-bug shapes still escape.
                 logger.debug(
                     "do_begin: cursor.close failed after BEGIN; BEGIN exception preserved",
                     exc_info=True,

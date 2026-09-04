@@ -287,11 +287,17 @@ class TestURLGovernorsReachAioDbapi:
         )
         _, kwargs = dialect.create_connect_args(url)
         aio_module = DqliteDialect_aio.import_dbapi()
+        # A dropped or renamed knob would raise TypeError here.
         conn = aio_module.connect(**kwargs)
-        assert conn._max_total_rows == 500
-        assert conn._max_continuation_frames == 7
-        assert conn._trust_server_heartbeat is True
-        assert conn._timeout == 5
+        assert conn.max_total_rows == 500
+        assert kwargs == {
+            "address": "host:19001",
+            "database": "db",
+            "timeout": 5.0,
+            "max_total_rows": 500,
+            "max_continuation_frames": 7,
+            "trust_server_heartbeat": True,
+        }
 
 
 class TestDoPingNarrowExceptions:

@@ -80,7 +80,7 @@ class TestAsyncExecutemanyLeaderFlipResetState:
         cur = _make_adapted_cursor(underlying)
 
         # Pre-populate state so the up-front reset is observable.
-        cur.description = [("col", None, None, None, None, None, None)]
+        cur.description = [("col", 3, None, None, None, None, None)]
         cur.rowcount = 99
         cur.lastrowid = 42
         cur._rows.extend([(1,), (2,)])

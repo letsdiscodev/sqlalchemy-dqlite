@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sqlalchemy-dqlite"
-version = "0.3.0"
+version = "0.4.0"
 description = "SQLAlchemy 2.0 dialect for dqlite distributed SQLite"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -26,15 +26,15 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "dqlite-dbapi>=0.3.0,<0.4.0",
+    "dqlite-dbapi>=0.4.0,<0.5.0",
     # The SA dialect imports dqliteclient and dqlitewire directly
     # (base.py / aio.py reach into client exception classes for
     # is_disconnect, and into dqlitewire for shared helpers). Pin
     # both transitively so a future major-version bump in either
     # package surfaces at install time, not at module-import time
     # in user code.
-    "dqlite-client>=0.3.0,<0.4.0",
-    "dqlite-wire>=0.3.0,<0.4.0",
+    "dqlite-client>=0.4.0,<0.5.0",
+    "dqlite-wire>=0.4.0,<0.5.0",
     "sqlalchemy>=2.0,<3.0",
 ]
 

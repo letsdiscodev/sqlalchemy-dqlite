@@ -33,7 +33,7 @@ def test_executemany_on_closed_cursor_raises() -> None:
 
 def test_close_clears_result_set_but_preserves_rowcount_lastrowid() -> None:
     cur = _make_cursor()
-    cur.description = (("col", None, None, None, None, None, None),)
+    cur.description = (("col", 3, None, None, None, None, None),)
     cur.rowcount = 42
     cur.lastrowid = 7
     cur._rows.append((1,))

@@ -384,8 +384,7 @@ class Requirements(SuiteRequirements):
 
     @property
     def fetch_first(self) -> compound:
-        """Closed: SA's compiler emits LIMIT/OFFSET for SQLite, so these tests
-        never actually exercise FETCH FIRST."""
+        """SQLite has no ``FETCH FIRST ... ROWS ONLY`` syntax, only LIMIT/OFFSET."""
         return exclusions.closed()
 
     @property

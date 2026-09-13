@@ -1,4 +1,9 @@
-"""Tests for dialect requirements."""
+"""Dialect Requirements: exclusion shapes, overrides, closed and opened gates."""
+
+from __future__ import annotations
+
+import pytest
+from sqlalchemy.testing.exclusions import compound
 
 from sqlalchemydqlite.requirements import Requirements
 
@@ -132,3 +137,61 @@ class TestRequirementsReturnAnnotations:
         assert not missing, (
             f"Requirements properties must annotate ``-> compound``; missing on: {sorted(missing)}"
         )
+
+
+@pytest.fixture
+def req() -> Requirements:
+    return Requirements()
+
+
+# Each name is deliberately closed in the requirements module; a rename
+# trips the ``enabled=False`` assertion below.
+_EXPECTED_CLOSED = (
+    "two_phase_transactions",
+    "parens_in_union_contained_select_w_limit_offset",
+    "parens_in_union_contained_select_wo_limit_offset",
+    "implicitly_named_constraints",
+    "schemas",
+    "cross_schema_fk_reflection",
+    "regexp_match",
+)
+
+
+@pytest.mark.parametrize("name", _EXPECTED_CLOSED)
+def test_closed_requirement_present_and_disabled(req: Requirements, name: str) -> None:
+    """The property exists and surfaces as disabled."""
+    assert hasattr(req, name), (
+        f"Requirements.{name} expected to exist (closed() in source) "
+        f"but is missing — likely a rename"
+    )
+    compound = getattr(req, name)
+    assert not compound.enabled, (
+        f"Requirements.{name} expected closed (enabled=False); "
+        "got enabled=True. Either revert the change or update "
+        "the expected list in this test."
+    )
+
+
+def _is_open(prop: compound) -> bool:
+    """True for ``open()``: ``fails`` is empty, vs non-empty for ``closed()``.
+
+    The public ``enabled_for_config`` needs a config object we lack here, so
+    inspect the internal ``fails`` attribute instead.
+    """
+    return len(prop.fails) == 0
+
+
+def test_nullsordering_is_open() -> None:
+    assert _is_open(Requirements().nullsordering)
+
+
+def test_intersect_is_open() -> None:
+    assert _is_open(Requirements().intersect)
+
+
+def test_except_is_open() -> None:
+    assert _is_open(Requirements().except_)
+
+
+def test_index_ddl_if_exists_is_open() -> None:
+    assert _is_open(Requirements().index_ddl_if_exists)

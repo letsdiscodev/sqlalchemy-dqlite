@@ -1,12 +1,12 @@
 """Pin: the dialect re-brackets IPv6 hosts in the ``address`` kwarg. SA's URL parser strips
-the brackets, but the client's ``_parse_address`` needs them to disambiguate host from port."""
+the brackets, but the client's ``parse_address`` needs them to disambiguate host from port."""
 
 from __future__ import annotations
 
 import pytest
 from sqlalchemy.engine.url import URL
 
-from dqliteclient.connection import _parse_address
+from dqliteclient import parse_address
 from sqlalchemydqlite.base import DqliteDialect
 
 
@@ -21,13 +21,13 @@ def test_ipv6_loopback_address_is_bracketed() -> None:
     assert kwargs["address"] == "[::1]:9001", (
         f"IPv6 host must be bracketed before passing to dbapi; got {kwargs['address']!r}"
     )
-    assert _parse_address(str(kwargs["address"])) == ("::1", 9001)
+    assert parse_address(str(kwargs["address"])) == ("::1", 9001)
 
 
 def test_ipv6_full_address_is_bracketed() -> None:
     kwargs = _connect_kwargs("2001:db8::1", 9001)
     assert kwargs["address"] == "[2001:db8::1]:9001"
-    assert _parse_address(str(kwargs["address"])) == ("2001:db8::1", 9001)
+    assert parse_address(str(kwargs["address"])) == ("2001:db8::1", 9001)
 
 
 def test_ipv6_global_unicast_is_bracketed() -> None:
@@ -55,7 +55,7 @@ def test_default_localhost_unchanged() -> None:
     "ipv6_host",
     [
         "::1",
-        # ``::`` (unspecified) omitted: ``_parse_address`` rejects it (TCP can't target it).
+        # ``::`` (unspecified) omitted: ``parse_address`` rejects it (TCP can't target it).
         "2001:db8::1",
         "fe80::1",
         "2001:db8:85a3::8a2e:370:7334",
@@ -63,6 +63,6 @@ def test_default_localhost_unchanged() -> None:
 )
 def test_ipv6_addresses_round_trip_through_dbapi_parser(ipv6_host: str) -> None:
     kwargs = _connect_kwargs(ipv6_host, 9001)
-    parsed_host, parsed_port = _parse_address(str(kwargs["address"]))
+    parsed_host, parsed_port = parse_address(str(kwargs["address"]))
     assert parsed_host == ipv6_host
     assert parsed_port == 9001

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sqlalchemy-dqlite"
-version = "0.6.0"
+version = "0.7.0"
 description = "SQLAlchemy 2.0 dialect for dqlite distributed SQLite"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -26,15 +26,15 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "dqlite-dbapi>=0.6.0,<0.7.0",
+    "dqlite-dbapi>=0.7.0,<0.8.0",
     # The SA dialect imports dqliteclient and dqlitewire directly
     # (base.py / aio.py reach into client exception classes for
     # is_disconnect, and into dqlitewire for shared helpers). Pin
     # both transitively so a future major-version bump in either
     # package surfaces at install time, not at module-import time
     # in user code.
-    "dqlite-client>=0.6.0,<0.7.0",
-    "dqlite-wire>=0.6.0,<0.7.0",
+    "dqlite-client>=0.7.0,<0.8.0",
+    "dqlite-wire>=0.7.0,<0.8.0",
     "sqlalchemy>=2.0,<3.0",
 ]
 
@@ -83,6 +83,7 @@ asyncio_default_fixture_loop_scope = "function"
 # (--dburi etc.) the project-wide test runner does not pass. Run the
 # suite explicitly with ``pytest tests/compliance/``.
 addopts = ["--ignore=tests/compliance"]
+markers = ["integration: requires a running dqlite cluster"]
 filterwarnings = [
     # Promote deprecations to errors so the suite catches stdlib
     # deprecation surface under the CPython version the workspace
@@ -96,7 +97,7 @@ filterwarnings = [
 [tool.mypy]
 strict = true
 python_version = "3.13"
-# Tests live under ``tests/`` with no ``__init__.py``; mypy needs
+# Tests are not a package; mypy needs
 # ``explicit_package_bases`` (or namespace packages) to avoid the
 # duplicate-conftest module-name collision when scanning sibling
 # integration/ subdirectories. ``mypy_path`` mirrors the

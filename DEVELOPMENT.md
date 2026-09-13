@@ -76,10 +76,10 @@ To keep the two test corpora cleanly separated, `pyproject.toml`'s
 pytest config has `addopts=["--ignore=tests/compliance"]`. Run the
 suite explicitly with `pytest tests/compliance/`.
 
-### Why ~700 suite tests are skipped (and that's correct)
+### Why ~600 suite tests are skipped (and that's correct)
 
 Each compliance run reports a large `skipped` count (currently
-~639). Most skips are gated by a `Requirements.<feature>` declaration
+599). Most skips are gated by a `Requirements.<feature>` declaration
 in `src/sqlalchemydqlite/requirements.py` that says "dqlite doesn't
 support this." The skipped tests are testing capabilities the
 underlying database genuinely lacks — running them would fail with

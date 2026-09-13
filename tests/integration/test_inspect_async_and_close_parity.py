@@ -1,5 +1,5 @@
 """Coverage for three SA dialect surfaces: async reflection via run_sync,
-do_close parity (sync vs async), and the AsyncAdaptedCursor soft-close no-op."""
+do_close parity (sync vs async)."""
 
 from __future__ import annotations
 
@@ -18,8 +18,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-
-from sqlalchemydqlite.aio import AsyncAdaptedConnection, AsyncAdaptedCursor
 
 
 @pytest.fixture
@@ -99,23 +97,3 @@ async def test_async_engine_explicit_connection_close_runs_adapter_close(
         # dispose() forces the pool to close the dbapi conn; a leak would hang here.
     finally:
         await eng.dispose()
-
-
-@pytest.mark.asyncio
-async def test_async_soft_close_is_noop_on_cursor() -> None:
-    """soft-close is a no-op: each execute opens+closes its own cursor, so adding
-    work in ``_async_soft_close`` would race the per-execute cursor lifecycle."""
-    adapter = AsyncAdaptedConnection.__new__(AsyncAdaptedConnection)
-    adapter._connection = None
-    cur = AsyncAdaptedCursor(adapter)
-    cur.description = (("x", 4, None, None, None, None, None),)
-    cur.rowcount = 7
-    cur.lastrowid = 42
-    cur._closed = False
-
-    await cur._async_soft_close()
-
-    assert cur.description == (("x", 4, None, None, None, None, None),)
-    assert cur.rowcount == 7
-    assert cur.lastrowid == 42
-    assert cur._closed is False

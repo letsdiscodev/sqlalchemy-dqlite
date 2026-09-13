@@ -55,14 +55,10 @@ for the full model.
 
 ## Savepoints
 
-SQLAlchemy's `Session.begin_nested()` / `connection.begin_nested()` use
-generated savepoint names (e.g. `sa_savepoint_1`), which the dialect tracks
-correctly — no action needed.
-
-Only **raw** SQL with an unusual savepoint name (quoted, backticked,
-bracketed, unicode, or leading-digit, e.g. `text('SAVEPOINT "weird name"')`)
-falls outside the tracker. When that happens the connection is conservatively
-flagged as carrying an untracked savepoint, and SQLAlchemy issues a safety
-`ROLLBACK` on the next pool checkin — one extra round-trip per checkout for
-the rest of that connection's life in the pool. Stick to bare-ASCII savepoint
-names in raw SQL to avoid it.
+`Session.begin_nested()` / `connection.begin_nested()` work as on any other
+backend. Raw `SAVEPOINT` / `RELEASE` statements work too. The driver tracks
+transactions conservatively: after releasing an outermost savepoint opened
+outside a SQLAlchemy transaction, it still considers a transaction open until
+the next `COMMIT` or `ROLLBACK`, so the pool issues one extra `ROLLBACK` on
+checkin. The server answers "no transaction is active" and the driver treats
+that as success.

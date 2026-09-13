@@ -138,7 +138,7 @@ async def test_invalid_mode_raises_argument_error(
     set_characteristic hook validates), not deferred to the first do_begin."""
     engine = create_async_engine(async_engine_url).execution_options(dqlite_session_mode="weak")
     try:
-        with pytest.raises(ArgumentError, match="Invalid dqlite_session_mode"):
+        with pytest.raises(ArgumentError, match="dqlite_session_mode: Invalid session_mode"):
             async with engine.connect():
                 pass
     finally:

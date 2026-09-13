@@ -1,0 +1,38 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@v7
+      with:
+        python-version: ${{ matrix.python-version }}
+    # Sibling packages come from PyPI here; the [tool.uv.sources] path links and the
+    # lock are for local checkouts. A change that needs an unreleased sibling API
+    # passes the cross-package suite locally and fails here until the sibling ships.
+    - name: Install
+      run: |
+        sed -i '/^\[tool\.uv\.sources\]/,/^\[/{/^\[tool\.uv\.sources\]/d;/^\[/!d}' pyproject.toml
+        rm -f uv.lock
+        uv sync --extra dev
+    - name: Lint
+      run: |
+        uv run ruff check src tests
+        uv run ruff format --check src tests
+    - name: Type-check
+      run: uv run mypy src tests
+    - name: Unit tests
+      run: uv run pytest tests --ignore=tests/integration

@@ -34,7 +34,7 @@ uv sync --extra dev
 .venv/bin/pytest tests/ --ignore=tests/integration
 
 # Run all tests (requires Docker cluster)
-cd ../dqlite-test-cluster && docker compose up -d
+(cd ../python-dqlite-dev/cluster && docker compose up -d)
 .venv/bin/pytest tests/
 ```
 
@@ -76,10 +76,9 @@ To keep the two test corpora cleanly separated, `pyproject.toml`'s
 pytest config has `addopts=["--ignore=tests/compliance"]`. Run the
 suite explicitly with `pytest tests/compliance/`.
 
-### Why ~600 suite tests are skipped (and that's correct)
+### Why many suite tests are skipped (and that's correct)
 
-Each compliance run reports a large `skipped` count (currently
-599). Most skips are gated by a `Requirements.<feature>` declaration
+Each compliance run reports a large `skipped` count. Most skips are gated by a `Requirements.<feature>` declaration
 in `src/sqlalchemydqlite/requirements.py` that says "dqlite doesn't
 support this." The skipped tests are testing capabilities the
 underlying database genuinely lacks — running them would fail with
@@ -184,33 +183,15 @@ for.
 .venv/bin/pytest tests/ --ignore=tests/integration
 ```
 
-## Commit message hygiene
+## Commit messages
 
-Commit messages must not contain workflow vocabulary
-("Round N" / "Cycle N" / "Phase N" / "Bundle X" / "ultrathink"),
-`ISSUE-<token>` identifiers, or `done/*.md` filename references.
-The durable referent for cross-commit citations is the commit hash;
-the workflow token is ornamental and leaks the development process
-into the published history.
-
-`scripts/check-commit-msg.sh` enforces the rule. Install it as a
-local `commit-msg` hook:
+Commit messages must not carry internal workflow vocabulary ("Round N",
+"Phase N", issue tokens, `done/*.md` references). The shared checker lives in
+the sibling `python-dqlite-dev` checkout:
 
 ```bash
-ln -s ../../scripts/check-commit-msg.sh .git/hooks/commit-msg
+../python-dqlite-dev/scripts/check-commit-msg.sh --range origin/main..HEAD
 ```
-
-Or lint a range manually:
-
-```bash
-scripts/check-commit-msg.sh --range origin/main..HEAD
-```
-
-The same script ships in `python-dqlite-wire/scripts/` so the
-workspace shares a single rule across packages. Published commits
-that already contain the pattern (e.g. `33d1d96`'s "Round 7"
-opener) are left intact — amending would rewrite SHAs sibling
-packages reference; the script is forward-looking only.
 
 ## SQLAlchemy URL Format
 
@@ -229,5 +210,6 @@ The dialects are registered via entry points in `pyproject.toml`:
 ```toml
 [project.entry-points."sqlalchemy.dialects"]
 dqlite = "sqlalchemydqlite:DqliteDialect"
+"dqlite.dqlitedbapi" = "sqlalchemydqlite:DqliteDialect"
 "dqlite.aio" = "sqlalchemydqlite.aio:DqliteDialect_aio"
 ```

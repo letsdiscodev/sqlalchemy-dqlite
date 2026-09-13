@@ -24,16 +24,13 @@ import dqliteclient.exceptions as client_exc
 import dqlitedbapi
 import dqlitedbapi.exceptions as dbapi_exc
 from dqliteclient import CLOSE_TIMEOUT_FLOOR, parse_address
+from dqlitedbapi import SESSION_MODES
 from dqlitedbapi.types import format_utc_offset
 from dqlitewire import BARE_DATABASE_ERROR_CODES, LEADER_ERROR_CODES, sanitize_for_log
 
 __all__ = ["DqliteCompiler", "DqliteDialect", "DqliteSessionModeCharacteristic"]
 
 logger = logging.getLogger(__name__)
-
-SESSION_MODES: Final[frozenset[str]] = frozenset(
-    {"immediate", "deferred", "exclusive", "read_only"}
-)
 
 AUTOCOMMIT_REJECTED: Final[str] = (
     "dqlite does not support SA's AUTOCOMMIT isolation level; the dialect always brackets "
@@ -314,13 +311,10 @@ def unwrap_dbapi_connection(dbapi_connection: Any) -> Any:
 
 
 def validate_session_mode(mode: object) -> str:
-    if not isinstance(mode, str):
-        raise ArgumentError(f"dqlite_session_mode must be a str, got {type(mode).__name__}")
-    if mode.lower() not in SESSION_MODES:
-        raise ArgumentError(
-            f"Invalid dqlite_session_mode {mode!r}; valid values are {sorted(SESSION_MODES)}"
-        )
-    return mode.lower()
+    try:
+        return dqlitedbapi.validate_session_mode(mode)
+    except (TypeError, ValueError) as exc:
+        raise ArgumentError(f"dqlite_session_mode: {exc}") from exc
 
 
 class DqliteSessionModeCharacteristic(sa_characteristics.ConnectionCharacteristic):
